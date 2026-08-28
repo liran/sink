@@ -1,0 +1,7 @@
+.git
+.github
+.env
+*.out
+coverage.*
+README.md
+scripts

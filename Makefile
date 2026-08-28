@@ -1,7 +1,8 @@
-.PHONY: proto build test test-unit lint clean
+.PHONY: proto build test test-unit test-integration lint clean
 
 PROTO_DIR := proto
 GEN_DIR := gen
+STATICCHECK_VERSION := v0.8.1
 
 proto:
 	@mkdir -p $(GEN_DIR)
@@ -19,7 +20,10 @@ test:
 test-unit:
 	go test ./internal/... -v -count=1
 
+test-integration:
+	bash scripts/test-mongodb-integration.sh
+
 lint:
 	go vet ./...
-	staticcheck -checks=all ./...
+	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -checks=all ./...
 	gofmt -s -w .
