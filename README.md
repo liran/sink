@@ -42,9 +42,9 @@ the documented at-least-once behavior.
 Documents use a content type and opaque bytes so existing BSON can pass through
 without schema conversion. Storage adapters interpret fields only when a merge
 profile requires it. The MongoDB adapter preserves the existing top-level
-document shape and lazily adds one configurable hidden revision field when a
+document shape and lazily adds one configurable Sink metadata field when a
 record is first mutated through Sink. A legacy record without that field is
-updated with a conditional “revision still absent” filter, so its first RMW is
+updated with a conditional “metadata still absent” filter, so its first RMW is
 atomic as well.
 
 The MongoDB adapter accepts `application/bson`. Logical string, int64, byte,
