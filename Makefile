@@ -1,4 +1,4 @@
-.PHONY: proto build test test-unit test-integration lint quickstart quickstart-down clean
+.PHONY: proto build test test-unit test-integration test-search-integration lint quickstart quickstart-down clean
 
 PROTO_DIR := proto
 GEN_DIR := gen
@@ -22,6 +22,12 @@ test-unit:
 
 test-integration:
 	bash scripts/test-mongodb-integration.sh
+	bash scripts/test-search-integration.sh elasticsearch
+	bash scripts/test-search-integration.sh opensearch
+
+test-search-integration:
+	bash scripts/test-search-integration.sh elasticsearch
+	bash scripts/test-search-integration.sh opensearch
 
 quickstart:
 	bash examples/quickstart/run.sh
