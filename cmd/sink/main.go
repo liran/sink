@@ -15,7 +15,9 @@ import (
 	"github.com/liran/sink/internal/merge"
 	queuekafka "github.com/liran/sink/internal/queue/kafka"
 	"github.com/liran/sink/internal/service"
+	storagecontract "github.com/liran/sink/internal/storage"
 	"github.com/liran/sink/internal/storage/mongodb"
+	searchstorage "github.com/liran/sink/internal/storage/search"
 	"github.com/liran/sink/internal/worker"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -65,32 +67,11 @@ type application struct {
 }
 
 func newApplication(ctx context.Context, loaded config) (*application, error) {
-	clientOptions := options.Client().ApplyURI(loaded.mongoURI)
-	mongoClient, err := mongo.Connect(clientOptions)
+	opened, err := openConfiguredStorage(ctx, loaded)
 	if err != nil {
-		return nil, fmt.Errorf("connect to MongoDB: %w", err)
-	}
-	if err := mongoClient.Ping(ctx, nil); err != nil {
-		disconnectContext, cancel := context.WithTimeout(context.Background(), loaded.shutdownTimeout)
-		defer cancel()
-		_ = mongoClient.Disconnect(disconnectContext)
-		return nil, fmt.Errorf("ping MongoDB: %w", err)
-	}
-
-	storageOptions := mongodb.Options{
-		Store:       loaded.mongoStore,
-		HiddenField: loaded.mongoHiddenField,
-		Bindings:    loaded.mongoBindings,
-	}
-	store, err := mongodb.New(mongoClient, storageOptions)
-	if err != nil {
-		disconnectContext, cancel := context.WithTimeout(context.Background(), loaded.shutdownTimeout)
-		defer cancel()
-		_ = mongoClient.Disconnect(disconnectContext)
 		return nil, err
 	}
-
-	app := &application{config: loaded, mongoClient: mongoClient}
+	app := &application{config: loaded, mongoClient: opened.mongoClient}
 	if len(loaded.kafkaBrokers) > 0 && (loaded.mode == modeServer || loaded.mode == modeAll) {
 		publisherOptions := queuekafka.PublisherOptions{
 			Brokers: loaded.kafkaBrokers,
@@ -109,7 +90,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 
 	registry := merge.NewRegistry()
 	serverOptions := service.Options{
-		Storage:          store,
+		Storage:          opened.value,
 		Merges:           registry,
 		Publisher:        app.publisher,
 		MaxOperations:    loaded.maxOperations,
@@ -146,6 +127,76 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		}
 	}
 	return app, nil
+}
+
+type openedStorage struct {
+	value       storagecontract.Storage
+	mongoClient *mongo.Client
+}
+
+func openConfiguredStorage(ctx context.Context, loaded config) (openedStorage, error) {
+	switch loaded.storageDriver {
+	case driverMongoDB:
+		return openMongoStorage(ctx, loaded)
+	case driverElasticsearch, driverOpenSearch:
+		return openSearchStorage(ctx, loaded)
+	default:
+		var empty openedStorage
+		return empty, fmt.Errorf("unsupported storage driver %q", loaded.storageDriver)
+	}
+}
+
+func openMongoStorage(ctx context.Context, loaded config) (openedStorage, error) {
+	var opened openedStorage
+	clientOptions := options.Client().ApplyURI(loaded.mongoURI)
+	mongoClient, err := mongo.Connect(clientOptions)
+	if err != nil {
+		return opened, fmt.Errorf("connect to MongoDB: %w", err)
+	}
+	if err := mongoClient.Ping(ctx, nil); err != nil {
+		disconnectContext, cancel := context.WithTimeout(context.Background(), loaded.shutdownTimeout)
+		defer cancel()
+		_ = mongoClient.Disconnect(disconnectContext)
+		return opened, fmt.Errorf("ping MongoDB: %w", err)
+	}
+
+	storageOptions := mongodb.Options{
+		Store:       loaded.mongoStore,
+		HiddenField: loaded.mongoHiddenField,
+		Bindings:    loaded.mongoBindings,
+	}
+	store, err := mongodb.New(mongoClient, storageOptions)
+	if err != nil {
+		disconnectContext, cancel := context.WithTimeout(context.Background(), loaded.shutdownTimeout)
+		defer cancel()
+		_ = mongoClient.Disconnect(disconnectContext)
+		return opened, err
+	}
+	opened.value = store
+	opened.mongoClient = mongoClient
+	return opened, nil
+}
+
+func openSearchStorage(ctx context.Context, loaded config) (openedStorage, error) {
+	var opened openedStorage
+	searchOptions := searchstorage.Options{
+		Driver:    loaded.searchDriver,
+		Endpoints: loaded.searchEndpoints,
+		Store:     loaded.searchStore,
+		Bindings:  loaded.searchBindings,
+		Username:  loaded.searchUsername,
+		Password:  loaded.searchPassword,
+		APIKey:    loaded.searchAPIKey,
+	}
+	store, err := searchstorage.New(searchOptions)
+	if err != nil {
+		return opened, err
+	}
+	if err := store.Ping(ctx); err != nil {
+		return opened, err
+	}
+	opened.value = store
+	return opened, nil
 }
 
 func (a *application) configureGRPC(server *service.Server) error {
