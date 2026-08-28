@@ -1,0 +1,4 @@
+github.com/iceisfun/golua v1.1.1 h1:/n2DpH1KKOJmLYZ5IzcZmNOQ+uIc2jPam1gg40J+eGA=
+github.com/iceisfun/golua v1.1.1/go.mod h1:wt8RNJkIut8lns1fAM/A+77FIiadLX2vPkIIN8NR7ck=
+github.com/yuin/gopher-lua v1.1.2 h1:yF/FjE3hD65tBbt0VXLE13HWS9h34fdzJmrWRXwobGA=
+github.com/yuin/gopher-lua v1.1.2/go.mod h1:7aRmXIWl37SqRf0koeyylBEzJ+aPt8A+mmkQ4f1ntR8=
