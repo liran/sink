@@ -26,20 +26,10 @@ const (
 	DriverOpenSearch    Driver = "opensearch"
 )
 
-type Dataset struct {
-	Namespace string
-	Dataset   string
-}
-
-type Binding struct {
-	Index string
-}
-
 type Options struct {
 	Driver          Driver
 	Endpoints       []string
 	Store           string
-	Bindings        map[Dataset]Binding
 	Username        string
 	Password        string
 	APIKey          string
@@ -51,7 +41,6 @@ type Store struct {
 	driver          Driver
 	endpoints       []*url.URL
 	logicalStore    string
-	bindings        map[Dataset]Binding
 	username        string
 	password        string
 	apiKey          string
@@ -88,13 +77,6 @@ func New(opts Options) (*Store, error) {
 		}
 		endpoints = append(endpoints, endpoint)
 	}
-	bindings := make(map[Dataset]Binding, len(opts.Bindings))
-	for dataset, binding := range opts.Bindings {
-		if dataset.Namespace == "" || dataset.Dataset == "" || binding.Index == "" {
-			return nil, errors.New("create search storage: dataset binding is incomplete")
-		}
-		bindings[dataset] = binding
-	}
 	client := opts.HTTPClient
 	if client == nil {
 		client = &http.Client{Timeout: defaultRequestTimeout}
@@ -107,7 +89,6 @@ func New(opts Options) (*Store, error) {
 		driver:          opts.Driver,
 		endpoints:       endpoints,
 		logicalStore:    opts.Store,
-		bindings:        bindings,
 		username:        opts.Username,
 		password:        opts.Password,
 		apiKey:          opts.APIKey,
@@ -147,14 +128,6 @@ func (s *Store) resolve(address storage.Address) (resolvedDocument, error) {
 	}
 
 	index := address.Namespace + "-" + address.Dataset
-	if len(s.bindings) > 0 {
-		dataset := Dataset{Namespace: address.Namespace, Dataset: address.Dataset}
-		binding, exists := s.bindings[dataset]
-		if !exists {
-			return resolved, fmt.Errorf("logical dataset %q/%q is not configured", address.Namespace, address.Dataset)
-		}
-		index = binding.Index
-	}
 	id, err := documentID(address.Key)
 	if err != nil {
 		return resolved, err

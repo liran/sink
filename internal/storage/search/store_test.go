@@ -103,9 +103,9 @@ func TestStoreReadsExistingAndMissingDocuments(t *testing.T) {
 			path:          "/_mget",
 			contentType:   ContentTypeJSON,
 			authorization: "ApiKey test-key",
-			bodyContains:  []string{`"_index":"legacy-records"`, `"_id":"legacy-id"`, `"_id":"missing"`},
+			bodyContains:  []string{`"_index":"logical-records"`, `"_id":"legacy-id"`, `"_id":"missing"`},
 			statusCode:    http.StatusOK,
-			responseBody:  `{"docs":[{"_index":"legacy-records","_id":"legacy-id","found":true,"_seq_no":7,"_primary_term":2,"_source":{"name":"legacy"}},{"_index":"legacy-records","_id":"missing","found":false}]}`,
+			responseBody:  `{"docs":[{"_index":"logical-records","_id":"legacy-id","found":true,"_seq_no":7,"_primary_term":2,"_source":{"name":"legacy"}},{"_index":"logical-records","_id":"missing","found":false}]}`,
 		},
 	}
 	store, handler := newScriptedStore(t, requests)
@@ -140,15 +140,15 @@ func TestStoreWritesCreateAndExistingWithBulkCAS(t *testing.T) {
 			contentType:  ContentTypeJSON,
 			bodyContains: []string{`"_id":"existing"`},
 			statusCode:   http.StatusOK,
-			responseBody: `{"docs":[{"_index":"legacy-records","_id":"existing","found":true,"_seq_no":5,"_primary_term":3,"_source":{"value":"old"}}]}`,
+			responseBody: `{"docs":[{"_index":"logical-records","_id":"existing","found":true,"_seq_no":5,"_primary_term":3,"_source":{"value":"old"}}]}`,
 		},
 		{
 			method:      http.MethodPost,
 			path:        "/_bulk",
 			contentType: "application/x-ndjson",
 			bodyContains: []string{
-				`"create":{"_index":"legacy-records","_id":"created"}`,
-				`"index":{"_index":"legacy-records","_id":"existing","if_seq_no":5,"if_primary_term":3}`,
+				`"create":{"_index":"logical-records","_id":"created"}`,
+				`"index":{"_index":"logical-records","_id":"existing","if_seq_no":5,"if_primary_term":3}`,
 				`{"value":"new"}`,
 			},
 			statusCode:   http.StatusOK,
@@ -199,7 +199,7 @@ func TestStoreMapsBulkConflictsAndMissingDeletes(t *testing.T) {
 			method:       http.MethodPost,
 			path:         "/_bulk",
 			contentType:  "application/x-ndjson",
-			bodyContains: []string{`"delete":{"_index":"legacy-records","_id":"missing"}`},
+			bodyContains: []string{`"delete":{"_index":"logical-records","_id":"missing"}`},
 			statusCode:   http.StatusOK,
 			responseBody: `{"errors":false,"items":[{"delete":{"status":404}}]}`,
 		},
@@ -261,13 +261,10 @@ func newScriptedStore(t *testing.T, requests []expectedRequest) (*Store, *script
 	t.Cleanup(func() {
 		server.Close()
 	})
-	dataset := Dataset{Namespace: "logical", Dataset: "records"}
-	binding := Binding{Index: "legacy-records"}
 	opts := Options{
 		Driver:    DriverElasticsearch,
 		Endpoints: []string{server.URL},
 		Store:     "primary",
-		Bindings:  map[Dataset]Binding{dataset: binding},
 		APIKey:    "test-key",
 	}
 	store, err := New(opts)

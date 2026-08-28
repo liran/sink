@@ -12,14 +12,17 @@ only command that does not load a configuration file. Environment variables
 such as `SINK_MODE` and `SINK_MONGODB_URI` are not read by the server.
 
 Configuration is loaded once during startup. Unknown fields, malformed YAML,
-multiple YAML documents, invalid positive-integer values, and incompatible
-option combinations prevent the process from starting. Restart Sink after
-changing the file.
+multiple YAML documents, duplicate storage names, invalid positive-integer
+values, and incompatible option combinations prevent the process from
+starting. Sink connects to and pings every configured storage before becoming
+ready; failure of any storage prevents startup. Restart Sink after changing the
+file.
 
-## Complete example
+## Multiple storage instances
 
-The repository's [`config.example.yaml`](../config.example.yaml) is a ready-to-
-edit synchronous MongoDB configuration:
+The required `storages` list can contain any combination of MongoDB,
+Elasticsearch, and OpenSearch instances. Every entry has a unique `name`. A
+request's `address.store` must exactly match that name:
 
 ```yaml
 mode: server
@@ -27,13 +30,25 @@ mode: server
 grpc:
   address: ":8080"
 
-storage:
-  driver: mongodb
-  mongodb:
-    uri: mongodb://mongodb:27017
-    store: primary
-    hidden_field: __sink
-    bindings: []
+storages:
+  - name: mongo-main
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo-main:27017
+      hidden_field: __sink
+
+  - name: mongo-archive
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo-archive:27017
+
+  - name: search-main
+    driver: elasticsearch
+    search:
+      endpoints:
+        - https://search-1:9200
+        - https://search-2:9200
+      api_key: replace-with-api-key
 
 service:
   max_operations: 1000
@@ -45,32 +60,69 @@ kafka:
 shutdown_timeout_seconds: 15
 ```
 
+The repository's [`config.example.yaml`](../config.example.yaml) is a smaller,
+ready-to-edit configuration containing one MongoDB instance.
+
+## Address routing
+
+Sink does not use a separate bindings configuration. The client-provided record
+address selects both the configured storage instance and the location inside
+that instance:
+
+| Address field | MongoDB | Elasticsearch and OpenSearch |
+| --- | --- | --- |
+| `store` | Exact `storages[].name` to use | Exact `storages[].name` to use |
+| `namespace` | Database name | First part of the index name |
+| `dataset` | Collection name | Second part of the index name |
+| `key` | MongoDB `_id` | Document `_id` |
+
+For example, this address selects the `mongo-main` configuration and stores the
+document in MongoDB database `catalog`, collection `products`:
+
+```text
+store = mongo-main
+namespace = catalog
+dataset = products
+key = product-123
+```
+
+With a search driver, the same namespace and dataset map to index
+`catalog-products`. Sink can route operations in one batch to different storage
+instances and returns results in the original operation order. An address whose
+`store` is not configured receives a per-operation failure.
+
+### Migrating a single-storage configuration
+
+The former top-level `storage` object is replaced by the `storages` list. Move
+the former `storage.mongodb.store` or `storage.search.store` value to the
+entry's required `name`, keep the driver-specific connection fields under that
+entry, and remove `bindings`. Update client addresses so their namespace and
+dataset contain the direct database/collection or search index components.
+
 ## Configuration reference
 
 “Conditionally required” means a field is mandatory only in the modes or with
 the drivers stated in its description. Enum values are case-sensitive and must
-use the lowercase spelling shown below.
+use the lowercase spelling shown below. Storage names are also case-sensitive.
 
 | Field | Type | Required | Default | Allowed values | Function |
 | --- | --- | --- | --- | --- | --- |
 | `mode` | enum string | No | `server` | `server`, `worker`, `all` | Process role. See [Mode values](#mode-values). |
 | `grpc.address` | string | No | `:8080` | Any valid TCP listen address | TCP listen address for the gRPC and gRPC health services. Used in `server` and `all` modes. |
-| `storage.driver` | enum string | No | `mongodb` | `mongodb`, `elasticsearch`, `opensearch` | Storage adapter. See [Storage driver values](#storage-driver-values). |
-| `storage.mongodb.uri` | string | Conditionally | none | Valid MongoDB connection string | MongoDB connection string. Required when `storage.driver` is `mongodb`. |
-| `storage.mongodb.store` | string | No | `primary` | Any non-empty logical store name | Logical store name that requests must use with the MongoDB adapter. |
-| `storage.mongodb.hidden_field` | string | No | `__sink` | Any valid MongoDB field except `_id`; cannot contain `.`, `$`, or a null byte | Top-level field used for Sink's hidden revision metadata. |
-| `storage.mongodb.bindings` | list | No | `[]` | Zero or more valid MongoDB binding objects | Maps logical namespace/dataset pairs to physical databases/collections. With an empty list, names map directly. When the list is non-empty, only listed datasets are accepted. |
-| `storage.search.endpoints` | list of strings | Conditionally | none | One or more HTTP(S) endpoints | Elasticsearch or OpenSearch endpoints. At least one is required for either search driver. |
-| `storage.search.store` | string | No | `primary` | Any non-empty logical store name | Logical store name that requests must use with a search adapter. |
-| `storage.search.bindings` | list | No | `[]` | Zero or more valid search binding objects | Maps logical namespace/dataset pairs to existing indexes or aliases. With an empty list, the physical name is `<namespace>-<dataset>`. When the list is non-empty, only listed datasets are accepted. |
-| `storage.search.username` | string | Conditionally | empty | Any username accepted by the search service | HTTP basic-auth username. Must be configured together with `storage.search.password`. |
-| `storage.search.password` | string | Conditionally | empty | Any password accepted by the search service | HTTP basic-auth password. Must be configured together with `storage.search.username`. |
-| `storage.search.api_key` | string | No | empty | Any API key accepted by the search service | Search API key. It is mutually exclusive with username/password authentication. |
+| `storages` | list | Yes | none | One or more storage objects | Storage instances available for address routing. |
+| `storages[].name` | string | Yes | none | Any unique, non-empty name | Exact value selected by `address.store`. |
+| `storages[].driver` | enum string | Yes | none | `mongodb`, `elasticsearch`, `opensearch` | Adapter used by this storage instance. See [Storage driver values](#storage-driver-values). |
+| `storages[].mongodb.uri` | string | Conditionally | none | Valid MongoDB connection string | Required when the entry's driver is `mongodb`. |
+| `storages[].mongodb.hidden_field` | string | No | `__sink` | Any valid MongoDB field except `_id`; cannot contain `.`, `$`, or a null byte | Top-level field used for Sink's hidden revision metadata. |
+| `storages[].search.endpoints` | list of strings | Conditionally | none | One or more HTTP(S) endpoints | Required for `elasticsearch` and `opensearch`. |
+| `storages[].search.username` | string | Conditionally | empty | Any username accepted by the search service | Basic-auth username. Must be configured together with `password`. |
+| `storages[].search.password` | string | Conditionally | empty | Any password accepted by the search service | Basic-auth password. Must be configured together with `username`. |
+| `storages[].search.api_key` | string | No | empty | Any API key accepted by the search service | API key used instead of basic authentication. |
 | `service.max_operations` | positive integer | No | `1000` | Integer greater than `0` | Maximum operation count accepted in one Read, Write, or Delete batch request. |
 | `service.max_merge_attempts` | positive integer | No | `3` | Integer greater than `0` | Maximum attempts for a merge after revision conflicts. |
-| `kafka.brokers` | list of strings | Conditionally | `[]` | Zero or more Kafka bootstrap addresses | Configure it together with `kafka.topic` to enable durable asynchronous acceptance. Required in `worker` and `all` modes. |
-| `kafka.topic` | string | Conditionally | empty | Any valid Kafka topic name | Topic used for durable mutation publication and consumption. Configure it together with `kafka.brokers`; required in `worker` and `all` modes. |
-| `kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Kafka consumer group. Required in `worker` and `all` modes. |
+| `kafka.brokers` | list of strings | Conditionally | `[]` | Zero or more Kafka bootstrap addresses | Configure together with `kafka.topic` to enable durable asynchronous acceptance. Required in `worker` and `all` modes. |
+| `kafka.topic` | string | Conditionally | empty | Any valid Kafka topic name | Topic used for durable mutation publication and consumption. Required with brokers. |
+| `kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Required in `worker` and `all` modes. |
 | `kafka.max_poll_records` | positive integer | No | `500` | Integer greater than `0` | Maximum number of mutations handled in one consumer fetch batch. |
 | `shutdown_timeout_seconds` | positive integer | No | `15` | Integer greater than `0` | Maximum graceful-shutdown time for gRPC and MongoDB disconnect operations. |
 
@@ -86,65 +138,9 @@ use the lowercase spelling shown below.
 
 | Value | Behavior | Required driver-specific configuration |
 | --- | --- | --- |
-| `mongodb` | Stores BSON documents in MongoDB. | `storage.mongodb.uri` |
-| `elasticsearch` | Stores JSON documents in Elasticsearch. | At least one `storage.search.endpoints` entry |
-| `opensearch` | Stores JSON documents in OpenSearch. | At least one `storage.search.endpoints` entry |
-
-### MongoDB bindings
-
-Each `storage.mongodb.bindings` entry has four required string fields:
-
-| Field | Function |
-| --- | --- |
-| `namespace` | Logical namespace received through the Sink API. |
-| `dataset` | Logical dataset received through the Sink API. |
-| `database` | Existing MongoDB database to use. |
-| `collection` | Existing MongoDB collection to use. |
-
-Logical namespace/dataset pairs must be unique:
-
-```yaml
-storage:
-  driver: mongodb
-  mongodb:
-    uri: mongodb://mongodb:27017
-    bindings:
-      - namespace: logical
-        dataset: records
-        database: legacy
-        collection: documents
-```
-
-### Elasticsearch and OpenSearch bindings
-
-Each `storage.search.bindings` entry has three required string fields:
-
-| Field | Function |
-| --- | --- |
-| `namespace` | Logical namespace received through the Sink API. |
-| `dataset` | Logical dataset received through the Sink API. |
-| `index` | Existing index or alias to use. |
-
-Logical namespace/dataset pairs must be unique. For example:
-
-```yaml
-mode: server
-
-storage:
-  driver: elasticsearch
-  search:
-    endpoints:
-      - https://search-1:9200
-      - https://search-2:9200
-    api_key: replace-with-api-key
-    bindings:
-      - namespace: logical
-        dataset: records
-        index: legacy-records
-```
-
-Use `opensearch` as the driver for OpenSearch; the remaining search fields are
-shared.
+| `mongodb` | Stores BSON documents in MongoDB. | `storages[].mongodb.uri` |
+| `elasticsearch` | Stores JSON documents in Elasticsearch. | At least one `storages[].search.endpoints` entry |
+| `opensearch` | Stores JSON documents in OpenSearch. | At least one `storages[].search.endpoints` entry |
 
 ## Kafka mode combinations
 
@@ -158,7 +154,7 @@ shared.
 
 ## Handling credentials
 
-The configuration can contain a database URI, password, or API key. Do not
+The configuration can contain database URIs, passwords, or API keys. Do not
 commit a production configuration file. Limit its filesystem permissions and
 mount it read-only in the container. The example files contain placeholders or
 local-development values only.
