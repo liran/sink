@@ -10,6 +10,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
+
+	"github.com/liran/sink/internal/storage"
 )
 
 type requestOptions struct {
@@ -17,6 +20,7 @@ type requestOptions struct {
 	path        string
 	contentType string
 	payload     []byte
+	retrySafe   bool
 }
 
 type apiResponse struct {
@@ -36,7 +40,7 @@ type errorEnvelope struct {
 }
 
 func (s *Store) Ping(ctx context.Context) error {
-	opts := requestOptions{method: http.MethodGet, path: "/"}
+	opts := requestOptions{method: http.MethodGet, path: "/", retrySafe: true}
 	response, err := s.perform(ctx, opts)
 	if err != nil {
 		return fmt.Errorf("ping %s: %w", s.driver, err)
@@ -49,7 +53,36 @@ func (s *Store) Ping(ctx context.Context) error {
 
 func (s *Store) perform(ctx context.Context, opts requestOptions) (apiResponse, error) {
 	var empty apiResponse
-	endpoint := s.endpoint(opts.path)
+	attempts := 1
+	if opts.retrySafe {
+		attempts = len(s.endpoints)
+	}
+	var lastErr error
+	for range attempts {
+		state, endpoint := s.endpoint(opts.path)
+		response, err := s.performOnce(ctx, opts, endpoint)
+		if err != nil {
+			state.retryAfter.Store(time.Now().Add(defaultEndpointCooldown).UnixNano())
+			lastErr = err
+			if opts.retrySafe {
+				continue
+			}
+			return empty, err
+		}
+		if retryableSearchStatus(response.statusCode) {
+			state.retryAfter.Store(time.Now().Add(defaultEndpointCooldown).UnixNano())
+			lastErr = responseError(s.driver, response)
+			if opts.retrySafe {
+				continue
+			}
+		}
+		return response, nil
+	}
+	return empty, lastErr
+}
+
+func (s *Store) performOnce(ctx context.Context, opts requestOptions, endpoint *url.URL) (apiResponse, error) {
+	var empty apiResponse
 	request, err := http.NewRequestWithContext(ctx, opts.method, endpoint.String(), bytes.NewReader(opts.payload))
 	if err != nil {
 		return empty, err
@@ -82,21 +115,50 @@ func (s *Store) perform(ctx context.Context, opts requestOptions) (apiResponse, 
 	return response, nil
 }
 
-func (s *Store) endpoint(requestPath string) *url.URL {
-	position := s.nextEndpoint.Add(1) - 1
-	selected := s.endpoints[position%uint64(len(s.endpoints))]
-	endpoint := *selected
-	endpoint.Path = strings.TrimRight(selected.Path, "/") + requestPath
+func (s *Store) endpoint(requestPath string) (*endpointState, *url.URL) {
+	start := s.nextEndpoint.Add(1) - 1
+	now := time.Now().UnixNano()
+	selected := s.endpoints[start%uint64(len(s.endpoints))]
+	for offset := range len(s.endpoints) {
+		position := (start + uint64(offset)) % uint64(len(s.endpoints))
+		candidate := s.endpoints[position]
+		if candidate.retryAfter.Load() <= now {
+			selected = candidate
+			break
+		}
+	}
+	endpoint := *selected.value
+	endpoint.Path = strings.TrimRight(selected.value.Path, "/") + requestPath
 	endpoint.RawPath = ""
-	return &endpoint
+	return selected, &endpoint
 }
 
 func responseError(driver Driver, response apiResponse) error {
 	detail := decodeResponseError(response.body)
+	var cause error
 	if detail != nil {
-		return fmt.Errorf("%s request returned HTTP %d: %s", driver, response.statusCode, detail.Error())
+		cause = fmt.Errorf("%s request returned HTTP %d: %s", driver, response.statusCode, detail.Error())
+	} else {
+		cause = fmt.Errorf("%s request returned HTTP %d", driver, response.statusCode)
 	}
-	return fmt.Errorf("%s request returned HTTP %d", driver, response.statusCode)
+	switch response.statusCode {
+	case http.StatusRequestTimeout, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return storage.BackendError(cause)
+	case http.StatusRequestEntityTooLarge, http.StatusTooManyRequests:
+		return storage.ResourceExhaustedError(cause)
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return storage.InvalidArgumentError(cause)
+	default:
+		return cause
+	}
+}
+
+func retryableSearchStatus(statusCode int) bool {
+	return statusCode == http.StatusRequestTimeout ||
+		statusCode == http.StatusTooManyRequests ||
+		statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable ||
+		statusCode == http.StatusGatewayTimeout
 }
 
 func decodeResponseError(body []byte) error {

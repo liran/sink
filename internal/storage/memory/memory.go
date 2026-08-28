@@ -30,6 +30,10 @@ func New() *Store {
 	return store
 }
 
+func (s *Store) Ping(context.Context) error {
+	return nil
+}
+
 type SeedRequest struct {
 	Address  storage.Address
 	Document storage.Document

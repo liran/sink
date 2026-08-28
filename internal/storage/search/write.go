@@ -51,10 +51,10 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 		return empty, err
 	}
 	if err := validateJSONDocument(operation.Document); err != nil {
-		return empty, err
+		return empty, storage.InvalidArgumentError(err)
 	}
 	if err := validatePrecondition(operation.Precondition); err != nil {
-		return empty, err
+		return empty, storage.InvalidArgumentError(err)
 	}
 	work := writeWork{
 		resultIndex:  index,
@@ -239,10 +239,11 @@ func applyWriteItem(result *storage.WriteResult, item bulkItem) {
 	}
 	if item.Status < 200 || item.Status >= 300 || item.Error != nil {
 		if item.Error != nil {
-			setWriteError(result, item.Error)
+			setWriteError(result, classifySearchStatus(item.Status, item.Error))
 			return
 		}
-		setWriteError(result, fmt.Errorf("search bulk write returned HTTP %d", item.Status))
+		err := fmt.Errorf("search bulk write returned HTTP %d", item.Status)
+		setWriteError(result, classifySearchStatus(item.Status, err))
 		return
 	}
 	if item.Sequence == nil || item.PrimaryTerm == nil {
@@ -256,6 +257,19 @@ func applyWriteItem(result *storage.WriteResult, item bulkItem) {
 	}
 	result.Status = storage.WriteStatusApplied
 	result.Revision = revision
+}
+
+func classifySearchStatus(statusCode int, cause error) error {
+	switch statusCode {
+	case 408, 502, 503, 504:
+		return storage.BackendError(cause)
+	case 413, 429:
+		return storage.ResourceExhaustedError(cause)
+	case 400, 401, 403, 404:
+		return storage.InvalidArgumentError(cause)
+	default:
+		return cause
+	}
 }
 
 func setWriteError(result *storage.WriteResult, err error) {

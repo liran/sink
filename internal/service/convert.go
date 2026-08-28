@@ -98,7 +98,8 @@ func applyReadResult(result *sink.ReadResult, stored storage.ReadResult) {
 	case storage.ReadStatusNotFound:
 		result.Status = sink.ReadStatus_READ_STATUS_NOT_FOUND
 	case storage.ReadStatusFailed:
-		setReadFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, stored.Err, false)
+		code, retryable := storageFailureDetails(stored.Err)
+		setReadFailure(result, code, stored.Err, retryable)
 	default:
 		err := fmt.Errorf("unsupported storage read status %d", stored.Status)
 		setReadFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
@@ -119,7 +120,8 @@ func applyWriteResult(result *sink.WriteResult, stored storage.WriteResult) {
 		}
 		result.Failure = failure
 	case storage.WriteStatusFailed:
-		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, stored.Err, false)
+		code, retryable := storageFailureDetails(stored.Err)
+		setWriteFailure(result, code, stored.Err, retryable)
 	default:
 		err := fmt.Errorf("unsupported storage write status %d", stored.Status)
 		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
@@ -131,10 +133,27 @@ func applyDeleteResult(result *sink.DeleteResult, stored storage.DeleteResult) {
 	case storage.DeleteStatusApplied:
 		result.Status = sink.DeleteStatus_DELETE_STATUS_APPLIED
 	case storage.DeleteStatusFailed:
-		setDeleteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, stored.Err, false)
+		code, retryable := storageFailureDetails(stored.Err)
+		setDeleteFailure(result, code, stored.Err, retryable)
 	default:
 		err := fmt.Errorf("unsupported storage delete status %d", stored.Status)
 		setDeleteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
+	}
+}
+
+func storageFailureDetails(err error) (sink.FailureCode, bool) {
+	code, retryable := storage.ErrorDetails(err)
+	switch code {
+	case storage.ErrorCodeInvalidArgument:
+		return sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, retryable
+	case storage.ErrorCodeResourceExhausted:
+		return sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED, retryable
+	case storage.ErrorCodeUnavailable:
+		return sink.FailureCode_FAILURE_CODE_UNAVAILABLE, retryable
+	case storage.ErrorCodeDeadlineExceeded:
+		return sink.FailureCode_FAILURE_CODE_DEADLINE_EXCEEDED, retryable
+	default:
+		return sink.FailureCode_FAILURE_CODE_INTERNAL, retryable
 	}
 }
 

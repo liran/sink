@@ -2,6 +2,7 @@
 package mongodb
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,12 +15,14 @@ const (
 	ContentTypeBSON         = "application/bson"
 	defaultMetadataField    = "__sink"
 	defaultConcurrentWrites = 64
+	defaultConcurrentGroups = 16
 )
 
 type Options struct {
 	Store               string
 	MetadataField       string
 	MaxConcurrentWrites int
+	MaxConcurrentGroups int
 }
 
 type Store struct {
@@ -27,6 +30,7 @@ type Store struct {
 	store               string
 	metadataField       string
 	maxConcurrentWrites int
+	maxConcurrentGroups int
 }
 
 func New(client *mongo.Client, opts Options) (*Store, error) {
@@ -36,8 +40,8 @@ func New(client *mongo.Client, opts Options) (*Store, error) {
 	if opts.Store == "" {
 		return nil, errors.New("create MongoDB storage: logical store is required")
 	}
-	if opts.MaxConcurrentWrites < 0 {
-		return nil, errors.New("create MongoDB storage: max concurrent writes cannot be negative")
+	if opts.MaxConcurrentWrites < 0 || opts.MaxConcurrentGroups < 0 {
+		return nil, errors.New("create MongoDB storage: concurrency limits cannot be negative")
 	}
 
 	metadataField := opts.MetadataField
@@ -52,13 +56,25 @@ func New(client *mongo.Client, opts Options) (*Store, error) {
 	if maxConcurrentWrites == 0 {
 		maxConcurrentWrites = defaultConcurrentWrites
 	}
+	maxConcurrentGroups := opts.MaxConcurrentGroups
+	if maxConcurrentGroups == 0 {
+		maxConcurrentGroups = defaultConcurrentGroups
+	}
 	store := &Store{
 		client:              client,
 		store:               opts.Store,
 		metadataField:       metadataField,
 		maxConcurrentWrites: maxConcurrentWrites,
+		maxConcurrentGroups: maxConcurrentGroups,
 	}
 	return store, nil
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+	if err := s.client.Ping(ctx, nil); err != nil {
+		return storage.BackendError(err)
+	}
+	return nil
 }
 
 type resolvedCollection struct {
@@ -70,10 +86,12 @@ type resolvedCollection struct {
 func (s *Store) resolve(address storage.Address) (resolvedCollection, error) {
 	var resolved resolvedCollection
 	if address.Store != s.store {
-		return resolved, fmt.Errorf("logical store %q is not configured", address.Store)
+		err := fmt.Errorf("logical store %q is not configured", address.Store)
+		return resolved, storage.InvalidArgumentError(err)
 	}
 	if address.Namespace == "" || address.Dataset == "" {
-		return resolved, errors.New("logical namespace and dataset are required")
+		err := errors.New("logical namespace and dataset are required")
+		return resolved, storage.InvalidArgumentError(err)
 	}
 
 	resolved.database = address.Namespace

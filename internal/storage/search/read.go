@@ -85,6 +85,7 @@ func (s *Store) multiGet(ctx context.Context, works []readWork) ([]multiGetDocum
 		path:        "/_mget",
 		contentType: ContentTypeJSON,
 		payload:     payload,
+		retrySafe:   true,
 	}
 	response, err := s.perform(ctx, opts)
 	if err != nil {

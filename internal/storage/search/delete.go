@@ -50,10 +50,11 @@ func (s *Store) Delete(ctx context.Context, req storage.DeleteRequest) (storage.
 			continue
 		}
 		if item.Error != nil {
-			setDeleteError(result, item.Error)
+			setDeleteError(result, classifySearchStatus(item.Status, item.Error))
 			continue
 		}
-		setDeleteError(result, fmt.Errorf("search bulk delete returned HTTP %d", item.Status))
+		err := fmt.Errorf("search bulk delete returned HTTP %d", item.Status)
+		setDeleteError(result, classifySearchStatus(item.Status, err))
 	}
 	return response, nil
 }

@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -14,6 +15,34 @@ import (
 	"github.com/liran/sink/internal/storage"
 	"github.com/liran/sink/internal/storage/memory"
 )
+
+type unavailableStorage struct{}
+
+func (unavailableStorage) Ping(context.Context) error {
+	return nil
+}
+
+func (unavailableStorage) Read(_ context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	response := storage.ReadResponse{Results: make([]storage.ReadResult, len(req.Operations))}
+	for index := range response.Results {
+		cause := errors.New("storage connection reset")
+		response.Results[index] = storage.ReadResult{
+			Status: storage.ReadStatusFailed,
+			Err:    storage.BackendError(cause),
+		}
+	}
+	return response, nil
+}
+
+func (unavailableStorage) Write(_ context.Context, req storage.WriteRequest) (storage.WriteResponse, error) {
+	response := storage.WriteResponse{Results: make([]storage.WriteResult, len(req.Operations))}
+	return response, nil
+}
+
+func (unavailableStorage) Delete(_ context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	response := storage.DeleteResponse{Results: make([]storage.DeleteResult, len(req.Operations))}
+	return response, nil
+}
 
 const testMergeAttempts = 1000
 
@@ -116,6 +145,18 @@ func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 	}
 	if got != writers {
 		t.Fatalf("final counter = %d, want %d", got, writers)
+	}
+}
+
+func TestReadPreservesRetryableBackendFailureClassification(t *testing.T) {
+	server := newTestServer(t, unavailableStorage{}, nil)
+	response, err := server.Read(t.Context(), readRequest("record"))
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	failure := response.GetResults()[0].GetFailure()
+	if failure.GetCode() != sink.FailureCode_FAILURE_CODE_UNAVAILABLE || !failure.GetRetryable() {
+		t.Fatalf("Read() failure = %+v", failure)
 	}
 }
 

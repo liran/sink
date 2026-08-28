@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/liran/sink/internal/storage"
@@ -295,5 +296,50 @@ func TestMultiGetRequestIsValidJSON(t *testing.T) {
 	encoded, err := json.Marshal(request)
 	if err != nil || !json.Valid(encoded) {
 		t.Fatalf("json.Marshal() = %s, %v", encoded, err)
+	}
+}
+
+func TestReadFailsOverFromUnavailableEndpoint(t *testing.T) {
+	var firstCalls atomic.Int64
+	firstHandler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		firstCalls.Add(1)
+		writer.WriteHeader(http.StatusServiceUnavailable)
+	})
+	first := httptest.NewServer(firstHandler)
+	t.Cleanup(first.Close)
+
+	var secondCalls atomic.Int64
+	secondHandler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		secondCalls.Add(1)
+		writer.Header().Set("Content-Type", ContentTypeJSON)
+		_, err := writer.Write([]byte(`{"docs":[{"_index":"legacy-records","_id":"record","found":true,"_seq_no":1,"_primary_term":1,"_source":{"value":"ok"}}]}`))
+		if err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	})
+	second := httptest.NewServer(secondHandler)
+	t.Cleanup(second.Close)
+
+	opts := Options{
+		Driver:    DriverElasticsearch,
+		Endpoints: []string{first.URL, second.URL},
+		Store:     "primary",
+	}
+	store, err := New(opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	request := storage.ReadRequest{
+		Operations: []storage.ReadOperation{{Address: testAddress("record")}},
+	}
+	response, err := store.Read(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if response.Results[0].Status != storage.ReadStatusFound {
+		t.Fatalf("Read() result = %+v", response.Results[0])
+	}
+	if firstCalls.Load() != 1 || secondCalls.Load() != 1 {
+		t.Fatalf("endpoint calls = first %d, second %d", firstCalls.Load(), secondCalls.Load())
 	}
 }

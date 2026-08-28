@@ -1,11 +1,42 @@
 package storage_test
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/liran/sink/internal/storage"
 	"github.com/liran/sink/internal/storage/memory"
 )
+
+type barrierStorage struct {
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (s *barrierStorage) Ping(context.Context) error {
+	return nil
+}
+
+func (s *barrierStorage) Read(_ context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	s.started <- struct{}{}
+	<-s.release
+	response := storage.ReadResponse{Results: make([]storage.ReadResult, len(req.Operations))}
+	for index := range response.Results {
+		response.Results[index].Status = storage.ReadStatusNotFound
+	}
+	return response, nil
+}
+
+func (s *barrierStorage) Write(_ context.Context, req storage.WriteRequest) (storage.WriteResponse, error) {
+	response := storage.WriteResponse{Results: make([]storage.WriteResult, len(req.Operations))}
+	return response, nil
+}
+
+func (s *barrierStorage) Delete(_ context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	response := storage.DeleteResponse{Results: make([]storage.DeleteResult, len(req.Operations))}
+	return response, nil
+}
 
 func TestRouterRoutesMixedStoreBatch(t *testing.T) {
 	mongoStore := memory.New()
@@ -113,6 +144,40 @@ func TestNewRouterRequiresBackends(t *testing.T) {
 	_, err := storage.NewRouter(nil)
 	if err == nil {
 		t.Fatal("NewRouter() error = nil")
+	}
+}
+
+func TestRouterExecutesIndependentStoresConcurrently(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	first := &barrierStorage{started: started, release: release}
+	second := &barrierStorage{started: started, release: release}
+	backends := map[string]storage.Storage{"first": first, "second": second}
+	router, err := storage.NewRouter(backends)
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	request := storage.ReadRequest{
+		Operations: []storage.ReadOperation{
+			{Address: routerTestAddress("first", "one")},
+			{Address: routerTestAddress("second", "two")},
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, readErr := router.Read(t.Context(), request)
+		done <- readErr
+	}()
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("independent storage call did not start concurrently")
+		}
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("Read() error = %v", err)
 	}
 }
 
