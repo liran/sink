@@ -1,0 +1,119 @@
+name: sink-quickstart
+
+services:
+  mongo:
+    image: mongo:8.0.29
+    command:
+      - --replSet
+      - rs0
+      - --bind_ip_all
+    environment:
+      GLIBC_TUNABLES: glibc.pthread.rseq=1
+    ports:
+      - 127.0.0.1:27017:27017
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          mongosh --quiet --eval 'try { const hello = db.hello(); if (hello.isWritablePrimary) { quit(0); } rs.status(); quit(1); } catch (error) { if (error.codeName === "NotYetInitialized") { const config = {_id: "rs0", members: [{_id: 0, host: "mongo:27017"}]}; rs.initiate(config); } quit(1); }'
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  kafka:
+    image: apache/kafka:4.2.1
+    hostname: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENERS: CONTROLLER://:29093,PLAINTEXT://:19092,PLAINTEXT_HOST://:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_NUM_PARTITIONS: 4
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      CLUSTER_ID: 4L6g3nShT-eMCtK--X86sw
+    ports:
+      - 127.0.0.1:9092:9092
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1
+      interval: 5s
+      timeout: 10s
+      retries: 20
+      start_period: 15s
+
+  kafka-init:
+    image: apache/kafka:4.2.1
+    entrypoint:
+      - /opt/kafka/bin/kafka-topics.sh
+    command:
+      - --bootstrap-server
+      - kafka:19092
+      - --create
+      - --if-not-exists
+      - --topic
+      - sink-mutations
+      - --partitions
+      - "4"
+      - --replication-factor
+      - "1"
+    depends_on:
+      kafka:
+        condition: service_healthy
+    restart: "no"
+
+  sink:
+    image: sink-quickstart:local
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        VERSION: quickstart
+    init: true
+    environment:
+      SINK_MODE: all
+      SINK_MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0
+      SINK_KAFKA_BROKERS: kafka:19092
+      SINK_KAFKA_TOPIC: sink-mutations
+      SINK_KAFKA_GROUP_ID: sink-quickstart
+    ports:
+      - 127.0.0.1:8080:8080
+    depends_on:
+      mongo:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  example:
+    profiles:
+      - test
+    image: sink-quickstart-client:local
+    build:
+      context: ../..
+      dockerfile: examples/quickstart/Dockerfile
+    environment:
+      SINK_ADDRESS: sink:8080
+    depends_on:
+      sink:
+        condition: service_started
+    restart: "no"
+
+volumes:
+  mongo-data:
+  kafka-data:
