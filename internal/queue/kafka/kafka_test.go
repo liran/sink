@@ -13,12 +13,14 @@ import (
 	"github.com/liran/sink/internal/storage/memory"
 	"github.com/liran/sink/internal/worker"
 	"github.com/twmb/franz-go/pkg/kfake"
+	"github.com/twmb/franz-go/pkg/kgo"
 )
 
 func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	const topic = "sink-mutations"
+	const deadLetterTopic = "sink-mutations.dlq"
 	numBrokers := kfake.NumBrokers(1)
-	seedTopics := kfake.SeedTopics(3, topic)
+	seedTopics := kfake.SeedTopics(3, topic, deadLetterTopic)
 	cluster, err := kfake.NewCluster(numBrokers, seedTopics)
 	if err != nil {
 		t.Fatalf("kfake.NewCluster() error = %v", err)
@@ -58,6 +60,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 		Brokers:         cluster.ListenAddrs(),
 		Topic:           topic,
 		GroupID:         "sink-test-worker",
+		DeadLetterTopic: deadLetterTopic,
 		Handler:         processor,
 		RetryBackoff:    time.Millisecond,
 		MaxRetryBackoff: 5 * time.Millisecond,
@@ -92,6 +95,27 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 		t.Fatalf("Write(async) status = %v", writeResponse.Results[0].Status)
 	}
 	waitForReadStatus(t, store, storage.ReadStatusFound)
+	rawClientOptions := []kgo.Opt{kgo.SeedBrokers(cluster.ListenAddrs()...)}
+	rawClient, err := kgo.NewClient(rawClientOptions...)
+	if err != nil {
+		t.Fatalf("kgo.NewClient(raw producer) error = %v", err)
+	}
+	t.Cleanup(rawClient.Close)
+	malformed := &kgo.Record{Topic: topic, Key: []byte("malformed"), Value: []byte("not-a-sink-envelope")}
+	if err := rawClient.ProduceSync(t.Context(), malformed).FirstErr(); err != nil {
+		t.Fatalf("ProduceSync(malformed) error = %v", err)
+	}
+	dlqOptions := []kgo.Opt{
+		kgo.SeedBrokers(cluster.ListenAddrs()...),
+		kgo.ConsumeTopics(deadLetterTopic),
+		kgo.ConsumeResetOffset(kgo.NewOffset().AtStart()),
+	}
+	dlqClient, err := kgo.NewClient(dlqOptions...)
+	if err != nil {
+		t.Fatalf("kgo.NewClient(DLQ) error = %v", err)
+	}
+	t.Cleanup(dlqClient.Close)
+	waitForDeadLetter(t, dlqClient)
 
 	deleteOperation := &sink.DeleteOperation{Address: address}
 	deleteRequest := &sink.DeleteRequest{
@@ -115,6 +139,28 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Worker.Run() did not stop")
+	}
+}
+
+func waitForDeadLetter(t *testing.T, client *kgo.Client) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for {
+		fetches := client.PollRecords(ctx, 1)
+		if fetches.Err() != nil {
+			t.Fatalf("poll dead-letter topic: %v", fetches.Err())
+		}
+		records := fetches.Records()
+		if len(records) > 0 {
+			if string(records[0].Value) != "not-a-sink-envelope" {
+				t.Fatalf("dead-letter value = %q", records[0].Value)
+			}
+			return
+		}
+		if ctx.Err() != nil {
+			t.Fatal("dead-letter record was not published")
+		}
 	}
 }
 

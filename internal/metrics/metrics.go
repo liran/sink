@@ -18,10 +18,15 @@ import (
 const namespace = "sink"
 
 type Metrics struct {
-	registry         *prometheus.Registry
-	requests         *prometheus.CounterVec
-	requestDuration  *prometheus.HistogramVec
-	operationResults *prometheus.CounterVec
+	registry               *prometheus.Registry
+	requests               *prometheus.CounterVec
+	requestDuration        *prometheus.HistogramVec
+	operationResults       *prometheus.CounterVec
+	kafkaPublished         *prometheus.CounterVec
+	kafkaPublishDuration   prometheus.Histogram
+	kafkaWorkerMutations   *prometheus.CounterVec
+	kafkaWorkerRetries     prometheus.Counter
+	kafkaWorkerDeadLetters prometheus.Counter
 }
 
 func New(version string) (*Metrics, error) {
@@ -47,6 +52,42 @@ func New(version string) (*Metrics, error) {
 		Help:      "Total number of per-operation results returned by Sink gRPC requests.",
 	}
 	operationResults := prometheus.NewCounterVec(resultOptions, []string{"method", "status"})
+	publishedOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "kafka_publisher",
+		Name:      "records_total",
+		Help:      "Total number of Kafka mutation records by publish result.",
+	}
+	kafkaPublished := prometheus.NewCounterVec(publishedOptions, []string{"status"})
+	publishDurationOptions := prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: "kafka_publisher",
+		Name:      "duration_seconds",
+		Help:      "Duration of synchronous Kafka publish batches in seconds.",
+		Buckets:   prometheus.DefBuckets,
+	}
+	kafkaPublishDuration := prometheus.NewHistogram(publishDurationOptions)
+	workerOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "kafka_worker",
+		Name:      "mutations_total",
+		Help:      "Total number of Kafka mutations by processing result.",
+	}
+	kafkaWorkerMutations := prometheus.NewCounterVec(workerOptions, []string{"status"})
+	retryOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "kafka_worker",
+		Name:      "retries_total",
+		Help:      "Total number of Kafka mutation retry attempts.",
+	}
+	kafkaWorkerRetries := prometheus.NewCounter(retryOptions)
+	deadLetterOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "kafka_worker",
+		Name:      "dead_letters_total",
+		Help:      "Total number of Kafka mutations published to the dead-letter topic.",
+	}
+	kafkaWorkerDeadLetters := prometheus.NewCounter(deadLetterOptions)
 	buildOptions := prometheus.GaugeOpts{
 		Namespace: namespace,
 		Name:      "build_info",
@@ -64,6 +105,11 @@ func New(version string) (*Metrics, error) {
 		requests,
 		requestDuration,
 		operationResults,
+		kafkaPublished,
+		kafkaPublishDuration,
+		kafkaWorkerMutations,
+		kafkaWorkerRetries,
+		kafkaWorkerDeadLetters,
 	}
 	for _, collector := range registeredCollectors {
 		if err := registry.Register(collector); err != nil {
@@ -71,12 +117,51 @@ func New(version string) (*Metrics, error) {
 		}
 	}
 	metrics := &Metrics{
-		registry:         registry,
-		requests:         requests,
-		requestDuration:  requestDuration,
-		operationResults: operationResults,
+		registry:               registry,
+		requests:               requests,
+		requestDuration:        requestDuration,
+		operationResults:       operationResults,
+		kafkaPublished:         kafkaPublished,
+		kafkaPublishDuration:   kafkaPublishDuration,
+		kafkaWorkerMutations:   kafkaWorkerMutations,
+		kafkaWorkerRetries:     kafkaWorkerRetries,
+		kafkaWorkerDeadLetters: kafkaWorkerDeadLetters,
 	}
 	return metrics, nil
+}
+
+func (m *Metrics) ObserveKafkaPublish(duration time.Duration, accepted int, failed int) {
+	if m == nil {
+		return
+	}
+	m.kafkaPublishDuration.Observe(duration.Seconds())
+	if accepted > 0 {
+		m.kafkaPublished.WithLabelValues("accepted").Add(float64(accepted))
+	}
+	if failed > 0 {
+		m.kafkaPublished.WithLabelValues("failed").Add(float64(failed))
+	}
+}
+
+func (m *Metrics) ObserveKafkaWorker(status string, count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.kafkaWorkerMutations.WithLabelValues(status).Add(float64(count))
+}
+
+func (m *Metrics) ObserveKafkaRetry(count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.kafkaWorkerRetries.Add(float64(count))
+}
+
+func (m *Metrics) ObserveKafkaDeadLetter(count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.kafkaWorkerDeadLetters.Add(float64(count))
 }
 
 func (m *Metrics) Handler() http.Handler {
