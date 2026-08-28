@@ -1,9 +1,12 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"time"
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
@@ -29,7 +32,9 @@ type parsedPut struct {
 type parsedMerge struct {
 	incoming            storage.Document
 	merger              merge.Merger
+	program             merge.Program
 	missingDocumentMode sink.MissingDocumentMode
+	observedAt          time.Time
 }
 
 type mergeCandidate struct {
@@ -37,7 +42,7 @@ type mergeCandidate struct {
 	operation storage.WriteOperation
 }
 
-func (s *Server) parseWrite(index int, operation *sink.WriteOperation) (parsedWrite, error) {
+func (s *Server) parseWrite(index int, operation *sink.WriteOperation, programs luaPrograms) (parsedWrite, error) {
 	parsed := parsedWrite{}
 	if operation == nil {
 		return parsed, errors.New("write operation is required")
@@ -59,7 +64,7 @@ func (s *Server) parseWrite(index int, operation *sink.WriteOperation) (parsedWr
 		}
 		parsed.put = &put
 	case *sink.WriteOperation_Merge:
-		mergeOperation, parseErr := s.parseMerge(action.Merge)
+		mergeOperation, parseErr := s.parseMerge(action.Merge, programs)
 		if parseErr != nil {
 			return parsed, parseErr
 		}
@@ -94,7 +99,7 @@ func parsePut(operation *sink.PutOperation) (parsedPut, error) {
 	return parsed, nil
 }
 
-func (s *Server) parseMerge(operation *sink.MergeOperation) (parsedMerge, error) {
+func (s *Server) parseMerge(operation *sink.MergeOperation, programs luaPrograms) (parsedMerge, error) {
 	parsed := parsedMerge{}
 	if operation == nil {
 		return parsed, errors.New("merge operation is required")
@@ -103,27 +108,54 @@ func (s *Server) parseMerge(operation *sink.MergeOperation) (parsedMerge, error)
 	if err != nil {
 		return parsed, err
 	}
-	profile := operation.GetProfile()
-	if profile == nil || profile.GetName() == "" || profile.GetVersion() == 0 {
-		return parsed, errors.New("merge profile name and version are required")
+	program := operation.GetLuaProgram()
+	if program == nil {
+		return parsed, errors.New("lua merge program is required")
 	}
 	if operation.GetMissingDocumentMode() != sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL &&
 		operation.GetMissingDocumentMode() != sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE {
 		return parsed, errors.New("merge operation has an invalid missing document mode")
 	}
 
-	mergeProfile := merge.Profile{
-		Name:    profile.GetName(),
-		Version: profile.GetVersion(),
+	mergeProgram, err := resolveLuaProgram(program, programs)
+	if err != nil {
+		return parsed, err
 	}
-	merger, err := s.merges.Resolve(mergeProfile)
+	merger, err := s.lua.Compile(mergeProgram)
 	if err != nil {
 		return parsed, err
 	}
 	parsed.incoming = incoming
 	parsed.merger = merger
+	parsed.program = mergeProgram
 	parsed.missingDocumentMode = operation.GetMissingDocumentMode()
+	parsed.observedAt = time.Now().UTC()
 	return parsed, nil
+}
+
+func resolveLuaProgram(program *sink.LuaProgram, programs luaPrograms) (merge.Program, error) {
+	var resolved merge.Program
+	if len(program.GetSource()) > 0 {
+		digest := sha256.Sum256(program.GetSource())
+		if len(program.GetSha256()) != 0 &&
+			(len(program.GetSha256()) != sha256.Size || !bytes.Equal(program.GetSha256(), digest[:])) {
+			return resolved, errors.New("lua program SHA-256 digest does not match source")
+		}
+		resolved.Source = bytes.Clone(program.GetSource())
+		resolved.SHA256 = bytes.Clone(digest[:])
+		return resolved, nil
+	}
+	if len(program.GetSha256()) != sha256.Size {
+		return resolved, errors.New("lua program source or SHA-256 reference is required")
+	}
+	digest := [sha256.Size]byte(program.GetSha256())
+	declared, ok := programs[digest]
+	if !ok {
+		return resolved, errors.New("lua program SHA-256 reference was not declared in the write request")
+	}
+	resolved.Source = bytes.Clone(declared.Source)
+	resolved.SHA256 = bytes.Clone(declared.SHA256)
+	return resolved, nil
 }
 
 func buildWriteWaves(operations []parsedWrite) [][]parsedWrite {
@@ -280,7 +312,10 @@ func (s *Server) prepareMergeCandidate(
 	result *sink.WriteResult,
 ) (mergeCandidate, bool) {
 	candidate := mergeCandidate{work: operation}
-	mergeRequest := merge.Request{Incoming: operation.merge.incoming}
+	mergeRequest := merge.Request{
+		Incoming:   operation.merge.incoming,
+		ObservedAt: operation.merge.observedAt,
+	}
 	condition := storage.Precondition{}
 
 	switch stored.Status {
@@ -312,11 +347,12 @@ func (s *Server) prepareMergeCandidate(
 
 	merged, err := operation.merge.merger.Merge(ctx, mergeRequest)
 	if err != nil {
-		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
+		code := mergeFailureCode(err)
+		setWriteFailure(result, code, err, false)
 		return candidate, false
 	}
 	if merged.Document.ContentType == "" || len(merged.Document.Data) == 0 {
-		err := errors.New("merge profile returned an invalid document")
+		err := errors.New("lua merge program returned an invalid document")
 		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
 		return candidate, false
 	}
@@ -326,4 +362,18 @@ func (s *Server) prepareMergeCandidate(
 		Precondition: condition,
 	}
 	return candidate, true
+}
+
+func mergeFailureCode(err error) sink.FailureCode {
+	switch {
+	case errors.Is(err, merge.ErrExecutionDeadline):
+		return sink.FailureCode_FAILURE_CODE_DEADLINE_EXCEEDED
+	case errors.Is(err, merge.ErrExecutionExhausted):
+		return sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED
+	case errors.Is(err, merge.ErrInvalidProgram), errors.Is(err, merge.ErrInvalidIncoming),
+		errors.Is(err, merge.ErrInvalidResult), errors.Is(err, merge.ErrExecution):
+		return sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT
+	default:
+		return sink.FailureCode_FAILURE_CODE_INTERNAL
+	}
 }

@@ -2,7 +2,9 @@
 package service
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 
@@ -22,7 +24,7 @@ const (
 
 type Options struct {
 	Storage          storage.Storage
-	Merges           *merge.Registry
+	Lua              *merge.LuaEngine
 	Publisher        queue.Publisher
 	MaxOperations    int
 	MaxMergeAttempts int
@@ -32,7 +34,7 @@ type Server struct {
 	sink.UnimplementedSinkServer
 
 	storage          storage.Storage
-	merges           *merge.Registry
+	lua              *merge.LuaEngine
 	publisher        queue.Publisher
 	maxOperations    int
 	maxMergeAttempts int
@@ -42,8 +44,8 @@ func New(opts Options) (*Server, error) {
 	if opts.Storage == nil {
 		return nil, errors.New("create Sink server: storage is required")
 	}
-	if opts.Merges == nil {
-		return nil, errors.New("create Sink server: merge registry is required")
+	if opts.Lua == nil {
+		return nil, errors.New("create Sink server: Lua merge engine is required")
 	}
 	if opts.MaxOperations < 0 {
 		return nil, errors.New("create Sink server: max operations cannot be negative")
@@ -63,7 +65,7 @@ func New(opts Options) (*Server, error) {
 
 	server := &Server{
 		storage:          opts.Storage,
-		merges:           opts.Merges,
+		lua:              opts.Lua,
 		publisher:        opts.Publisher,
 		maxOperations:    maxOperations,
 		maxMergeAttempts: maxMergeAttempts,
@@ -128,6 +130,10 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 	if !validCompletionMode(req.GetCompletionMode()) {
 		return nil, status.Error(codes.InvalidArgument, "write request has an invalid completion mode")
 	}
+	luaPrograms, err := parseLuaPrograms(req.GetLuaPrograms())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "write request Lua programs: %v", err)
+	}
 
 	response := &sink.WriteResponse{
 		Results: make([]*sink.WriteResult, len(req.GetOperations())),
@@ -137,7 +143,7 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 		result := &sink.WriteResult{OperationIndex: uint32(index)}
 		response.Results[index] = result
 
-		parsed, err := s.parseWrite(index, operation)
+		parsed, err := s.parseWrite(index, operation, luaPrograms)
 		if err != nil {
 			setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, err, false)
 			continue
@@ -160,6 +166,28 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 		}
 	}
 	return response, nil
+}
+
+type luaPrograms map[[sha256.Size]byte]merge.Program
+
+func parseLuaPrograms(programs []*sink.LuaProgram) (luaPrograms, error) {
+	parsed := make(luaPrograms, len(programs))
+	for index, program := range programs {
+		if program == nil || len(program.GetSource()) == 0 {
+			return nil, fmt.Errorf("program %d source is required", index)
+		}
+		digest := sha256.Sum256(program.GetSource())
+		if len(program.GetSha256()) != 0 {
+			if len(program.GetSha256()) != sha256.Size || !bytes.Equal(program.GetSha256(), digest[:]) {
+				return nil, fmt.Errorf("program %d SHA-256 digest does not match source", index)
+			}
+		}
+		if existing, ok := parsed[digest]; ok && !bytes.Equal(existing.Source, program.GetSource()) {
+			return nil, fmt.Errorf("program %d has a duplicate SHA-256 digest", index)
+		}
+		parsed[digest] = merge.Program{Source: bytes.Clone(program.GetSource()), SHA256: bytes.Clone(digest[:])}
+	}
+	return parsed, nil
 }
 
 func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.DeleteResponse, error) {

@@ -135,14 +135,14 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		}
 	}
 
-	registry := merge.NewRegistry()
-	if err := merge.RegisterBuiltins(registry); err != nil {
+	luaEngine, err := merge.NewLuaEngine(loaded.luaOptions)
+	if err != nil {
 		app.close()
 		return nil, err
 	}
 	serverOptions := service.Options{
 		Storage:          opened.value,
-		Merges:           registry,
+		Lua:              luaEngine,
 		Publisher:        app.publisher,
 		MaxOperations:    loaded.maxOperations,
 		MaxMergeAttempts: loaded.maxMergeAttempts,

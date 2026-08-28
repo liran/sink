@@ -16,7 +16,12 @@ import (
 
 func TestProcessorAppliesWriteAndDeleteSynchronously(t *testing.T) {
 	store := memory.New()
-	serverOptions := service.Options{Storage: store, Merges: merge.NewRegistry()}
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("NewLuaEngine() error = %v", err)
+	}
+	serverOptions := service.Options{Storage: store, Lua: luaEngine}
 	server, err := service.New(serverOptions)
 	if err != nil {
 		t.Fatalf("service.New() error = %v", err)
@@ -70,7 +75,12 @@ func TestProcessorAppliesWriteAndDeleteSynchronously(t *testing.T) {
 
 func TestProcessorBatchPreservesMixedMutationOrderPerRecord(t *testing.T) {
 	store := memory.New()
-	serverOptions := service.Options{Storage: store, Merges: merge.NewRegistry()}
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("NewLuaEngine() error = %v", err)
+	}
+	serverOptions := service.Options{Storage: store, Lua: luaEngine}
 	server, err := service.New(serverOptions)
 	if err != nil {
 		t.Fatalf("service.New() error = %v", err)

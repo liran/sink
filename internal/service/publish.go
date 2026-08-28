@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"errors"
 
@@ -33,6 +34,13 @@ func (s *Server) publishWrites(
 		cloned, ok := clonedMessage.(*sink.WriteOperation)
 		if !ok {
 			return status.Error(codes.Internal, "clone asynchronous write operation")
+		}
+		if operation.merge != nil {
+			program := &sink.LuaProgram{
+				Source: bytes.Clone(operation.merge.program.Source),
+				Sha256: bytes.Clone(operation.merge.program.SHA256),
+			}
+			cloned.GetMerge().LuaProgram = program
 		}
 		mutation := queue.Mutation{Write: cloned}
 		mutations = append(mutations, mutation)

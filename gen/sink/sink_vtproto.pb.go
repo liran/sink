@@ -553,6 +553,18 @@ func (m *WriteRequest) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if len(m.LuaPrograms) > 0 {
+		for iNdEx := len(m.LuaPrograms) - 1; iNdEx >= 0; iNdEx-- {
+			size, err := m.LuaPrograms[iNdEx].MarshalToSizedBufferVT(dAtA[:i])
+			if err != nil {
+				return 0, err
+			}
+			i -= size
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
+			i--
+			dAtA[i] = 0x1a
+		}
+	}
 	if len(m.Operations) > 0 {
 		for iNdEx := len(m.Operations) - 1; iNdEx >= 0; iNdEx-- {
 			size, err := m.Operations[iNdEx].MarshalToSizedBufferVT(dAtA[:i])
@@ -741,20 +753,20 @@ func (m *MergeOperation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
-	if m.MissingDocumentMode != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.MissingDocumentMode))
-		i--
-		dAtA[i] = 0x18
-	}
-	if m.Profile != nil {
-		size, err := m.Profile.MarshalToSizedBufferVT(dAtA[:i])
+	if m.LuaProgram != nil {
+		size, err := m.LuaProgram.MarshalToSizedBufferVT(dAtA[:i])
 		if err != nil {
 			return 0, err
 		}
 		i -= size
 		i = protohelpers.EncodeVarint(dAtA, i, uint64(size))
 		i--
-		dAtA[i] = 0x12
+		dAtA[i] = 0x22
+	}
+	if m.MissingDocumentMode != 0 {
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.MissingDocumentMode))
+		i--
+		dAtA[i] = 0x18
 	}
 	if m.IncomingDocument != nil {
 		size, err := m.IncomingDocument.MarshalToSizedBufferVT(dAtA[:i])
@@ -769,7 +781,7 @@ func (m *MergeOperation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	return len(dAtA) - i, nil
 }
 
-func (m *MergeProfile) MarshalVT() (dAtA []byte, err error) {
+func (m *LuaProgram) MarshalVT() (dAtA []byte, err error) {
 	if m == nil {
 		return nil, nil
 	}
@@ -782,12 +794,12 @@ func (m *MergeProfile) MarshalVT() (dAtA []byte, err error) {
 	return dAtA[:n], nil
 }
 
-func (m *MergeProfile) MarshalToVT(dAtA []byte) (int, error) {
+func (m *LuaProgram) MarshalToVT(dAtA []byte) (int, error) {
 	size := m.SizeVT()
 	return m.MarshalToSizedBufferVT(dAtA[:size])
 }
 
-func (m *MergeProfile) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
+func (m *LuaProgram) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 	if m == nil {
 		return 0, nil
 	}
@@ -799,15 +811,17 @@ func (m *MergeProfile) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
-	if m.Version != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.Version))
+	if len(m.Sha256) > 0 {
+		i -= len(m.Sha256)
+		copy(dAtA[i:], m.Sha256)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.Sha256)))
 		i--
-		dAtA[i] = 0x10
+		dAtA[i] = 0x12
 	}
-	if len(m.Name) > 0 {
-		i -= len(m.Name)
-		copy(dAtA[i:], m.Name)
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.Name)))
+	if len(m.Source) > 0 {
+		i -= len(m.Source)
+		copy(dAtA[i:], m.Source)
+		i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.Source)))
 		i--
 		dAtA[i] = 0xa
 	}
@@ -1387,6 +1401,12 @@ func (m *WriteRequest) SizeVT() (n int) {
 			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 		}
 	}
+	if len(m.LuaPrograms) > 0 {
+		for _, e := range m.LuaPrograms {
+			l = e.SizeVT()
+			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+		}
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -1459,29 +1479,30 @@ func (m *MergeOperation) SizeVT() (n int) {
 		l = m.IncomingDocument.SizeVT()
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
-	if m.Profile != nil {
-		l = m.Profile.SizeVT()
-		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
-	}
 	if m.MissingDocumentMode != 0 {
 		n += 1 + protohelpers.SizeOfVarint(uint64(m.MissingDocumentMode))
+	}
+	if m.LuaProgram != nil {
+		l = m.LuaProgram.SizeVT()
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
 	return n
 }
 
-func (m *MergeProfile) SizeVT() (n int) {
+func (m *LuaProgram) SizeVT() (n int) {
 	if m == nil {
 		return 0
 	}
 	var l int
 	_ = l
-	l = len(m.Name)
+	l = len(m.Source)
 	if l > 0 {
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
-	if m.Version != 0 {
-		n += 1 + protohelpers.SizeOfVarint(uint64(m.Version))
+	l = len(m.Sha256)
+	if l > 0 {
+		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
 	n += len(m.unknownFields)
 	return n
@@ -2831,6 +2852,40 @@ func (m *WriteRequest) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
+		case 3:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field LuaPrograms", wireType)
+			}
+			var msglen int
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				msglen |= int(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			if msglen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + msglen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.LuaPrograms = append(m.LuaPrograms, &LuaProgram{})
+			if err := m.LuaPrograms[len(m.LuaPrograms)-1].UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
+				return err
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -3193,9 +3248,28 @@ func (m *MergeOperation) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 2:
+		case 3:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field MissingDocumentMode", wireType)
+			}
+			m.MissingDocumentMode = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.MissingDocumentMode |= MissingDocumentMode(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 4:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Profile", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field LuaProgram", wireType)
 			}
 			var msglen int
 			for shift := uint(0); ; shift += 7 {
@@ -3222,32 +3296,13 @@ func (m *MergeOperation) UnmarshalVT(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Profile == nil {
-				m.Profile = &MergeProfile{}
+			if m.LuaProgram == nil {
+				m.LuaProgram = &LuaProgram{}
 			}
-			if err := m.Profile.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
+			if err := m.LuaProgram.UnmarshalVT(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
 			iNdEx = postIndex
-		case 3:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MissingDocumentMode", wireType)
-			}
-			m.MissingDocumentMode = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.MissingDocumentMode |= MissingDocumentMode(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])
@@ -3270,7 +3325,7 @@ func (m *MergeOperation) UnmarshalVT(dAtA []byte) error {
 	}
 	return nil
 }
-func (m *MergeProfile) UnmarshalVT(dAtA []byte) error {
+func (m *LuaProgram) UnmarshalVT(dAtA []byte) error {
 	l := len(dAtA)
 	iNdEx := 0
 	for iNdEx < l {
@@ -3293,17 +3348,17 @@ func (m *MergeProfile) UnmarshalVT(dAtA []byte) error {
 		fieldNum := int32(wire >> 3)
 		wireType := int(wire & 0x7)
 		if wireType == 4 {
-			return fmt.Errorf("proto: MergeProfile: wiretype end group for non-group")
+			return fmt.Errorf("proto: LuaProgram: wiretype end group for non-group")
 		}
 		if fieldNum <= 0 {
-			return fmt.Errorf("proto: MergeProfile: illegal tag %d (wire type %d)", fieldNum, wire)
+			return fmt.Errorf("proto: LuaProgram: illegal tag %d (wire type %d)", fieldNum, wire)
 		}
 		switch fieldNum {
 		case 1:
 			if wireType != 2 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Name", wireType)
+				return fmt.Errorf("proto: wrong wireType = %d for field Source", wireType)
 			}
-			var stringLen uint64
+			var byteLen int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -3313,29 +3368,31 @@ func (m *MergeProfile) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				stringLen |= uint64(b&0x7F) << shift
+				byteLen |= int(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
-			intStringLen := int(stringLen)
-			if intStringLen < 0 {
+			if byteLen < 0 {
 				return protohelpers.ErrInvalidLength
 			}
-			postIndex := iNdEx + intStringLen
+			postIndex := iNdEx + byteLen
 			if postIndex < 0 {
 				return protohelpers.ErrInvalidLength
 			}
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			m.Name = string(dAtA[iNdEx:postIndex])
+			m.Source = append(m.Source[:0], dAtA[iNdEx:postIndex]...)
+			if m.Source == nil {
+				m.Source = []byte{}
+			}
 			iNdEx = postIndex
 		case 2:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field Version", wireType)
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field Sha256", wireType)
 			}
-			m.Version = 0
+			var byteLen int
 			for shift := uint(0); ; shift += 7 {
 				if shift >= 64 {
 					return protohelpers.ErrIntOverflow
@@ -3345,11 +3402,26 @@ func (m *MergeProfile) UnmarshalVT(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.Version |= uint64(b&0x7F) << shift
+				byteLen |= int(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
 			}
+			if byteLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + byteLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.Sha256 = append(m.Sha256[:0], dAtA[iNdEx:postIndex]...)
+			if m.Sha256 == nil {
+				m.Sha256 = []byte{}
+			}
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := protohelpers.Skip(dAtA[iNdEx:])

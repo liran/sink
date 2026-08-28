@@ -12,7 +12,7 @@ encoded requests and responses up to 64 MiB by default; both limits are
 configurable.
 
 - `Read` reads one or more records.
-- `Write` accepts either a complete-document `put` or a profile-driven `merge`.
+- `Write` accepts either a complete-document `put` or a Lua-driven `merge`.
 - `Delete` permanently deletes one or more records.
 
 A one-element request is the single-record form. Atomicity is per record; a
@@ -25,10 +25,11 @@ executed in request order, while different records may execute concurrently.
 - `RETURN_AFTER_ACCEPTED` returns after a durable asynchronous queue accepts
   the work. Queue redelivery can execute an operation more than once.
 
-The asynchronous path stores the original merge intent. A worker reads the
-latest record, runs the selected merge profile, and submits the resulting
-change using a storage revision precondition. This makes each RMW attempt
-atomic without exposing database-specific CAS primitives through the API.
+The asynchronous path stores the original merge intent, including its Lua
+source. A worker reads the latest record, runs the program, and submits the
+resulting change using a storage revision precondition. This makes each RMW
+attempt atomic without exposing database-specific CAS primitives through the
+API.
 
 Kafka records use a deterministic encoded record address as their key, so all
 mutations for one record stay in one partition and retain submission order.
@@ -45,8 +46,8 @@ behavior.
 ## Legacy documents
 
 Documents use a content type and opaque bytes so existing BSON can pass through
-without schema conversion. Storage adapters interpret fields only when a merge
-profile requires it. The MongoDB adapter preserves the existing top-level
+without schema conversion. Lua merge operations inspect JSON objects; ordinary
+reads and puts remain opaque. The MongoDB adapter preserves the existing top-level
 document shape and lazily adds one configurable Sink metadata field when a
 record is first mutated through Sink. A legacy record without that field is
 updated with a conditional “metadata still absent” filter, so its first RMW is
@@ -72,7 +73,7 @@ existing index or alias name.
 ## Packages
 
 - `internal/service` implements validation, same-record ordering, batched puts,
-  and CAS retry for merge profiles.
+  and CAS retry for Lua merges.
 - `internal/storage` routes each operation by `address.store`, executes
   independent storage instances concurrently, and preserves result order.
 - `internal/storage/mongodb` implements MongoDB storage.
@@ -151,10 +152,15 @@ function, required condition, default, validation rules, address routing, and
 multi-storage examples. A ready-to-edit MongoDB file is available at
 [`config.example.yaml`](config.example.yaml).
 
-The stock image registers `json-merge-patch@1`, a deterministic RFC 7396-style
-object merge for `application/json` documents. Null fields delete existing
-values and nested objects merge recursively. Deployments can register
-additional application-specific profiles in a project-specific binary.
+Lua merge programs travel with each write request, so application rules can be
+versioned and deployed with client code without rebuilding Sink or storing
+customer profiles in the service. Identical programs are declared once per
+batch, while asynchronous queue records remain self-contained. Sink caches
+compiled programs by SHA-256 but creates a fresh VM for every execution to isolate mutable global state. Programs
+must return a function with the signature `function(current, incoming, context)`;
+both documents and the returned value are JSON objects. See
+[`docs/configuration.md`](docs/configuration.md#lua-merge-programs) for the
+sandbox, JSON bridge, and resource limits.
 
 Publishing a GitHub Release triggers `.github/workflows/release-image.yml`.
 Semantic version tags such as `v0.1.0` publish `0.1.0`, `0.1`, `0`, and—when

@@ -2,6 +2,7 @@ package kafka_test
 
 import (
 	"context"
+	"crypto/sha256"
 	"testing"
 	"time"
 
@@ -43,9 +44,14 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	}
 
 	store := memory.New()
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("NewLuaEngine() error = %v", err)
+	}
 	serverOptions := service.Options{
 		Storage:   store,
-		Merges:    merge.NewRegistry(),
+		Lua:       luaEngine,
 		Publisher: publisher,
 	}
 	server, err := service.New(serverOptions)
@@ -80,7 +86,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	}()
 
 	address := kafkaAddress("record-1")
-	document := &sink.Document{ContentType: "text/plain", Data: []byte("async value")}
+	document := &sink.Document{ContentType: "application/json", Data: []byte(`{"value":1}`)}
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 	writeRequest := &sink.WriteRequest{
@@ -95,6 +101,32 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 		t.Fatalf("Write(async) status = %v", writeResponse.Results[0].Status)
 	}
 	waitForReadStatus(t, store, storage.ReadStatusFound)
+
+	mergeSource := []byte(`return function(current, incoming, context) current.value = current.value + incoming.value return current end`)
+	digest := sha256.Sum256(mergeSource)
+	programReference := &sink.LuaProgram{Sha256: digest[:]}
+	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
+	incoming := &sink.Document{ContentType: "application/json", Data: []byte(`{"value":1}`)}
+	merge := &sink.MergeOperation{
+		IncomingDocument:    incoming,
+		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
+		LuaProgram:          programReference,
+	}
+	mergeOperation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Merge{Merge: merge}}
+	mergeRequest := &sink.WriteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED,
+		Operations:     []*sink.WriteOperation{mergeOperation},
+		LuaPrograms:    []*sink.LuaProgram{program},
+	}
+	mergeResponse, err := server.Write(context.Background(), mergeRequest)
+	if err != nil {
+		t.Fatalf("Write(async merge) error = %v", err)
+	}
+	if mergeResponse.Results[0].Status != sink.WriteStatus_WRITE_STATUS_ACCEPTED {
+		t.Fatalf("Write(async merge) status = %v", mergeResponse.Results[0].Status)
+	}
+	waitForDocumentData(t, store, `{"value":2}`)
+
 	rawClientOptions := []kgo.Opt{kgo.SeedBrokers(cluster.ListenAddrs()...)}
 	rawClient, err := kgo.NewClient(rawClientOptions...)
 	if err != nil {
@@ -139,6 +171,31 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("Worker.Run() did not stop")
+	}
+}
+
+func waitForDocumentData(t *testing.T, store *memory.Store, want string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		request := storage.ReadRequest{
+			Operations: []storage.ReadOperation{{Address: kafkaStorageAddress("record-1")}},
+		}
+		response, err := store.Read(ctx, request)
+		if err != nil {
+			t.Fatalf("Store.Read() error = %v", err)
+		}
+		if response.Results[0].Status == storage.ReadStatusFound && string(response.Results[0].Document.Data) == want {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("Store.Read() document = %s, want %s", response.Results[0].Document.Data, want)
+		case <-ticker.C:
+		}
 	}
 }
 

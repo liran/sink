@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/liran/sink/internal/merge"
 	searchstorage "github.com/liran/sink/internal/storage/search"
 	"gopkg.in/yaml.v3"
 )
@@ -38,6 +39,7 @@ type config struct {
 	storages              []backendConfig
 	maxOperations         int
 	maxMergeAttempts      int
+	luaOptions            merge.LuaOptions
 	kafkaBrokers          []string
 	kafkaTopic            string
 	kafkaGroupID          string
@@ -105,8 +107,17 @@ type searchConfigFile struct {
 }
 
 type serviceConfigFile struct {
-	MaxOperations    *int `yaml:"max_operations"`
-	MaxMergeAttempts *int `yaml:"max_merge_attempts"`
+	MaxOperations    *int          `yaml:"max_operations"`
+	MaxMergeAttempts *int          `yaml:"max_merge_attempts"`
+	Lua              luaConfigFile `yaml:"lua"`
+}
+
+type luaConfigFile struct {
+	TimeoutMilliseconds *int `yaml:"timeout_milliseconds"`
+	MaxSourceBytes      *int `yaml:"max_source_bytes"`
+	MaxResultBytes      *int `yaml:"max_result_bytes"`
+	MaxCachedPrograms   *int `yaml:"max_cached_programs"`
+	MaxInstructions     *int `yaml:"max_instructions"`
 }
 
 type kafkaConfigFile struct {
@@ -168,6 +179,28 @@ func loadConfig(path string) (config, error) {
 	if err != nil {
 		return loaded, err
 	}
+	luaTimeoutMilliseconds, err := positiveIntOrDefault("service.lua.timeout_milliseconds", file.Service.Lua.TimeoutMilliseconds, 100)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.luaOptions.Timeout = time.Duration(luaTimeoutMilliseconds) * time.Millisecond
+	loaded.luaOptions.MaxSourceBytes, err = positiveIntOrDefault("service.lua.max_source_bytes", file.Service.Lua.MaxSourceBytes, 64<<10)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.luaOptions.MaxResultBytes, err = positiveIntOrDefault("service.lua.max_result_bytes", file.Service.Lua.MaxResultBytes, 16<<20)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.luaOptions.MaxCachedPrograms, err = positiveIntOrDefault("service.lua.max_cached_programs", file.Service.Lua.MaxCachedPrograms, 256)
+	if err != nil {
+		return loaded, err
+	}
+	maxInstructions, err := positiveIntOrDefault("service.lua.max_instructions", file.Service.Lua.MaxInstructions, 1_000_000)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.luaOptions.MaxInstructions = int64(maxInstructions)
 	loaded.kafkaMaxPollRecords, err = positiveIntOrDefault("kafka.max_poll_records", file.Kafka.MaxPollRecords, 500)
 	if err != nil {
 		return loaded, err

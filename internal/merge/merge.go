@@ -1,73 +1,41 @@
-// Package merge registers versioned document merge implementations.
+// Package merge executes client-provided document merge programs.
 package merge
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
+	"time"
 
 	"github.com/liran/sink/internal/storage"
 )
 
 var (
-	ErrProfileNotFound   = errors.New("merge profile not found")
-	ErrProfileRegistered = errors.New("merge profile already registered")
+	ErrInvalidProgram     = errors.New("invalid Lua merge program")
+	ErrInvalidIncoming    = errors.New("invalid incoming merge document")
+	ErrInvalidCurrent     = errors.New("invalid current merge document")
+	ErrInvalidResult      = errors.New("invalid Lua merge result")
+	ErrExecution          = errors.New("lua merge execution failed")
+	ErrExecutionDeadline  = errors.New("lua merge execution deadline exceeded")
+	ErrExecutionExhausted = errors.New("lua merge execution resource limit exceeded")
 )
 
-type Profile struct {
-	Name    string
-	Version uint64
+type Program struct {
+	Source []byte
+	SHA256 []byte
 }
 
 type Request struct {
-	Current  *storage.Document
-	Incoming storage.Document
+	Current    *storage.Document
+	Incoming   storage.Document
+	ObservedAt time.Time
 }
 
 type Result struct {
 	Document storage.Document
 }
 
-// Merger must be deterministic and free of external side effects because Sink
-// can call it more than once when a storage revision changes concurrently.
+// Merger is safe for concurrent calls. Each call runs in a fresh Lua VM so
+// mutable globals cannot cross request or tenant boundaries.
 type Merger interface {
 	Merge(ctx context.Context, req Request) (Result, error)
-}
-
-type Registry struct {
-	mu      sync.RWMutex
-	mergers map[Profile]Merger
-}
-
-func NewRegistry() *Registry {
-	registry := &Registry{
-		mergers: make(map[Profile]Merger),
-	}
-	return registry
-}
-
-func (r *Registry) Register(profile Profile, merger Merger) error {
-	if profile.Name == "" || profile.Version == 0 || merger == nil {
-		return fmt.Errorf("register merge profile: %w", ErrProfileNotFound)
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.mergers[profile]; exists {
-		return fmt.Errorf("register merge profile %s@%d: %w", profile.Name, profile.Version, ErrProfileRegistered)
-	}
-	r.mergers[profile] = merger
-	return nil
-}
-
-func (r *Registry) Resolve(profile Profile) (Merger, error) {
-	r.mu.RLock()
-	merger, exists := r.mergers[profile]
-	r.mu.RUnlock()
-	if !exists {
-		return nil, fmt.Errorf("resolve merge profile %s@%d: %w", profile.Name, profile.Version, ErrProfileNotFound)
-	}
-	return merger, nil
 }

@@ -282,47 +282,22 @@ type counterDocument struct {
 	Counter int64 `json:"counter"`
 }
 
-type deltaDocument struct {
-	Delta int64 `json:"delta"`
-}
-
-type counterMerger struct{}
-
-func (counterMerger) Merge(_ context.Context, req merge.Request) (merge.Result, error) {
-	current := counterDocument{}
-	if req.Current != nil {
-		if err := json.Unmarshal(req.Current.Data, &current); err != nil {
-			var empty merge.Result
-			return empty, fmt.Errorf("decode current counter: %w", err)
-		}
-	}
-	var incoming deltaDocument
-	if err := json.Unmarshal(req.Incoming.Data, &incoming); err != nil {
-		var empty merge.Result
-		return empty, fmt.Errorf("decode counter delta: %w", err)
-	}
-	current.Counter += incoming.Delta
-	encoded, err := json.Marshal(current)
-	if err != nil {
-		var empty merge.Result
-		return empty, fmt.Errorf("encode counter: %w", err)
-	}
-	document := storage.Document{ContentType: search.ContentTypeJSON, Data: encoded}
-	result := merge.Result{Document: document}
-	return result, nil
-}
+const counterMergeLua = `
+return function(current, incoming, context)
+    current.counter = current.counter + incoming.delta
+    return current
+end`
 
 func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 	fixture := newIntegrationFixture(t)
-	registry := merge.NewRegistry()
-	profile := merge.Profile{Name: "counter", Version: 1}
-	merger := counterMerger{}
-	if err := registry.Register(profile, merger); err != nil {
-		t.Fatalf("Register() error = %v", err)
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("NewLuaEngine() error = %v", err)
 	}
 	serverOptions := service.Options{
 		Storage:          fixture.store,
-		Merges:           registry,
+		Lua:              luaEngine,
 		MaxMergeAttempts: 200,
 	}
 	server, err := service.New(serverOptions)
@@ -355,10 +330,10 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 	for range mutations {
 		go func() {
 			defer workers.Done()
-			mergeProfile := &sink.MergeProfile{Name: "counter", Version: 1}
+			luaProgram := &sink.LuaProgram{Source: []byte(counterMergeLua)}
 			mergeOperation := &sink.MergeOperation{
 				IncomingDocument:    incoming,
-				Profile:             mergeProfile,
+				LuaProgram:          luaProgram,
 				MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
 			}
 			mergeAction := &sink.WriteOperation_Merge{Merge: mergeOperation}
