@@ -25,6 +25,7 @@ The stack remains running after the checks pass so it can be inspected or used
 for additional requests. The exposed endpoints are:
 
 - Sink gRPC: `127.0.0.1:8080`
+- Prometheus metrics: `http://127.0.0.1:9090/metrics`
 - MongoDB: `mongodb://127.0.0.1:27017/?directConnection=true`
 - Kafka: `127.0.0.1:9092`
 

@@ -3,6 +3,9 @@ mode: server
 grpc:
   address: ":8080"
 
+prometheus:
+  address: ":9090"
+
 storages:
   - name: primary
     driver: mongodb

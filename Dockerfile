@@ -18,5 +18,5 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/sink /usr/local/bin/sink
-EXPOSE 8080
+EXPOSE 8080 9090
 ENTRYPOINT ["/usr/local/bin/sink"]
