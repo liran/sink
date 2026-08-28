@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -56,9 +57,20 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 		group.operations = append(group.operations, work)
 	}
 
+	limit := make(chan struct{}, s.maxConcurrentGroups)
+	var reads sync.WaitGroup
+	reads.Add(len(groups))
 	for _, group := range groups {
-		s.readGroup(ctx, group, response.Results)
+		go func() {
+			defer reads.Done()
+			limit <- struct{}{}
+			defer func() {
+				<-limit
+			}()
+			s.readGroup(ctx, group, response.Results)
+		}()
 	}
+	reads.Wait()
 	return response, nil
 }
 
@@ -73,7 +85,7 @@ func (s *Store) readGroup(ctx context.Context, group *readGroup, results []stora
 	filter := bson.D{{Key: "_id", Value: inFilter}}
 	cursor, err := group.collection.value.Find(ctx, filter)
 	if err != nil {
-		s.setReadGroupError(group, results, err)
+		s.setReadGroupError(group, results, storage.BackendError(err))
 		return
 	}
 	defer func() {
@@ -111,7 +123,7 @@ func (s *Store) readGroup(ctx context.Context, group *readGroup, results []stora
 		found[idKey] = true
 	}
 	if err := cursor.Err(); err != nil {
-		s.setReadGroupError(group, results, err)
+		s.setReadGroupError(group, results, storage.BackendError(err))
 		return
 	}
 

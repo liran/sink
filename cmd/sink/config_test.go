@@ -33,7 +33,10 @@ storages:
 	if loaded.maxOperations != 1000 || loaded.maxMergeAttempts != 3 || loaded.shutdownTimeout != 15*time.Second {
 		t.Fatalf("loadConfig() service defaults = %#v", loaded)
 	}
-	if loaded.kafkaMaxPollRecords != 500 || len(loaded.kafkaBrokers) != 0 || loaded.kafkaTopic != "" {
+	if loaded.grpcMaxReceiveBytes != 64<<20 || loaded.grpcMaxSendBytes != 64<<20 {
+		t.Fatalf("loadConfig() gRPC limits = %#v", loaded)
+	}
+	if loaded.kafkaMaxPollRecords != 500 || loaded.kafkaMaxRetryAttempts != 10 || loaded.kafkaRetryBackoff != 100*time.Millisecond || loaded.kafkaMaxRetryBackoff != 10*time.Second || len(loaded.kafkaBrokers) != 0 || loaded.kafkaTopic != "" {
 		t.Fatalf("loadConfig() Kafka configuration = %#v", loaded)
 	}
 }
@@ -132,6 +135,10 @@ kafka:
   topic: sink-mutations
   group_id: sink-workers
   max_poll_records: 250
+  dead_letter_topic: sink-dead-letters
+  max_retry_attempts: 4
+  retry_backoff_milliseconds: 20
+  max_retry_backoff_milliseconds: 200
 service:
   max_operations: 2000
   max_merge_attempts: 5
@@ -143,6 +150,9 @@ shutdown_timeout_seconds: 30
 	}
 	if loaded.mode != modeWorker || len(loaded.kafkaBrokers) != 2 || loaded.kafkaMaxPollRecords != 250 {
 		t.Fatalf("loadConfig() = %#v", loaded)
+	}
+	if loaded.kafkaDeadLetterTopic != "sink-dead-letters" || loaded.kafkaMaxRetryAttempts != 4 || loaded.kafkaRetryBackoff != 20*time.Millisecond || loaded.kafkaMaxRetryBackoff != 200*time.Millisecond {
+		t.Fatalf("loadConfig() Kafka retry settings = %#v", loaded)
 	}
 	if loaded.maxOperations != 2000 || loaded.maxMergeAttempts != 5 || loaded.shutdownTimeout != 30*time.Second {
 		t.Fatalf("loadConfig() service settings = %#v", loaded)
@@ -261,6 +271,28 @@ service:
 	_, err := loadConfig(path)
 	if err == nil || !strings.Contains(err.Error(), "service.max_operations must be a positive integer") {
 		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigDefaultsWorkerDeadLetterTopic(t *testing.T) {
+	path := writeConfig(t, `
+mode: worker
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+kafka:
+  brokers: [kafka:9092]
+  topic: sink-mutations
+  group_id: sink-workers
+`)
+	loaded, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if loaded.kafkaDeadLetterTopic != "sink-mutations.dlq" {
+		t.Fatalf("dead-letter topic = %q", loaded.kafkaDeadLetterTopic)
 	}
 }
 

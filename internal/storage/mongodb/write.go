@@ -55,10 +55,10 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 	}
 	id, err := mongoID(operation.Address.Key)
 	if err != nil {
-		return empty, err
+		return empty, storage.InvalidArgumentError(err)
 	}
 	if err := validatePrecondition(operation.Precondition); err != nil {
-		return empty, err
+		return empty, storage.InvalidArgumentError(err)
 	}
 	revision, err := newRevision()
 	if err != nil {
@@ -66,7 +66,7 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 	}
 	replacement, err := s.replacement(operation.Document, id, revision)
 	if err != nil {
-		return empty, err
+		return empty, storage.InvalidArgumentError(err)
 	}
 	work := writeWork{
 		index:        index,
@@ -129,9 +129,20 @@ func (s *Store) writeWave(ctx context.Context, wave []writeWork, results []stora
 		group.operations = append(group.operations, operation)
 	}
 
+	limit := make(chan struct{}, s.maxConcurrentGroups)
+	var bulkWrites sync.WaitGroup
+	bulkWrites.Add(len(bulkGroups))
 	for _, group := range bulkGroups {
-		s.bulkWrite(ctx, group, results)
+		go func() {
+			defer bulkWrites.Done()
+			limit <- struct{}{}
+			defer func() {
+				<-limit
+			}()
+			s.bulkWrite(ctx, group, results)
+		}()
 	}
+	bulkWrites.Wait()
 	s.writeConditional(ctx, conditional, results)
 }
 
@@ -166,6 +177,7 @@ func (s *Store) bulkWrite(ctx context.Context, group *writeGroup, results []stor
 
 	var bulkError mongo.BulkWriteException
 	if !errors.As(err, &bulkError) || bulkError.WriteConcernError != nil {
+		err = storage.BackendError(err)
 		for _, operation := range group.operations {
 			setWriteError(&results[operation.index], err)
 		}
@@ -201,7 +213,7 @@ func (s *Store) writeUpsert(ctx context.Context, operation writeWork, result *st
 			if mongo.IsDuplicateKeyError(err) {
 				continue
 			}
-			setWriteError(result, err)
+			setWriteError(result, storage.BackendError(err))
 			return
 		}
 		if !replaced.Acknowledged {
@@ -249,7 +261,7 @@ func (s *Store) writeOne(ctx context.Context, operation writeWork, result *stora
 	}
 	replaced, err := operation.collection.value.ReplaceOne(ctx, filter, operation.replacement)
 	if err != nil {
-		setWriteError(result, err)
+		setWriteError(result, storage.BackendError(err))
 		return
 	}
 	if !replaced.Acknowledged {

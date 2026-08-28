@@ -301,7 +301,8 @@ func (s *Server) prepareMergeCandidate(
 		}
 		condition.Kind = storage.PreconditionRecordNotExists
 	case storage.ReadStatusFailed:
-		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, stored.Err, false)
+		code, retryable := storageFailureDetails(stored.Err)
+		setWriteFailure(result, code, stored.Err, retryable)
 		return candidate, false
 	default:
 		err := fmt.Errorf("unsupported storage read status %d", stored.Status)

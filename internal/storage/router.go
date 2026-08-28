@@ -5,11 +5,33 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 // Router dispatches operations to a configured storage by Address.Store.
 type Router struct {
 	backends map[string]Storage
+}
+
+func (r *Router) Ping(ctx context.Context) error {
+	errorsByStore := make(chan error, len(r.backends))
+	var checks sync.WaitGroup
+	checks.Add(len(r.backends))
+	for name, backend := range r.backends {
+		go func() {
+			defer checks.Done()
+			if err := backend.Ping(ctx); err != nil {
+				errorsByStore <- fmt.Errorf("ping storage %q: %w", name, err)
+			}
+		}()
+	}
+	checks.Wait()
+	close(errorsByStore)
+	pingErrors := make([]error, 0, len(errorsByStore))
+	for err := range errorsByStore {
+		pingErrors = append(pingErrors, err)
+	}
+	return errors.Join(pingErrors...)
 }
 
 func NewRouter(backends map[string]Storage) (*Router, error) {
@@ -58,22 +80,29 @@ func (r *Router) Read(ctx context.Context, req ReadRequest) (ReadResponse, error
 		group.operations = append(group.operations, operation)
 		group.indexes = append(group.indexes, index)
 	}
+	var reads sync.WaitGroup
+	reads.Add(len(groups))
 	for name, group := range groups {
-		request := ReadRequest{Operations: group.operations}
-		routed, err := group.backend.Read(ctx, request)
-		if err != nil {
-			r.setReadGroupError(&response, group, fmt.Errorf("read storage %q: %w", name, err))
-			continue
-		}
-		if len(routed.Results) != len(group.operations) {
-			err = fmt.Errorf("storage %q returned %d read results for %d operations", name, len(routed.Results), len(group.operations))
-			r.setReadGroupError(&response, group, err)
-			continue
-		}
-		for resultIndex, result := range routed.Results {
-			response.Results[group.indexes[resultIndex]] = result
-		}
+		go func() {
+			defer reads.Done()
+			request := ReadRequest{Operations: group.operations}
+			routed, err := group.backend.Read(ctx, request)
+			if err != nil {
+				backendErr := BackendError(fmt.Errorf("read storage %q: %w", name, err))
+				r.setReadGroupError(&response, group, backendErr)
+				return
+			}
+			if len(routed.Results) != len(group.operations) {
+				countErr := fmt.Errorf("storage %q returned %d read results for %d operations", name, len(routed.Results), len(group.operations))
+				r.setReadGroupError(&response, group, countErr)
+				return
+			}
+			for resultIndex, result := range routed.Results {
+				response.Results[group.indexes[resultIndex]] = result
+			}
+		}()
 	}
+	reads.Wait()
 	return response, nil
 }
 
@@ -113,22 +142,29 @@ func (r *Router) Write(ctx context.Context, req WriteRequest) (WriteResponse, er
 		group.operations = append(group.operations, operation)
 		group.indexes = append(group.indexes, index)
 	}
+	var writes sync.WaitGroup
+	writes.Add(len(groups))
 	for name, group := range groups {
-		request := WriteRequest{Operations: group.operations}
-		routed, err := group.backend.Write(ctx, request)
-		if err != nil {
-			r.setWriteGroupError(&response, group, fmt.Errorf("write storage %q: %w", name, err))
-			continue
-		}
-		if len(routed.Results) != len(group.operations) {
-			err = fmt.Errorf("storage %q returned %d write results for %d operations", name, len(routed.Results), len(group.operations))
-			r.setWriteGroupError(&response, group, err)
-			continue
-		}
-		for resultIndex, result := range routed.Results {
-			response.Results[group.indexes[resultIndex]] = result
-		}
+		go func() {
+			defer writes.Done()
+			request := WriteRequest{Operations: group.operations}
+			routed, err := group.backend.Write(ctx, request)
+			if err != nil {
+				backendErr := BackendError(fmt.Errorf("write storage %q: %w", name, err))
+				r.setWriteGroupError(&response, group, backendErr)
+				return
+			}
+			if len(routed.Results) != len(group.operations) {
+				countErr := fmt.Errorf("storage %q returned %d write results for %d operations", name, len(routed.Results), len(group.operations))
+				r.setWriteGroupError(&response, group, countErr)
+				return
+			}
+			for resultIndex, result := range routed.Results {
+				response.Results[group.indexes[resultIndex]] = result
+			}
+		}()
 	}
+	writes.Wait()
 	return response, nil
 }
 
@@ -168,22 +204,29 @@ func (r *Router) Delete(ctx context.Context, req DeleteRequest) (DeleteResponse,
 		group.operations = append(group.operations, operation)
 		group.indexes = append(group.indexes, index)
 	}
+	var deletes sync.WaitGroup
+	deletes.Add(len(groups))
 	for name, group := range groups {
-		request := DeleteRequest{Operations: group.operations}
-		routed, err := group.backend.Delete(ctx, request)
-		if err != nil {
-			r.setDeleteGroupError(&response, group, fmt.Errorf("delete storage %q: %w", name, err))
-			continue
-		}
-		if len(routed.Results) != len(group.operations) {
-			err = fmt.Errorf("storage %q returned %d delete results for %d operations", name, len(routed.Results), len(group.operations))
-			r.setDeleteGroupError(&response, group, err)
-			continue
-		}
-		for resultIndex, result := range routed.Results {
-			response.Results[group.indexes[resultIndex]] = result
-		}
+		go func() {
+			defer deletes.Done()
+			request := DeleteRequest{Operations: group.operations}
+			routed, err := group.backend.Delete(ctx, request)
+			if err != nil {
+				backendErr := BackendError(fmt.Errorf("delete storage %q: %w", name, err))
+				r.setDeleteGroupError(&response, group, backendErr)
+				return
+			}
+			if len(routed.Results) != len(group.operations) {
+				countErr := fmt.Errorf("storage %q returned %d delete results for %d operations", name, len(routed.Results), len(group.operations))
+				r.setDeleteGroupError(&response, group, countErr)
+				return
+			}
+			for resultIndex, result := range routed.Results {
+				response.Results[group.indexes[resultIndex]] = result
+			}
+		}()
 	}
+	deletes.Wait()
 	return response, nil
 }
 

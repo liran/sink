@@ -14,6 +14,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  client-contract:
+    name: Go client protocol contract
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out server
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check out Go client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: liran/sink-go
+          path: sink-go
+
+      - name: Verify protobuf compatibility
+        run: |
+          sed 's#github.com/liran/sink/gen/sink;sink#github.com/liran/sink-go/api/sink/v1;sinkv1#' \
+            proto/sink/sink.proto | diff -u - sink-go/proto/sink/sink.proto
+
   test:
     name: Test and lint
     runs-on: ubuntu-latest

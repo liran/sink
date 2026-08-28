@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	ContentTypeJSON        = "application/json"
-	defaultRequestTimeout  = 30 * time.Second
-	defaultMaxResponseSize = 64 << 20
+	ContentTypeJSON         = "application/json"
+	defaultRequestTimeout   = 30 * time.Second
+	defaultMaxResponseSize  = 64 << 20
+	defaultEndpointCooldown = 5 * time.Second
 )
 
 type Driver string
@@ -39,7 +40,7 @@ type Options struct {
 
 type Store struct {
 	driver          Driver
-	endpoints       []*url.URL
+	endpoints       []*endpointState
 	logicalStore    string
 	username        string
 	password        string
@@ -47,6 +48,11 @@ type Store struct {
 	client          *http.Client
 	maxResponseSize int64
 	nextEndpoint    atomic.Uint64
+}
+
+type endpointState struct {
+	value      *url.URL
+	retryAfter atomic.Int64
 }
 
 func New(opts Options) (*Store, error) {
@@ -69,13 +75,14 @@ func New(opts Options) (*Store, error) {
 		return nil, errors.New("create search storage: max response size cannot be negative")
 	}
 
-	endpoints := make([]*url.URL, 0, len(opts.Endpoints))
+	endpoints := make([]*endpointState, 0, len(opts.Endpoints))
 	for _, rawEndpoint := range opts.Endpoints {
 		endpoint, err := parseEndpoint(rawEndpoint)
 		if err != nil {
 			return nil, err
 		}
-		endpoints = append(endpoints, endpoint)
+		state := &endpointState{value: endpoint}
+		endpoints = append(endpoints, state)
 	}
 	client := opts.HTTPClient
 	if client == nil {
@@ -121,16 +128,18 @@ type resolvedDocument struct {
 func (s *Store) resolve(address storage.Address) (resolvedDocument, error) {
 	var resolved resolvedDocument
 	if address.Store != s.logicalStore {
-		return resolved, fmt.Errorf("logical store %q is not configured", address.Store)
+		err := fmt.Errorf("logical store %q is not configured", address.Store)
+		return resolved, storage.InvalidArgumentError(err)
 	}
 	if address.Namespace == "" || address.Dataset == "" {
-		return resolved, errors.New("logical namespace and dataset are required")
+		err := errors.New("logical namespace and dataset are required")
+		return resolved, storage.InvalidArgumentError(err)
 	}
 
 	index := address.Dataset
 	id, err := documentID(address.Key)
 	if err != nil {
-		return resolved, err
+		return resolved, storage.InvalidArgumentError(err)
 	}
 	resolved.index = index
 	resolved.id = id

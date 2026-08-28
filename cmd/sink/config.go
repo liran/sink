@@ -30,29 +30,37 @@ const (
 )
 
 type config struct {
-	mode                runMode
-	grpcAddress         string
-	prometheusAddress   string
-	storages            []backendConfig
-	maxOperations       int
-	maxMergeAttempts    int
-	kafkaBrokers        []string
-	kafkaTopic          string
-	kafkaGroupID        string
-	kafkaMaxPollRecords int
-	shutdownTimeout     time.Duration
+	mode                  runMode
+	grpcAddress           string
+	grpcMaxReceiveBytes   int
+	grpcMaxSendBytes      int
+	prometheusAddress     string
+	storages              []backendConfig
+	maxOperations         int
+	maxMergeAttempts      int
+	kafkaBrokers          []string
+	kafkaTopic            string
+	kafkaGroupID          string
+	kafkaMaxPollRecords   int
+	kafkaDeadLetterTopic  string
+	kafkaMaxRetryAttempts int
+	kafkaRetryBackoff     time.Duration
+	kafkaMaxRetryBackoff  time.Duration
+	shutdownTimeout       time.Duration
 }
 
 type backendConfig struct {
-	name               string
-	driver             storageDriver
-	mongoURI           string
-	mongoMetadataField string
-	searchDriver       searchstorage.Driver
-	searchEndpoints    []string
-	searchUsername     string
-	searchPassword     string
-	searchAPIKey       string
+	name                     string
+	driver                   storageDriver
+	mongoURI                 string
+	mongoMetadataField       string
+	mongoMaxConcurrentWrites int
+	mongoMaxConcurrentGroups int
+	searchDriver             searchstorage.Driver
+	searchEndpoints          []string
+	searchUsername           string
+	searchPassword           string
+	searchAPIKey             string
 }
 
 type configFile struct {
@@ -66,7 +74,9 @@ type configFile struct {
 }
 
 type grpcConfigFile struct {
-	Address string `yaml:"address"`
+	Address                string `yaml:"address"`
+	MaxReceiveMessageBytes *int   `yaml:"max_receive_message_bytes"`
+	MaxSendMessageBytes    *int   `yaml:"max_send_message_bytes"`
 }
 
 type prometheusConfigFile struct {
@@ -81,8 +91,10 @@ type storageConfigFile struct {
 }
 
 type mongoDBConfigFile struct {
-	URI           string `yaml:"uri"`
-	MetadataField string `yaml:"metadata_field"`
+	URI                 string `yaml:"uri"`
+	MetadataField       string `yaml:"metadata_field"`
+	MaxConcurrentWrites *int   `yaml:"max_concurrent_writes"`
+	MaxConcurrentGroups *int   `yaml:"max_concurrent_groups"`
 }
 
 type searchConfigFile struct {
@@ -98,10 +110,14 @@ type serviceConfigFile struct {
 }
 
 type kafkaConfigFile struct {
-	Brokers        []string `yaml:"brokers"`
-	Topic          string   `yaml:"topic"`
-	GroupID        string   `yaml:"group_id"`
-	MaxPollRecords *int     `yaml:"max_poll_records"`
+	Brokers                     []string `yaml:"brokers"`
+	Topic                       string   `yaml:"topic"`
+	GroupID                     string   `yaml:"group_id"`
+	DeadLetterTopic             string   `yaml:"dead_letter_topic"`
+	MaxPollRecords              *int     `yaml:"max_poll_records"`
+	MaxRetryAttempts            *int     `yaml:"max_retry_attempts"`
+	RetryBackoffMilliseconds    *int     `yaml:"retry_backoff_milliseconds"`
+	MaxRetryBackoffMilliseconds *int     `yaml:"max_retry_backoff_milliseconds"`
 }
 
 func loadConfig(path string) (config, error) {
@@ -130,6 +146,14 @@ func loadConfig(path string) (config, error) {
 		return loaded, errors.New("mode must be server, worker, or all")
 	}
 	loaded.grpcAddress = valueOrDefault(file.GRPC.Address, ":8080")
+	loaded.grpcMaxReceiveBytes, err = positiveIntOrDefault("grpc.max_receive_message_bytes", file.GRPC.MaxReceiveMessageBytes, 64<<20)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.grpcMaxSendBytes, err = positiveIntOrDefault("grpc.max_send_message_bytes", file.GRPC.MaxSendMessageBytes, 64<<20)
+	if err != nil {
+		return loaded, err
+	}
 	loaded.prometheusAddress = strings.TrimSpace(file.Prometheus.Address)
 	loaded.storages, err = loadStorageConfigs(file.Storages)
 	if err != nil {
@@ -148,6 +172,23 @@ func loadConfig(path string) (config, error) {
 	if err != nil {
 		return loaded, err
 	}
+	loaded.kafkaMaxRetryAttempts, err = positiveIntOrDefault("kafka.max_retry_attempts", file.Kafka.MaxRetryAttempts, 10)
+	if err != nil {
+		return loaded, err
+	}
+	retryBackoffMilliseconds, err := positiveIntOrDefault("kafka.retry_backoff_milliseconds", file.Kafka.RetryBackoffMilliseconds, 100)
+	if err != nil {
+		return loaded, err
+	}
+	maxRetryBackoffMilliseconds, err := positiveIntOrDefault("kafka.max_retry_backoff_milliseconds", file.Kafka.MaxRetryBackoffMilliseconds, 10000)
+	if err != nil {
+		return loaded, err
+	}
+	if maxRetryBackoffMilliseconds < retryBackoffMilliseconds {
+		return loaded, errors.New("kafka.max_retry_backoff_milliseconds must be at least kafka.retry_backoff_milliseconds")
+	}
+	loaded.kafkaRetryBackoff = time.Duration(retryBackoffMilliseconds) * time.Millisecond
+	loaded.kafkaMaxRetryBackoff = time.Duration(maxRetryBackoffMilliseconds) * time.Millisecond
 	shutdownSeconds, err := positiveIntOrDefault("shutdown_timeout_seconds", file.ShutdownTimeoutSeconds, 15)
 	if err != nil {
 		return loaded, err
@@ -157,6 +198,10 @@ func loadConfig(path string) (config, error) {
 	loaded.kafkaBrokers = nonEmptyValues(file.Kafka.Brokers)
 	loaded.kafkaTopic = strings.TrimSpace(file.Kafka.Topic)
 	loaded.kafkaGroupID = strings.TrimSpace(file.Kafka.GroupID)
+	loaded.kafkaDeadLetterTopic = strings.TrimSpace(file.Kafka.DeadLetterTopic)
+	if loaded.kafkaDeadLetterTopic == "" && (loaded.mode == modeWorker || loaded.mode == modeAll) && loaded.kafkaTopic != "" {
+		loaded.kafkaDeadLetterTopic = loaded.kafkaTopic + ".dlq"
+	}
 	if err := validateKafkaConfig(loaded); err != nil {
 		return loaded, err
 	}
@@ -198,6 +243,16 @@ func loadStorageConfig(index int, file storageConfigFile) (backendConfig, error)
 			return loaded, fmt.Errorf("%s.mongodb.uri is required when driver is mongodb", prefix)
 		}
 		loaded.mongoMetadataField = strings.TrimSpace(file.MongoDB.MetadataField)
+		maxConcurrentWrites, err := positiveIntOrDefault(prefix+".mongodb.max_concurrent_writes", file.MongoDB.MaxConcurrentWrites, 64)
+		if err != nil {
+			return loaded, err
+		}
+		maxConcurrentGroups, err := positiveIntOrDefault(prefix+".mongodb.max_concurrent_groups", file.MongoDB.MaxConcurrentGroups, 16)
+		if err != nil {
+			return loaded, err
+		}
+		loaded.mongoMaxConcurrentWrites = maxConcurrentWrites
+		loaded.mongoMaxConcurrentGroups = maxConcurrentGroups
 		return loaded, nil
 	case driverElasticsearch:
 		loaded.searchDriver = searchstorage.DriverElasticsearch

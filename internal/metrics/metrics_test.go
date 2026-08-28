@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	sink "github.com/liran/sink/gen/sink"
 	sinkmetrics "github.com/liran/sink/internal/metrics"
@@ -71,6 +72,11 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("interceptor(Delete) error = %v", err)
 	}
+	observed.ObserveKafkaPublish(time.Second, 2, 1)
+	observed.ObserveKafkaWorker("applied", 2)
+	observed.ObserveKafkaWorker("failed", 1)
+	observed.ObserveKafkaRetry(3)
+	observed.ObserveKafkaDeadLetter(1)
 
 	body := scrape(t, observed)
 	wanted := []string{
@@ -88,6 +94,13 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 		`sink_grpc_server_operation_results_total{method="Delete",status="applied"} 1`,
 		`sink_grpc_server_operation_results_total{method="Delete",status="accepted"} 1`,
 		`sink_grpc_server_operation_results_total{method="Delete",status="failed"} 1`,
+		`sink_kafka_publisher_records_total{status="accepted"} 2`,
+		`sink_kafka_publisher_records_total{status="failed"} 1`,
+		`sink_kafka_publisher_duration_seconds_count 1`,
+		`sink_kafka_worker_mutations_total{status="applied"} 2`,
+		`sink_kafka_worker_mutations_total{status="failed"} 1`,
+		`sink_kafka_worker_retries_total 3`,
+		`sink_kafka_worker_dead_letters_total 1`,
 	}
 	for _, value := range wanted {
 		if !strings.Contains(body, value) {

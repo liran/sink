@@ -2,6 +2,8 @@ mode: server
 
 grpc:
   address: ":8080"
+  max_receive_message_bytes: 67108864
+  max_send_message_bytes: 67108864
 
 prometheus:
   address: ":9090"
@@ -12,6 +14,8 @@ storages:
     mongodb:
       uri: mongodb://mongodb:27017
       metadata_field: __sink
+      max_concurrent_writes: 64
+      max_concurrent_groups: 16
 
 service:
   max_operations: 1000
@@ -19,5 +23,8 @@ service:
 
 kafka:
   max_poll_records: 500
+  max_retry_attempts: 10
+  retry_backoff_milliseconds: 100
+  max_retry_backoff_milliseconds: 10000
 
 shutdown_timeout_seconds: 15

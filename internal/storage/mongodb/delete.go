@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 	"errors"
+	"sync"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -47,9 +48,20 @@ func (s *Store) Delete(ctx context.Context, req storage.DeleteRequest) (storage.
 		group.operations = append(group.operations, work)
 	}
 
+	limit := make(chan struct{}, s.maxConcurrentGroups)
+	var deletes sync.WaitGroup
+	deletes.Add(len(groups))
 	for _, group := range groups {
-		s.deleteGroup(ctx, group, response.Results)
+		go func() {
+			defer deletes.Done()
+			limit <- struct{}{}
+			defer func() {
+				<-limit
+			}()
+			s.deleteGroup(ctx, group, response.Results)
+		}()
 	}
+	deletes.Wait()
 	return response, nil
 }
 
@@ -75,6 +87,7 @@ func (s *Store) deleteGroup(ctx context.Context, group *deleteGroup, results []s
 
 	var bulkError mongo.BulkWriteException
 	if !errors.As(err, &bulkError) || bulkError.WriteConcernError != nil {
+		err = storage.BackendError(err)
 		for _, operation := range group.operations {
 			setDeleteError(&results[operation.index], err)
 		}

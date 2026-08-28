@@ -4,7 +4,9 @@ package kafka
 import (
 	"context"
 	"errors"
+	"time"
 
+	sinkmetrics "github.com/liran/sink/internal/metrics"
 	"github.com/liran/sink/internal/queue"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
@@ -13,11 +15,13 @@ type PublisherOptions struct {
 	Brokers       []string
 	Topic         string
 	ClientOptions []kgo.Opt
+	Metrics       *sinkmetrics.Metrics
 }
 
 type Publisher struct {
-	client *kgo.Client
-	topic  string
+	client  *kgo.Client
+	topic   string
+	metrics *sinkmetrics.Metrics
 }
 
 func NewPublisher(opts PublisherOptions) (*Publisher, error) {
@@ -37,11 +41,12 @@ func NewPublisher(opts PublisherOptions) (*Publisher, error) {
 	if err != nil {
 		return nil, err
 	}
-	publisher := &Publisher{client: client, topic: opts.Topic}
+	publisher := &Publisher{client: client, topic: opts.Topic, metrics: opts.Metrics}
 	return publisher, nil
 }
 
 func (p *Publisher) Publish(ctx context.Context, req queue.PublishRequest) (queue.PublishResponse, error) {
+	started := time.Now()
 	response := queue.PublishResponse{
 		Results: make([]queue.PublishResult, len(req.Mutations)),
 	}
@@ -63,16 +68,20 @@ func (p *Publisher) Publish(ctx context.Context, req queue.PublishRequest) (queu
 		indexes[record] = index
 	}
 	if len(records) == 0 {
+		p.metrics.ObserveKafkaPublish(time.Since(started), 0, len(req.Mutations))
 		return response, nil
 	}
 
 	produced := p.client.ProduceSync(ctx, records...)
+	accepted := 0
+	failed := len(req.Mutations) - len(records)
 	for _, result := range produced {
 		index, exists := indexes[result.Record]
 		if !exists {
 			continue
 		}
 		if result.Err != nil {
+			failed++
 			response.Results[index] = queue.PublishResult{
 				Status: queue.PublishStatusFailed,
 				Err:    result.Err,
@@ -80,7 +89,9 @@ func (p *Publisher) Publish(ctx context.Context, req queue.PublishRequest) (queu
 			continue
 		}
 		response.Results[index].Status = queue.PublishStatusAccepted
+		accepted++
 	}
+	p.metrics.ObserveKafkaPublish(time.Since(started), accepted, failed)
 	return response, nil
 }
 
