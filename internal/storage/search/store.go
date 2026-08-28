@@ -127,7 +127,7 @@ func (s *Store) resolve(address storage.Address) (resolvedDocument, error) {
 		return resolved, errors.New("logical namespace and dataset are required")
 	}
 
-	index := address.Namespace + "-" + address.Dataset
+	index := address.Dataset
 	id, err := documentID(address.Key)
 	if err != nil {
 		return resolved, err

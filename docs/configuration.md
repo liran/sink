@@ -72,8 +72,8 @@ that instance:
 | Address field | MongoDB | Elasticsearch and OpenSearch |
 | --- | --- | --- |
 | `store` | Exact `storages[].name` to use | Exact `storages[].name` to use |
-| `namespace` | Database name | First part of the index name |
-| `dataset` | Collection name | Second part of the index name |
+| `namespace` | Database name | Logical business namespace; not used to construct the index name |
+| `dataset` | Collection name | Complete existing index or alias name |
 | `key` | MongoDB `_id` | Document `_id` |
 
 For example, this address selects the `mongo-main` configuration and stores the
@@ -86,10 +86,12 @@ dataset = products
 key = product-123
 ```
 
-With a search driver, the same namespace and dataset map to index
-`catalog-products`. Sink can route operations in one batch to different storage
-instances and returns results in the original operation order. An address whose
-`store` is not configured receives a per-operation failure.
+With a search driver, set `dataset` to the full name already used by the service.
+For example, `namespace = catalog` and `dataset = legacy-products-v2` access the
+index or alias `legacy-products-v2`; Sink does not prepend the namespace. Sink
+can route operations in one batch to different storage instances and returns
+results in the original operation order. An address whose `store` is not
+configured receives a per-operation failure.
 
 ### Migrating a single-storage configuration
 
@@ -97,7 +99,9 @@ The former top-level `storage` object is replaced by the `storages` list. Move
 the former `storage.mongodb.store` or `storage.search.store` value to the
 entry's required `name`, keep the driver-specific connection fields under that
 entry, and remove `bindings`. Update client addresses so their namespace and
-dataset contain the direct database/collection or search index components.
+dataset contain the direct MongoDB database/collection names. For search
+drivers, keep the logical namespace and put the complete existing index or alias
+name in `dataset`.
 
 ## Configuration reference
 

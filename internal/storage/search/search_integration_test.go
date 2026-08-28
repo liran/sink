@@ -29,11 +29,10 @@ const (
 )
 
 type integrationFixture struct {
-	endpoint  string
-	namespace string
-	index     string
-	client    *http.Client
-	store     *search.Store
+	endpoint string
+	index    string
+	client   *http.Client
+	store    *search.Store
 }
 
 func newIntegrationFixture(t *testing.T) *integrationFixture {
@@ -47,8 +46,7 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		t.Fatalf("%s = %q", searchTestDriver, driver)
 	}
 
-	namespace := "sink-integration-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	index := namespace + "-records"
+	index := "sink-existing-records-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	client := &http.Client{Timeout: 30 * time.Second}
 	opts := search.Options{
 		Driver:     driver,
@@ -64,11 +62,10 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		t.Fatalf("store.Ping() error = %v", err)
 	}
 	fixture := &integrationFixture{
-		endpoint:  endpoint,
-		namespace: namespace,
-		index:     index,
-		client:    client,
-		store:     store,
+		endpoint: endpoint,
+		index:    index,
+		client:   client,
+		store:    store,
 	}
 	settings := []byte(`{"settings":{"number_of_shards":1,"number_of_replicas":0}}`)
 	status, body := fixture.request(t, http.MethodPut, "/"+index, settings)
@@ -141,7 +138,7 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 		{Address: second},
 		{Address: fixture.address("missing")},
 		{Address: first},
-		{Address: fixture.datasetAddress("missing-index", "missing")},
+		{Address: fixture.datasetAddress(fixture.index+"-missing", "missing")},
 	}
 	readRequest := storage.ReadRequest{Operations: readOperations}
 	read, err := fixture.store.Read(ctx, readRequest)
@@ -413,15 +410,15 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 }
 
 func (f *integrationFixture) address(key string) storage.Address {
-	return f.datasetAddress("records", key)
+	return f.datasetAddress(f.index, key)
 }
 
-func (f *integrationFixture) datasetAddress(dataset string, key string) storage.Address {
+func (f *integrationFixture) datasetAddress(index string, key string) storage.Address {
 	recordKey := storage.Key{Type: "string", Data: []byte(key)}
 	address := storage.Address{
 		Store:     "primary",
-		Namespace: f.namespace,
-		Dataset:   dataset,
+		Namespace: "catalog",
+		Dataset:   index,
 		Key:       recordKey,
 	}
 	return address
@@ -432,8 +429,8 @@ func (f *integrationFixture) sinkAddress(key string) *sink.RecordAddress {
 	recordKey := &sink.RecordKey{Kind: keyValue}
 	address := &sink.RecordAddress{
 		Store:     "primary",
-		Namespace: f.namespace,
-		Dataset:   "records",
+		Namespace: "catalog",
+		Dataset:   f.index,
 		Key:       recordKey,
 	}
 	return address

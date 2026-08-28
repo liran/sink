@@ -61,7 +61,8 @@ unchanged; other logical key types receive a deterministic, reserved encoding.
 It uses `_seq_no` and `_primary_term` as an opaque revision token, global
 `_mget` for batch reads, and `_bulk` for puts and hard deletes. Sink does not
 create or manage indexes, mappings, or aliases. The record address's namespace
-and dataset map directly to the `namespace-dataset` index name.
+remains a logical business namespace, while its dataset is the complete,
+existing index or alias name.
 
 ## Packages
 
