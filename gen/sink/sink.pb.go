@@ -1166,8 +1166,8 @@ func (x *PutOperation) GetMode() WriteMode {
 type MergeOperation struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	IncomingDocument    *Document              `protobuf:"bytes,1,opt,name=incoming_document,json=incomingDocument,proto3" json:"incoming_document,omitempty"`
-	MissingDocumentMode MissingDocumentMode    `protobuf:"varint,3,opt,name=missing_document_mode,json=missingDocumentMode,proto3,enum=sink.v1.MissingDocumentMode" json:"missing_document_mode,omitempty"`
-	LuaProgram          *LuaProgram            `protobuf:"bytes,4,opt,name=lua_program,json=luaProgram,proto3" json:"lua_program,omitempty"`
+	MissingDocumentMode MissingDocumentMode    `protobuf:"varint,2,opt,name=missing_document_mode,json=missingDocumentMode,proto3,enum=sink.v1.MissingDocumentMode" json:"missing_document_mode,omitempty"`
+	LuaProgram          *LuaProgram            `protobuf:"bytes,3,opt,name=lua_program,json=luaProgram,proto3" json:"lua_program,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -1708,12 +1708,12 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x06action\"e\n" +
 	"\fPutOperation\x12-\n" +
 	"\bdocument\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\bdocument\x12&\n" +
-	"\x04mode\x18\x02 \x01(\x0e2\x12.sink.v1.WriteModeR\x04mode\"\xe7\x01\n" +
+	"\x04mode\x18\x02 \x01(\x0e2\x12.sink.v1.WriteModeR\x04mode\"\xd8\x01\n" +
 	"\x0eMergeOperation\x12>\n" +
 	"\x11incoming_document\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\x10incomingDocument\x12P\n" +
-	"\x15missing_document_mode\x18\x03 \x01(\x0e2\x1c.sink.v1.MissingDocumentModeR\x13missingDocumentMode\x124\n" +
-	"\vlua_program\x18\x04 \x01(\v2\x13.sink.v1.LuaProgramR\n" +
-	"luaProgramJ\x04\b\x02\x10\x03R\aprofile\"<\n" +
+	"\x15missing_document_mode\x18\x02 \x01(\x0e2\x1c.sink.v1.MissingDocumentModeR\x13missingDocumentMode\x124\n" +
+	"\vlua_program\x18\x03 \x01(\v2\x13.sink.v1.LuaProgramR\n" +
+	"luaProgram\"<\n" +
 	"\n" +
 	"LuaProgram\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\fR\x06source\x12\x16\n" +

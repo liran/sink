@@ -134,10 +134,8 @@ enum WriteMode {
 // merge against the document version it reads at execution time.
 message MergeOperation {
   Document incoming_document = 1;
-  reserved 2;
-  reserved "profile";
-  MissingDocumentMode missing_document_mode = 3;
-  LuaProgram lua_program = 4;
+  MissingDocumentMode missing_document_mode = 2;
+  LuaProgram lua_program = 3;
 }
 
 // LuaProgram is self-contained so merge rules can be versioned and deployed
