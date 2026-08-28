@@ -117,54 +117,28 @@ ports, direct Docker Compose commands, and reset instructions.
 
 Published releases build multi-platform images for `linux/amd64` and
 `linux/arm64` and push them to `ghcr.io/liran/sink`. Run the synchronous gRPC
-service with:
+service with a YAML configuration file:
 
 ```shell
+cp config.example.yaml config.yaml
+# Edit config.yaml for the target MongoDB deployment.
 docker run --rm -p 8080:8080 \
-  -e SINK_MONGODB_URI=mongodb://mongodb:27017 \
-  ghcr.io/liran/sink:latest
+  --mount type=bind,source="$(pwd)/config.yaml",target=/etc/sink/config.yaml,readonly \
+  ghcr.io/liran/sink:latest --config /etc/sink/config.yaml
 ```
 
-The image supports three modes through `SINK_MODE`:
+The configuration file is required and the server does not read runtime
+parameters from `SINK_*` environment variables. The image supports three modes
+through the top-level `mode` field:
 
 - `server` runs the gRPC API and is the default.
 - `worker` consumes durable Kafka mutations without opening a gRPC listener.
 - `all` runs both roles in one process for smaller deployments.
 
-Runtime configuration:
-
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `SINK_STORAGE_DRIVER` | `mongodb` | Storage adapter: `mongodb`, `elasticsearch`, or `opensearch`. |
-| `SINK_MONGODB_URI` | required for MongoDB | MongoDB connection string. |
-| `SINK_MONGODB_STORE` | `primary` | Logical store name accepted by this process. |
-| `SINK_MONGODB_HIDDEN_FIELD` | `__sink` | Hidden revision metadata field. |
-| `SINK_MONGODB_BINDINGS` | direct names | JSON array mapping logical namespace/dataset pairs to existing MongoDB database/collection pairs. |
-| `SINK_SEARCH_ENDPOINTS` | required for search | Comma-separated Elasticsearch or OpenSearch HTTP endpoints. |
-| `SINK_SEARCH_STORE` | `primary` | Logical store name accepted by a search-backed process. |
-| `SINK_SEARCH_BINDINGS` | direct names | JSON array mapping logical namespace/dataset pairs to existing indexes or aliases. |
-| `SINK_SEARCH_USERNAME` | empty | Basic-auth username; configure together with the password. |
-| `SINK_SEARCH_PASSWORD` | empty | Basic-auth password; configure together with the username. |
-| `SINK_SEARCH_API_KEY` | empty | API key used instead of basic authentication. |
-| `SINK_GRPC_ADDRESS` | `:8080` | gRPC listen address in `server` and `all` modes. |
-| `SINK_KAFKA_BROKERS` | empty | Comma-separated Kafka bootstrap addresses. |
-| `SINK_KAFKA_TOPIC` | empty | Durable mutation topic; configure together with brokers to enable asynchronous acceptance. |
-| `SINK_KAFKA_GROUP_ID` | required for worker | Kafka consumer group for `worker` and `all` modes. |
-| `SINK_KAFKA_MAX_POLL_RECORDS` | `500` | Maximum mutations handled in one consumer batch. |
-
-For example, connect an Elasticsearch deployment and bind the logical
-`logical/records` dataset to an existing `legacy-records` index:
-
-```shell
-SINK_STORAGE_DRIVER=elasticsearch \
-SINK_SEARCH_ENDPOINTS=https://search-1:9200,https://search-2:9200 \
-SINK_SEARCH_API_KEY=... \
-SINK_SEARCH_BINDINGS='[{"namespace":"logical","dataset":"records","index":"legacy-records"}]' \
-./sink
-```
-
-Use `SINK_STORAGE_DRIVER=opensearch` for OpenSearch; the remaining search
-configuration is shared.
+See [`docs/configuration.md`](docs/configuration.md) for every field's type,
+function, required condition, default, validation rules, storage-binding
+formats, and MongoDB, Elasticsearch, and OpenSearch examples. A ready-to-edit
+MongoDB file is available at [`config.example.yaml`](config.example.yaml).
 
 The stock image intentionally registers no application-specific merge
 profiles. It supports reads, puts, deletes, and the complete async pipeline;

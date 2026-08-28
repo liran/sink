@@ -85,12 +85,11 @@ services:
       args:
         VERSION: quickstart
     init: true
-    environment:
-      SINK_MODE: all
-      SINK_MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0
-      SINK_KAFKA_BROKERS: kafka:19092
-      SINK_KAFKA_TOPIC: sink-mutations
-      SINK_KAFKA_GROUP_ID: sink-quickstart
+    command:
+      - --config
+      - /etc/sink/config.yaml
+    volumes:
+      - ./sink.yaml:/etc/sink/config.yaml:ro
     ports:
       - 127.0.0.1:8080:8080
     depends_on:

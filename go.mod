@@ -9,6 +9,7 @@ require (
 	go.mongodb.org/mongo-driver/v2 v2.8.2
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

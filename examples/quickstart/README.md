@@ -3,6 +3,9 @@
 The quickstart runs a complete local Sink environment and verifies it through
 the public gRPC API. It starts MongoDB as a single-node ReplicaSet, Apache Kafka
 in KRaft mode, Sink in combined server/worker mode, and a disposable Go client.
+The Sink container loads
+[`sink.yaml`](sink.yaml) through `--config /etc/sink/config.yaml`; edit that file
+to try other server settings.
 
 From the repository root, run:
 
