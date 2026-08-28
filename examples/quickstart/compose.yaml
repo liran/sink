@@ -92,6 +92,7 @@ services:
       - ./sink.yaml:/etc/sink/config.yaml:ro
     ports:
       - 127.0.0.1:8080:8080
+      - 127.0.0.1:9090:9090
     depends_on:
       mongo:
         condition: service_healthy

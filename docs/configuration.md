@@ -30,6 +30,9 @@ mode: server
 grpc:
   address: ":8080"
 
+prometheus:
+  address: ":9090"
+
 storages:
   - name: mongo-main
     driver: mongodb
@@ -93,6 +96,32 @@ can route operations in one batch to different storage instances and returns
 results in the original operation order. An address whose `store` is not
 configured receives a per-operation failure.
 
+## Prometheus metrics
+
+Set `prometheus.address` to open a separate HTTP listener. Prometheus metrics
+are served at the fixed `/metrics` path in `server`, `worker`, and `all` modes.
+Omit the address or set it to an empty string to disable the listener.
+
+```yaml
+prometheus:
+  address: ":9090"
+```
+
+The endpoint includes the standard Go runtime and process collectors plus these
+Sink metrics:
+
+| Metric | Type | Labels | Meaning |
+| --- | --- | --- | --- |
+| `sink_build_info` | gauge | `version` | Build identity for the running Sink binary. |
+| `sink_grpc_server_requests_total` | counter | `method`, `code` | Completed Sink gRPC requests by method and canonical gRPC status code. |
+| `sink_grpc_server_request_duration_seconds` | histogram | `method` | End-to-end Sink gRPC request latency. |
+| `sink_grpc_server_operation_results_total` | counter | `method`, `status` | Per-operation results returned inside batch responses. |
+
+Labels intentionally exclude storage names, namespaces, datasets, record keys,
+and error messages to keep metric cardinality bounded. The endpoint has no
+application-level authentication; bind it to a private interface or protect it
+with the deployment network policy.
+
 ### Migrating a single-storage configuration
 
 The former top-level `storage` object is replaced by the `storages` list. Move
@@ -114,6 +143,7 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | --- | --- | --- | --- | --- | --- |
 | `mode` | enum string | No | `server` | `server`, `worker`, `all` | Process role. See [Mode values](#mode-values). |
 | `grpc.address` | string | No | `:8080` | Any valid TCP listen address | TCP listen address for the gRPC and gRPC health services. Used in `server` and `all` modes. |
+| `prometheus.address` | string | No | empty (disabled) | Empty or any valid TCP listen address | HTTP listen address for Prometheus `/metrics`. Available in every runtime mode. |
 | `storages` | list | Yes | none | One or more storage objects | Storage instances available for address routing. |
 | `storages[].name` | string | Yes | none | Any unique, non-empty name | Exact value selected by `address.store`. |
 | `storages[].driver` | enum string | Yes | none | `mongodb`, `elasticsearch`, `opensearch` | Adapter used by this storage instance. See [Storage driver values](#storage-driver-values). |

@@ -23,6 +23,9 @@ storages:
 	if loaded.mode != modeServer || loaded.grpcAddress != ":8080" || len(loaded.storages) != 1 {
 		t.Fatalf("loadConfig() = %#v", loaded)
 	}
+	if loaded.prometheusAddress != "" {
+		t.Fatalf("loadConfig() Prometheus address = %q", loaded.prometheusAddress)
+	}
 	configured := loaded.storages[0]
 	if configured.name != "primary" || configured.driver != driverMongoDB || configured.mongoURI != "mongodb://mongodb:27017" {
 		t.Fatalf("loadConfig() storage = %#v", configured)
@@ -37,6 +40,8 @@ storages:
 
 func TestLoadConfigMultipleStorages(t *testing.T) {
 	path := writeConfig(t, `
+prometheus:
+  address: ":9090"
 storages:
   - name: mongo-main
     driver: mongodb
@@ -61,6 +66,9 @@ storages:
 	}
 	if len(loaded.storages) != 3 {
 		t.Fatalf("loadConfig() storages = %#v", loaded.storages)
+	}
+	if loaded.prometheusAddress != ":9090" {
+		t.Fatalf("loadConfig() Prometheus address = %q", loaded.prometheusAddress)
 	}
 	if loaded.storages[0].name != "mongo-main" || loaded.storages[0].mongoMetadataField != "__revision" {
 		t.Fatalf("loadConfig() first storage = %#v", loaded.storages[0])

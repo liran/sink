@@ -32,6 +32,7 @@ const (
 type config struct {
 	mode                runMode
 	grpcAddress         string
+	prometheusAddress   string
 	storages            []backendConfig
 	maxOperations       int
 	maxMergeAttempts    int
@@ -55,15 +56,20 @@ type backendConfig struct {
 }
 
 type configFile struct {
-	Mode                   string              `yaml:"mode"`
-	GRPC                   grpcConfigFile      `yaml:"grpc"`
-	Storages               []storageConfigFile `yaml:"storages"`
-	Service                serviceConfigFile   `yaml:"service"`
-	Kafka                  kafkaConfigFile     `yaml:"kafka"`
-	ShutdownTimeoutSeconds *int                `yaml:"shutdown_timeout_seconds"`
+	Mode                   string               `yaml:"mode"`
+	GRPC                   grpcConfigFile       `yaml:"grpc"`
+	Prometheus             prometheusConfigFile `yaml:"prometheus"`
+	Storages               []storageConfigFile  `yaml:"storages"`
+	Service                serviceConfigFile    `yaml:"service"`
+	Kafka                  kafkaConfigFile      `yaml:"kafka"`
+	ShutdownTimeoutSeconds *int                 `yaml:"shutdown_timeout_seconds"`
 }
 
 type grpcConfigFile struct {
+	Address string `yaml:"address"`
+}
+
+type prometheusConfigFile struct {
 	Address string `yaml:"address"`
 }
 
@@ -124,6 +130,7 @@ func loadConfig(path string) (config, error) {
 		return loaded, errors.New("mode must be server, worker, or all")
 	}
 	loaded.grpcAddress = valueOrDefault(file.GRPC.Address, ":8080")
+	loaded.prometheusAddress = strings.TrimSpace(file.Prometheus.Address)
 	loaded.storages, err = loadStorageConfigs(file.Storages)
 	if err != nil {
 		return loaded, err

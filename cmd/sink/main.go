@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
+	sinkmetrics "github.com/liran/sink/internal/metrics"
 	queuekafka "github.com/liran/sink/internal/queue/kafka"
 	"github.com/liran/sink/internal/service"
 	storagecontract "github.com/liran/sink/internal/storage"
@@ -81,13 +83,15 @@ func run(configPath string) error {
 }
 
 type application struct {
-	config       config
-	mongoClients map[string]*mongo.Client
-	publisher    *queuekafka.Publisher
-	worker       *queuekafka.Worker
-	grpcServer   *grpc.Server
-	health       *health.Server
-	listener     net.Listener
+	config          config
+	mongoClients    map[string]*mongo.Client
+	publisher       *queuekafka.Publisher
+	worker          *queuekafka.Worker
+	grpcServer      *grpc.Server
+	health          *health.Server
+	listener        net.Listener
+	metricsServer   *http.Server
+	metricsListener net.Listener
 }
 
 func newApplication(ctx context.Context, loaded config) (*application, error) {
@@ -125,8 +129,20 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		app.close()
 		return nil, err
 	}
+	var observed *sinkmetrics.Metrics
+	if loaded.prometheusAddress != "" {
+		observed, err = sinkmetrics.New(version)
+		if err != nil {
+			app.close()
+			return nil, err
+		}
+		if err := app.configurePrometheus(observed.Handler()); err != nil {
+			app.close()
+			return nil, err
+		}
+	}
 	if loaded.mode == modeServer || loaded.mode == modeAll {
-		if err := app.configureGRPC(sinkServer); err != nil {
+		if err := app.configureGRPC(sinkServer, observed); err != nil {
 			app.close()
 			return nil, err
 		}
@@ -250,12 +266,17 @@ func openSearchStorage(ctx context.Context, configured backendConfig) (openedBac
 	return opened, nil
 }
 
-func (a *application) configureGRPC(server *service.Server) error {
+func (a *application) configureGRPC(server *service.Server, observed *sinkmetrics.Metrics) error {
 	listener, err := net.Listen("tcp", a.config.grpcAddress)
 	if err != nil {
 		return fmt.Errorf("listen for gRPC: %w", err)
 	}
-	grpcServer := grpc.NewServer()
+	serverOptions := make([]grpc.ServerOption, 0, 1)
+	if observed != nil {
+		interceptor := observed.UnaryServerInterceptor()
+		serverOptions = append(serverOptions, grpc.UnaryInterceptor(interceptor))
+	}
+	grpcServer := grpc.NewServer(serverOptions...)
 	sink.RegisterSinkServer(grpcServer, server)
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
@@ -266,15 +287,39 @@ func (a *application) configureGRPC(server *service.Server) error {
 	return nil
 }
 
+func (a *application) configurePrometheus(handler http.Handler) error {
+	listener, err := net.Listen("tcp", a.config.prometheusAddress)
+	if err != nil {
+		return fmt.Errorf("listen for Prometheus metrics: %w", err)
+	}
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", handler)
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	a.metricsListener = listener
+	a.metricsServer = server
+	return nil
+}
+
 func (a *application) run(ctx context.Context) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	runErrors := make(chan error, 2)
+	runErrors := make(chan error, 3)
 	if a.grpcServer != nil {
 		go func() {
 			err := a.grpcServer.Serve(a.listener)
 			if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
 				runErrors <- fmt.Errorf("serve gRPC: %w", err)
+			}
+		}()
+	}
+	if a.metricsServer != nil {
+		go func() {
+			err := a.metricsServer.Serve(a.metricsListener)
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				runErrors <- fmt.Errorf("serve Prometheus metrics: %w", err)
 			}
 		}()
 	}
@@ -312,6 +357,20 @@ func (a *application) close() {
 		case <-timer.C:
 			a.grpcServer.Stop()
 		}
+	}
+	if a.listener != nil {
+		_ = a.listener.Close()
+	}
+	if a.metricsServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), a.config.shutdownTimeout)
+		defer cancel()
+		if err := a.metricsServer.Shutdown(ctx); err != nil {
+			slog.Error("shut down Prometheus metrics", "error", err)
+			_ = a.metricsServer.Close()
+		}
+	}
+	if a.metricsListener != nil {
+		_ = a.metricsListener.Close()
 	}
 	if a.worker != nil {
 		a.worker.Close()

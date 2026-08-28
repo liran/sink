@@ -107,9 +107,10 @@ make quickstart
 
 The quickstart builds Sink locally, starts a single-node MongoDB ReplicaSet and
 Apache Kafka in KRaft mode, creates the asynchronous mutation topic, then tests
-batch synchronous writes and reads, asynchronous delivery, and hard deletes
-through the public gRPC API. The stack remains running for further testing at
-`127.0.0.1:8080`; use `make quickstart-down` to stop it.
+batch synchronous writes and reads, asynchronous delivery, hard deletes, and
+the Prometheus endpoint. The stack remains running for further testing at
+`127.0.0.1:8080`, with metrics at `http://127.0.0.1:9090/metrics`; use
+`make quickstart-down` to stop it.
 
 See [`examples/quickstart`](examples/quickstart) for the exposed dependency
 ports, direct Docker Compose commands, and reset instructions.
@@ -123,7 +124,7 @@ service with a YAML configuration file:
 ```shell
 cp config.example.yaml config.yaml
 # Edit config.yaml for the target MongoDB deployment.
-docker run --rm -p 8080:8080 \
+docker run --rm -p 8080:8080 -p 9090:9090 \
   --mount type=bind,source="$(pwd)/config.yaml",target=/etc/sink/config.yaml,readonly \
   ghcr.io/liran/sink:latest --config /etc/sink/config.yaml
 ```
