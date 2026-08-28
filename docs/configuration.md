@@ -274,12 +274,6 @@ replayable. This keeps Sink stateless with respect to customer rules. The source
 is sent once per request but necessarily travels with every durable Kafka
 mutation; transport-level compression can reduce its wire cost further.
 
-This contract replaces the former named merge-profile field. Before upgrading
-an existing asynchronous deployment, drain or dead-letter queued profile-based
-merge mutations, then deploy Lua-capable workers, servers, and clients as one
-coordinated protocol change. Old profile mutations do not contain Lua source and
-cannot be replayed by the new engine.
-
 ## Handling credentials
 
 The configuration can contain database URIs, passwords, or API keys. Do not
