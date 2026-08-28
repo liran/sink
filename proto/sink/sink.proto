@@ -1,8 +1,217 @@
 syntax = "proto3";
 
-package sink;
+package sink.v1;
 
-option go_package = "github.com/liran/sink/gen/sink";
+option go_package = "github.com/liran/sink/gen/sink;sink";
 
+// Sink provides database-independent record reads and mutations.
+//
+// Every request is batch-native. A request containing one operation is the
+// single-record form. Atomicity is guaranteed per record, never for the whole
+// request.
 service Sink {
+  rpc Read(ReadRequest) returns (ReadResponse);
+  rpc Write(WriteRequest) returns (WriteResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+}
+
+// RecordAddress identifies a record without exposing a physical database,
+// collection, table, or primary-key field name.
+message RecordAddress {
+  string store = 1;
+  string namespace = 2;
+  string dataset = 3;
+  RecordKey key = 4;
+}
+
+// RecordKey is encoded deterministically so it can also be used for routing.
+// Opaque keys preserve storage-specific legacy key types without teaching the
+// Sink core how to interpret them.
+message RecordKey {
+  oneof kind {
+    string string_value = 1;
+    int64 int64_value = 2;
+    bytes bytes_value = 3;
+    OpaqueValue opaque_value = 4;
+  }
+}
+
+message OpaqueValue {
+  string type = 1;
+  bytes data = 2;
+}
+
+// Document contains a lossless, encoded user document. Sink passes documents
+// through unchanged for ordinary reads and puts. A merge profile selects a
+// codec only when it needs to inspect fields.
+message Document {
+  string content_type = 1;
+  bytes data = 2;
+}
+
+// RevisionToken is interpreted only by the selected storage adapter.
+message RevisionToken {
+  bytes data = 1;
+}
+
+// CompletionMode defines the point at which a mutating RPC returns success.
+enum CompletionMode {
+  COMPLETION_MODE_UNSPECIFIED = 0;
+
+  // Wait until the storage adapter has applied each operation.
+  COMPLETION_MODE_WAIT_UNTIL_APPLIED = 1;
+
+  // Return after a durable asynchronous queue has accepted each operation.
+  // Acceptance does not mean that the storage adapter has applied it.
+  COMPLETION_MODE_RETURN_AFTER_ACCEPTED = 2;
+}
+
+message ReadRequest {
+  repeated ReadOperation operations = 1;
+}
+
+message ReadOperation {
+  RecordAddress address = 1;
+}
+
+message ReadResponse {
+  // Results are returned in request order. operation_index is included to make
+  // correlation explicit when an implementation executes records in parallel.
+  repeated ReadResult results = 1;
+}
+
+message ReadResult {
+  uint32 operation_index = 1;
+  ReadStatus status = 2;
+  Document document = 3;
+  RevisionToken revision = 4;
+  Failure failure = 5;
+}
+
+enum ReadStatus {
+  READ_STATUS_UNSPECIFIED = 0;
+  READ_STATUS_FOUND = 1;
+  READ_STATUS_NOT_FOUND = 2;
+  READ_STATUS_FAILED = 3;
+}
+
+message WriteRequest {
+  CompletionMode completion_mode = 1;
+
+  // Operations for the same address are executed in request order. Operations
+  // for different addresses may execute concurrently.
+  repeated WriteOperation operations = 2;
+}
+
+message WriteOperation {
+  RecordAddress address = 1;
+
+  oneof action {
+    PutOperation put = 2;
+    MergeOperation merge = 3;
+  }
+}
+
+// PutOperation writes a complete user document without interpreting its fields.
+message PutOperation {
+  Document document = 1;
+  WriteMode mode = 2;
+}
+
+enum WriteMode {
+  WRITE_MODE_UNSPECIFIED = 0;
+  WRITE_MODE_CREATE = 1;
+  WRITE_MODE_REPLACE = 2;
+  WRITE_MODE_UPSERT = 3;
+}
+
+// MergeOperation carries the original merge intent. In asynchronous mode this
+// message is queued as-is so the worker merges against the document version it
+// reads at execution time.
+message MergeOperation {
+  Document incoming_document = 1;
+  MergeProfile profile = 2;
+  MissingDocumentMode missing_document_mode = 3;
+}
+
+message MergeProfile {
+  string name = 1;
+  uint64 version = 2;
+}
+
+enum MissingDocumentMode {
+  MISSING_DOCUMENT_MODE_UNSPECIFIED = 0;
+  MISSING_DOCUMENT_MODE_FAIL = 1;
+  MISSING_DOCUMENT_MODE_CREATE = 2;
+}
+
+message WriteResponse {
+  repeated WriteResult results = 1;
+}
+
+message WriteResult {
+  uint32 operation_index = 1;
+  WriteStatus status = 2;
+  RevisionToken revision = 3;
+  Failure failure = 4;
+}
+
+enum WriteStatus {
+  WRITE_STATUS_UNSPECIFIED = 0;
+
+  // The asynchronous queue accepted the operation durably.
+  WRITE_STATUS_ACCEPTED = 1;
+
+  // The storage adapter applied the operation.
+  WRITE_STATUS_APPLIED = 2;
+
+  // A CREATE, REPLACE, or adapter-level revision condition did not match.
+  WRITE_STATUS_PRECONDITION_FAILED = 3;
+  WRITE_STATUS_FAILED = 4;
+}
+
+message DeleteRequest {
+  CompletionMode completion_mode = 1;
+
+  // Deletes are hard deletes. Deleting an absent record is successful.
+  repeated DeleteOperation operations = 2;
+}
+
+message DeleteOperation {
+  RecordAddress address = 1;
+}
+
+message DeleteResponse {
+  repeated DeleteResult results = 1;
+}
+
+message DeleteResult {
+  uint32 operation_index = 1;
+  DeleteStatus status = 2;
+  Failure failure = 3;
+}
+
+enum DeleteStatus {
+  DELETE_STATUS_UNSPECIFIED = 0;
+  DELETE_STATUS_ACCEPTED = 1;
+  DELETE_STATUS_APPLIED = 2;
+  DELETE_STATUS_FAILED = 3;
+}
+
+message Failure {
+  FailureCode code = 1;
+  string message = 2;
+  bool retryable = 3;
+}
+
+enum FailureCode {
+  FAILURE_CODE_UNSPECIFIED = 0;
+  FAILURE_CODE_INVALID_ARGUMENT = 1;
+  FAILURE_CODE_PRECONDITION_FAILED = 2;
+  FAILURE_CODE_NOT_FOUND = 3;
+  FAILURE_CODE_CONFLICT = 4;
+  FAILURE_CODE_RESOURCE_EXHAUSTED = 5;
+  FAILURE_CODE_UNAVAILABLE = 6;
+  FAILURE_CODE_DEADLINE_EXCEEDED = 7;
+  FAILURE_CODE_INTERNAL = 8;
 }
