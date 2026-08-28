@@ -48,12 +48,7 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 	}
 
 	database := "sink_integration_" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	dataset := mongodb.Dataset{Namespace: "logical", Dataset: "records"}
-	binding := mongodb.Binding{Database: database, Collection: "documents"}
-	storeOptions := mongodb.Options{
-		Store:    "primary",
-		Bindings: map[mongodb.Dataset]mongodb.Binding{dataset: binding},
-	}
+	storeOptions := mongodb.Options{Store: "primary"}
 	store, err := mongodb.New(client, storeOptions)
 	if err != nil {
 		t.Fatalf("mongodb.New() error = %v", err)
@@ -62,7 +57,7 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		client:     client,
 		store:      store,
 		database:   database,
-		collection: client.Database(database).Collection(binding.Collection),
+		collection: client.Database(database).Collection("documents"),
 	}
 	t.Cleanup(func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -76,8 +71,8 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 func TestMongoDBStorageLifecycleAndLegacyUpgrade(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := context.Background()
-	first := integrationAddress("first")
-	second := integrationAddress("second")
+	first := fixture.address("first")
+	second := fixture.address("second")
 	firstValue := bson.D{{Key: "value", Value: "one"}}
 	firstDocument := bsonStorageDocument(t, firstValue)
 	secondValue := bson.D{{Key: "value", Value: "two"}}
@@ -111,7 +106,7 @@ func TestMongoDBStorageLifecycleAndLegacyUpgrade(t *testing.T) {
 
 	readOperations := []storage.ReadOperation{
 		{Address: second},
-		{Address: integrationAddress("missing")},
+		{Address: fixture.address("missing")},
 		{Address: first},
 	}
 	readRequest := storage.ReadRequest{Operations: readOperations}
@@ -159,7 +154,7 @@ func TestMongoDBStorageLifecycleAndLegacyUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InsertOne(legacy) error = %v", err)
 	}
-	legacyAddress := integrationAddress("legacy")
+	legacyAddress := fixture.address("legacy")
 	legacyReadRequest := storage.ReadRequest{
 		Operations: []storage.ReadOperation{{Address: legacyAddress}},
 	}
@@ -208,7 +203,7 @@ func TestMongoDBStorageLifecycleAndLegacyUpgrade(t *testing.T) {
 
 	deleteOperations := []storage.DeleteOperation{
 		{Address: first},
-		{Address: integrationAddress("missing")},
+		{Address: fixture.address("missing")},
 	}
 	deleteRequest := storage.DeleteRequest{Operations: deleteOperations}
 	deleted, err := fixture.store.Delete(ctx, deleteRequest)
@@ -238,7 +233,7 @@ func TestMongoDBConcurrentUpsertsDoNotSurfaceDuplicateKey(t *testing.T) {
 		go func() {
 			defer workers.Done()
 			operation := storage.WriteOperation{
-				Address:  integrationAddress("concurrent-upsert"),
+				Address:  fixture.address("concurrent-upsert"),
 				Document: documents[index],
 				Precondition: storage.Precondition{
 					Kind: storage.PreconditionNone,
@@ -317,7 +312,7 @@ func TestMongoDBServiceConcurrentMergeIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("service.New() error = %v", err)
 	}
-	address := sinkAddress("counter")
+	address := fixture.sinkAddress("counter")
 	initialValue := bson.D{{Key: "counter", Value: int64(0)}}
 	initial := sinkDocument(t, initialValue)
 	put := &sink.PutOperation{Document: initial, Mode: sink.WriteMode_WRITE_MODE_CREATE}
@@ -382,7 +377,7 @@ func TestMongoDBServiceConcurrentMergeIsAtomic(t *testing.T) {
 	}
 
 	readRequest := storage.ReadRequest{
-		Operations: []storage.ReadOperation{{Address: integrationAddress("counter")}},
+		Operations: []storage.ReadOperation{{Address: fixture.address("counter")}},
 	}
 	read, err := fixture.store.Read(context.Background(), readRequest)
 	if err != nil {
@@ -395,22 +390,22 @@ func TestMongoDBServiceConcurrentMergeIsAtomic(t *testing.T) {
 	}
 }
 
-func integrationAddress(key string) storage.Address {
+func (f *integrationFixture) address(key string) storage.Address {
 	address := storage.Address{
 		Store:     "primary",
-		Namespace: "logical",
-		Dataset:   "records",
+		Namespace: f.database,
+		Dataset:   "documents",
 		Key:       storage.Key{Type: "string", Data: []byte(key)},
 	}
 	return address
 }
 
-func sinkAddress(key string) *sink.RecordAddress {
+func (f *integrationFixture) sinkAddress(key string) *sink.RecordAddress {
 	recordKey := &sink.RecordKey{Kind: &sink.RecordKey_StringValue{StringValue: key}}
 	address := &sink.RecordAddress{
 		Store:     "primary",
-		Namespace: "logical",
-		Dataset:   "records",
+		Namespace: f.database,
+		Dataset:   "documents",
 		Key:       recordKey,
 	}
 	return address

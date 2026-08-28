@@ -46,21 +46,12 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		t.Fatalf("%s = %q", searchTestDriver, driver)
 	}
 
-	index := "sink-integration-" + strconv.FormatInt(time.Now().UnixNano(), 10)
-	dataset := search.Dataset{Namespace: "logical", Dataset: "records"}
-	binding := search.Binding{Index: index}
-	missingDataset := search.Dataset{Namespace: "logical", Dataset: "missing-index"}
-	missingBinding := search.Binding{Index: index + "-absent"}
-	bindings := map[search.Dataset]search.Binding{
-		dataset:        binding,
-		missingDataset: missingBinding,
-	}
+	index := "sink-existing-records-" + strconv.FormatInt(time.Now().UnixNano(), 10)
 	client := &http.Client{Timeout: 30 * time.Second}
 	opts := search.Options{
 		Driver:     driver,
 		Endpoints:  []string{endpoint},
 		Store:      "primary",
-		Bindings:   bindings,
 		HTTPClient: client,
 	}
 	store, err := search.New(opts)
@@ -114,8 +105,8 @@ func (f *integrationFixture) request(t *testing.T, method string, path string, b
 func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := t.Context()
-	first := integrationAddress("first")
-	second := integrationAddress("second")
+	first := fixture.address("first")
+	second := fixture.address("second")
 	createOperations := []storage.WriteOperation{
 		{
 			Address:  first,
@@ -145,9 +136,9 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 
 	readOperations := []storage.ReadOperation{
 		{Address: second},
-		{Address: integrationAddress("missing")},
+		{Address: fixture.address("missing")},
 		{Address: first},
-		{Address: integrationDatasetAddress("missing-index", "missing")},
+		{Address: fixture.datasetAddress(fixture.index+"-missing", "missing")},
 	}
 	readRequest := storage.ReadRequest{Operations: readOperations}
 	read, err := fixture.store.Read(ctx, readRequest)
@@ -206,7 +197,7 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 		},
 	}
 	missingReplacement := storage.WriteOperation{
-		Address:  integrationAddress("missing"),
+		Address:  fixture.address("missing"),
 		Document: jsonStorageDocument(`{"value":"not-written"}`),
 		Precondition: storage.Precondition{
 			Kind: storage.PreconditionRecordExists,
@@ -224,7 +215,7 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 		t.Fatalf("Write(conditions) statuses = %v, %v, %v", conditions.Results[0].Status, conditions.Results[1].Status, conditions.Results[2].Status)
 	}
 
-	ordered := integrationAddress("ordered")
+	ordered := fixture.address("ordered")
 	orderedOperations := []storage.WriteOperation{
 		{Address: ordered, Document: jsonStorageDocument(`{"step":1}`)},
 		{Address: ordered, Document: jsonStorageDocument(`{"step":2}`)},
@@ -251,7 +242,7 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 	if status < 200 || status >= 300 {
 		t.Fatalf("write legacy document returned HTTP %d: %s", status, responseBody)
 	}
-	legacyOperation := storage.ReadOperation{Address: integrationAddress("legacy")}
+	legacyOperation := storage.ReadOperation{Address: fixture.address("legacy")}
 	legacyRequest := storage.ReadRequest{Operations: []storage.ReadOperation{legacyOperation}}
 	legacyRead, err := fixture.store.Read(ctx, legacyRequest)
 	if err != nil {
@@ -264,7 +255,7 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 
 	deleteOperations := []storage.DeleteOperation{
 		{Address: first},
-		{Address: integrationAddress("absent")},
+		{Address: fixture.address("absent")},
 	}
 	deleteRequest := storage.DeleteRequest{Operations: deleteOperations}
 	deleted, err := fixture.store.Delete(ctx, deleteRequest)
@@ -338,7 +329,7 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("service.New() error = %v", err)
 	}
-	address := sinkAddress("counter")
+	address := fixture.sinkAddress("counter")
 	initial := sinkDocument(`{"counter":0}`)
 	put := &sink.PutOperation{Document: initial, Mode: sink.WriteMode_WRITE_MODE_CREATE}
 	putAction := &sink.WriteOperation_Put{Put: put}
@@ -403,7 +394,7 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 		return
 	}
 
-	readOperation := storage.ReadOperation{Address: integrationAddress("counter")}
+	readOperation := storage.ReadOperation{Address: fixture.address("counter")}
 	readRequest := storage.ReadRequest{Operations: []storage.ReadOperation{readOperation}}
 	read, err := fixture.store.Read(t.Context(), readRequest)
 	if err != nil {
@@ -418,28 +409,28 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 	}
 }
 
-func integrationAddress(key string) storage.Address {
-	return integrationDatasetAddress("records", key)
+func (f *integrationFixture) address(key string) storage.Address {
+	return f.datasetAddress(f.index, key)
 }
 
-func integrationDatasetAddress(dataset string, key string) storage.Address {
+func (f *integrationFixture) datasetAddress(index string, key string) storage.Address {
 	recordKey := storage.Key{Type: "string", Data: []byte(key)}
 	address := storage.Address{
 		Store:     "primary",
-		Namespace: "logical",
-		Dataset:   dataset,
+		Namespace: "catalog",
+		Dataset:   index,
 		Key:       recordKey,
 	}
 	return address
 }
 
-func sinkAddress(key string) *sink.RecordAddress {
+func (f *integrationFixture) sinkAddress(key string) *sink.RecordAddress {
 	keyValue := &sink.RecordKey_StringValue{StringValue: key}
 	recordKey := &sink.RecordKey{Kind: keyValue}
 	address := &sink.RecordAddress{
 		Store:     "primary",
-		Namespace: "logical",
-		Dataset:   "records",
+		Namespace: "catalog",
+		Dataset:   f.index,
 		Key:       recordKey,
 	}
 	return address

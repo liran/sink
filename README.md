@@ -2,8 +2,8 @@
 
 Sink is a database-independent logical layer for record reads, writes, and
 read-modify-write operations. It supports MongoDB, Elasticsearch, and
-OpenSearch storage while the public API uses logical stores, namespaces,
-datasets, and record keys instead of physical database terminology.
+OpenSearch storage. One server can connect to multiple storage instances, and
+the public record address selects an instance by its configured store name.
 
 ## API model
 
@@ -42,33 +42,34 @@ the documented at-least-once behavior.
 Documents use a content type and opaque bytes so existing BSON can pass through
 without schema conversion. Storage adapters interpret fields only when a merge
 profile requires it. The MongoDB adapter preserves the existing top-level
-document shape and lazily adds one configurable hidden revision field when a
+document shape and lazily adds one configurable Sink metadata field when a
 record is first mutated through Sink. A legacy record without that field is
-updated with a conditional “revision still absent” filter, so its first RMW is
+updated with a conditional “metadata still absent” filter, so its first RMW is
 atomic as well.
 
 The MongoDB adapter accepts `application/bson`. Logical string, int64, byte,
-and `mongodb/object-id` keys map to MongoDB `_id` values. Logical
-namespace and dataset names can map directly to a database and collection, or
-use explicit bindings for an existing deployment. Batch reads use one `$in`
-query per collection. Unconditional puts and creates use unordered bulk writes;
-revision-conditional writes run concurrently as individual `ReplaceOne`
-operations because older MongoDB bulk responses do not identify which
-individual CAS filters matched.
+and `mongodb/object-id` keys map to MongoDB `_id` values. The record address's
+namespace and dataset map directly to the MongoDB database and collection.
+Batch reads use one `$in` query per collection. Unconditional puts and creates
+use unordered bulk writes; revision-conditional writes run concurrently as
+individual `ReplaceOne` operations because older MongoDB bulk responses do not
+identify which individual CAS filters matched.
 
 The Elasticsearch and OpenSearch adapter accepts `application/json` objects
 and stores the user document unchanged in `_source`. Existing string IDs remain
 unchanged; other logical key types receive a deterministic, reserved encoding.
 It uses `_seq_no` and `_primary_term` as an opaque revision token, global
 `_mget` for batch reads, and `_bulk` for puts and hard deletes. Sink does not
-create or manage indexes, mappings, or aliases. Without explicit bindings a
-logical `namespace`/`dataset` maps to `namespace-dataset`; bindings can instead
-point at existing indexes or aliases.
+create or manage indexes, mappings, or aliases. The record address's namespace
+remains a logical business namespace, while its dataset is the complete,
+existing index or alias name.
 
 ## Packages
 
 - `internal/service` implements validation, same-record ordering, batched puts,
   and CAS retry for merge profiles.
+- `internal/storage` routes each operation by `address.store` and preserves
+  result order for batches that span multiple storage instances.
 - `internal/storage/mongodb` implements MongoDB storage.
 - `internal/storage/search` implements the shared Elasticsearch and OpenSearch
   REST storage adapter.
@@ -136,9 +137,9 @@ through the top-level `mode` field:
 - `all` runs both roles in one process for smaller deployments.
 
 See [`docs/configuration.md`](docs/configuration.md) for every field's type,
-function, required condition, default, validation rules, storage-binding
-formats, and MongoDB, Elasticsearch, and OpenSearch examples. A ready-to-edit
-MongoDB file is available at [`config.example.yaml`](config.example.yaml).
+function, required condition, default, validation rules, address routing, and
+multi-storage examples. A ready-to-edit MongoDB file is available at
+[`config.example.yaml`](config.example.yaml).
 
 The stock image intentionally registers no application-specific merge
 profiles. It supports reads, puts, deletes, and the complete async pipeline;

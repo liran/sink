@@ -3,11 +3,11 @@ mode: all
 grpc:
   address: ":8080"
 
-storage:
-  driver: mongodb
-  mongodb:
-    uri: mongodb://mongo:27017/?replicaSet=rs0
-    store: primary
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo:27017/?replicaSet=rs0
 
 service:
   max_operations: 1000

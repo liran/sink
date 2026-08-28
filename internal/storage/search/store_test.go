@@ -261,13 +261,10 @@ func newScriptedStore(t *testing.T, requests []expectedRequest) (*Store, *script
 	t.Cleanup(func() {
 		server.Close()
 	})
-	dataset := Dataset{Namespace: "logical", Dataset: "records"}
-	binding := Binding{Index: "legacy-records"}
 	opts := Options{
 		Driver:    DriverElasticsearch,
 		Endpoints: []string{server.URL},
 		Store:     "primary",
-		Bindings:  map[Dataset]Binding{dataset: binding},
 		APIKey:    "test-key",
 	}
 	store, err := New(opts)
@@ -281,7 +278,7 @@ func testAddress(id string) storage.Address {
 	address := storage.Address{
 		Store:     "primary",
 		Namespace: "logical",
-		Dataset:   "records",
+		Dataset:   "legacy-records",
 		Key:       storage.Key{Type: "string", Data: []byte(id)},
 	}
 	return address

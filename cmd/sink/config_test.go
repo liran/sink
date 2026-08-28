@@ -10,16 +10,22 @@ import (
 
 func TestLoadConfigDefaultsToSynchronousServer(t *testing.T) {
 	path := writeConfig(t, `
-storage:
-  mongodb:
-    uri: mongodb://mongodb:27017
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
 `)
 	loaded, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.mode != modeServer || loaded.grpcAddress != ":8080" || loaded.storageDriver != driverMongoDB || loaded.mongoStore != "primary" {
+	if loaded.mode != modeServer || loaded.grpcAddress != ":8080" || len(loaded.storages) != 1 {
 		t.Fatalf("loadConfig() = %#v", loaded)
+	}
+	configured := loaded.storages[0]
+	if configured.name != "primary" || configured.driver != driverMongoDB || configured.mongoURI != "mongodb://mongodb:27017" {
+		t.Fatalf("loadConfig() storage = %#v", configured)
 	}
 	if loaded.maxOperations != 1000 || loaded.maxMergeAttempts != 3 || loaded.shutdownTimeout != 15*time.Second {
 		t.Fatalf("loadConfig() service defaults = %#v", loaded)
@@ -29,60 +35,73 @@ storage:
 	}
 }
 
-func TestLoadConfigElasticsearchStorage(t *testing.T) {
+func TestLoadConfigMultipleStorages(t *testing.T) {
 	path := writeConfig(t, `
-storage:
-  driver: elasticsearch
-  search:
-    endpoints:
-      - http://search-1:9200
-      - http://search-2:9200
-    api_key: test-api-key
-    bindings:
-      - namespace: logical
-        dataset: records
-        index: legacy-records
+storages:
+  - name: mongo-main
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo-main:27017
+      metadata_field: __revision
+  - name: mongo-archive
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo-archive:27017
+  - name: search-main
+    driver: elasticsearch
+    search:
+      endpoints:
+        - http://search-1:9200
+        - http://search-2:9200
+      api_key: test-api-key
 `)
 	loaded, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.storageDriver != driverElasticsearch || len(loaded.searchEndpoints) != 2 || loaded.searchAPIKey != "test-api-key" {
-		t.Fatalf("loadConfig() = %#v", loaded)
+	if len(loaded.storages) != 3 {
+		t.Fatalf("loadConfig() storages = %#v", loaded.storages)
 	}
-	if len(loaded.searchBindings) != 1 || loaded.searchStore != "primary" {
-		t.Fatalf("loadConfig() search bindings = %#v", loaded.searchBindings)
+	if loaded.storages[0].name != "mongo-main" || loaded.storages[0].mongoMetadataField != "__revision" {
+		t.Fatalf("loadConfig() first storage = %#v", loaded.storages[0])
+	}
+	search := loaded.storages[2]
+	if search.driver != driverElasticsearch || len(search.searchEndpoints) != 2 || search.searchAPIKey != "test-api-key" {
+		t.Fatalf("loadConfig() search storage = %#v", search)
 	}
 }
 
 func TestLoadConfigOpenSearchBasicAuthentication(t *testing.T) {
 	path := writeConfig(t, `
-storage:
-  driver: opensearch
-  search:
-    endpoints:
-      - https://search:9200
-    username: sink
-    password: test-password
+storages:
+  - name: search-main
+    driver: opensearch
+    search:
+      endpoints:
+        - https://search:9200
+      username: sink
+      password: test-password
 `)
 	loaded, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.storageDriver != driverOpenSearch || loaded.searchUsername != "sink" || loaded.searchPassword != "test-password" {
-		t.Fatalf("loadConfig() = %#v", loaded)
+	configured := loaded.storages[0]
+	if configured.driver != driverOpenSearch || configured.searchUsername != "sink" || configured.searchPassword != "test-password" {
+		t.Fatalf("loadConfig() storage = %#v", configured)
 	}
 }
 
 func TestLoadConfigRejectsConflictingSearchAuthentication(t *testing.T) {
 	path := writeConfig(t, `
-storage:
-  driver: elasticsearch
-  search:
-    endpoints: [http://search:9200]
-    username: sink
-    password: test-password
-    api_key: test-api-key
+storages:
+  - name: search-main
+    driver: elasticsearch
+    search:
+      endpoints: [http://search:9200]
+      username: sink
+      password: test-password
+      api_key: test-api-key
 `)
 	_, err := loadConfig(path)
 	if err == nil {
@@ -90,17 +109,14 @@ storage:
 	}
 }
 
-func TestLoadConfigWorkerAndBindings(t *testing.T) {
+func TestLoadConfigWorkerSettings(t *testing.T) {
 	path := writeConfig(t, `
 mode: worker
-storage:
-  mongodb:
-    uri: mongodb://mongodb:27017
-    bindings:
-      - namespace: logical
-        dataset: records
-        database: legacy
-        collection: documents
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
 kafka:
   brokers:
     - kafka-1:9092
@@ -120,19 +136,86 @@ shutdown_timeout_seconds: 30
 	if loaded.mode != modeWorker || len(loaded.kafkaBrokers) != 2 || loaded.kafkaMaxPollRecords != 250 {
 		t.Fatalf("loadConfig() = %#v", loaded)
 	}
-	if len(loaded.mongoBindings) != 1 || loaded.maxOperations != 2000 || loaded.maxMergeAttempts != 5 {
-		t.Fatalf("loadConfig() bindings and service = %#v", loaded)
+	if loaded.maxOperations != 2000 || loaded.maxMergeAttempts != 5 || loaded.shutdownTimeout != 30*time.Second {
+		t.Fatalf("loadConfig() service settings = %#v", loaded)
 	}
-	if loaded.shutdownTimeout != 30*time.Second {
-		t.Fatalf("loadConfig() shutdown timeout = %v", loaded.shutdownTimeout)
+}
+
+func TestLoadConfigRejectsDuplicateStorageNames(t *testing.T) {
+	path := writeConfig(t, `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo-1:27017
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo-2:27017
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), `duplicate name "primary"`) {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigRequiresAtLeastOneStorage(t *testing.T) {
+	path := writeConfig(t, `
+storages: []
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "storages must contain at least one storage") {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigRequiresStorageNameAndDriver(t *testing.T) {
+	path := writeConfig(t, `
+storages:
+  - name: ""
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "storages[0].name is required") {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+
+	path = writeConfig(t, `
+storages:
+  - name: primary
+    mongodb:
+      uri: mongodb://mongodb:27017
+`)
+	_, err = loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "storages[0].driver must be") {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigRejectsBindings(t *testing.T) {
+	path := writeConfig(t, `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+      bindings: []
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "field bindings not found") {
+		t.Fatalf("loadConfig() error = %v", err)
 	}
 }
 
 func TestLoadConfigRejectsPartialKafkaConfiguration(t *testing.T) {
 	path := writeConfig(t, `
-storage:
-  mongodb:
-    uri: mongodb://mongodb:27017
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
 kafka:
   brokers: [kafka:9092]
 `)
@@ -144,9 +227,11 @@ kafka:
 
 func TestLoadConfigRejectsUnknownFields(t *testing.T) {
 	path := writeConfig(t, `
-storage:
-  mongodb:
-    uri: mongodb://mongodb:27017
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
 unexpected: true
 `)
 	_, err := loadConfig(path)
@@ -157,9 +242,11 @@ unexpected: true
 
 func TestLoadConfigRejectsNonPositiveValues(t *testing.T) {
 	path := writeConfig(t, `
-storage:
-  mongodb:
-    uri: mongodb://mongodb:27017
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
 service:
   max_operations: 0
 `)
@@ -174,15 +261,17 @@ func TestLoadConfigDoesNotReadLegacyEnvironmentVariables(t *testing.T) {
 	t.Setenv("SINK_MONGODB_URI", "mongodb://legacy-environment:27017")
 	path := writeConfig(t, `
 mode: server
-storage:
-  mongodb:
-    uri: mongodb://configured:27017
+storages:
+  - name: configured
+    driver: mongodb
+    mongodb:
+      uri: mongodb://configured:27017
 `)
 	loaded, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.mode != modeServer || loaded.mongoURI != "mongodb://configured:27017" {
+	if loaded.mode != modeServer || loaded.storages[0].mongoURI != "mongodb://configured:27017" {
 		t.Fatalf("loadConfig() = %#v", loaded)
 	}
 }

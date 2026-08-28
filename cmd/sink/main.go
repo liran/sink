@@ -81,13 +81,13 @@ func run(configPath string) error {
 }
 
 type application struct {
-	config      config
-	mongoClient *mongo.Client
-	publisher   *queuekafka.Publisher
-	worker      *queuekafka.Worker
-	grpcServer  *grpc.Server
-	health      *health.Server
-	listener    net.Listener
+	config       config
+	mongoClients map[string]*mongo.Client
+	publisher    *queuekafka.Publisher
+	worker       *queuekafka.Worker
+	grpcServer   *grpc.Server
+	health       *health.Server
+	listener     net.Listener
 }
 
 func newApplication(ctx context.Context, loaded config) (*application, error) {
@@ -95,7 +95,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &application{config: loaded, mongoClient: opened.mongoClient}
+	app := &application{config: loaded, mongoClients: opened.mongoClients}
 	if len(loaded.kafkaBrokers) > 0 && (loaded.mode == modeServer || loaded.mode == modeAll) {
 		publisherOptions := queuekafka.PublisherOptions{
 			Brokers: loaded.kafkaBrokers,
@@ -154,44 +154,72 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 }
 
 type openedStorage struct {
+	value        storagecontract.Storage
+	mongoClients map[string]*mongo.Client
+}
+
+func openConfiguredStorage(ctx context.Context, loaded config) (openedStorage, error) {
+	var opened openedStorage
+	opened.mongoClients = make(map[string]*mongo.Client)
+	backends := make(map[string]storagecontract.Storage, len(loaded.storages))
+	for _, configured := range loaded.storages {
+		backend, err := openStorageBackend(ctx, configured, loaded.shutdownTimeout)
+		if err != nil {
+			disconnectMongoClients(opened.mongoClients, loaded.shutdownTimeout)
+			return opened, fmt.Errorf("open storage %q: %w", configured.name, err)
+		}
+		backends[configured.name] = backend.value
+		if backend.mongoClient != nil {
+			opened.mongoClients[configured.name] = backend.mongoClient
+		}
+	}
+	router, err := storagecontract.NewRouter(backends)
+	if err != nil {
+		disconnectMongoClients(opened.mongoClients, loaded.shutdownTimeout)
+		return opened, err
+	}
+	opened.value = router
+	return opened, nil
+}
+
+type openedBackend struct {
 	value       storagecontract.Storage
 	mongoClient *mongo.Client
 }
 
-func openConfiguredStorage(ctx context.Context, loaded config) (openedStorage, error) {
-	switch loaded.storageDriver {
+func openStorageBackend(ctx context.Context, configured backendConfig, shutdownTimeout time.Duration) (openedBackend, error) {
+	switch configured.driver {
 	case driverMongoDB:
-		return openMongoStorage(ctx, loaded)
+		return openMongoStorage(ctx, configured, shutdownTimeout)
 	case driverElasticsearch, driverOpenSearch:
-		return openSearchStorage(ctx, loaded)
+		return openSearchStorage(ctx, configured)
 	default:
-		var empty openedStorage
-		return empty, fmt.Errorf("unsupported storage driver %q", loaded.storageDriver)
+		var empty openedBackend
+		return empty, fmt.Errorf("unsupported storage driver %q", configured.driver)
 	}
 }
 
-func openMongoStorage(ctx context.Context, loaded config) (openedStorage, error) {
-	var opened openedStorage
-	clientOptions := options.Client().ApplyURI(loaded.mongoURI)
+func openMongoStorage(ctx context.Context, configured backendConfig, shutdownTimeout time.Duration) (openedBackend, error) {
+	var opened openedBackend
+	clientOptions := options.Client().ApplyURI(configured.mongoURI)
 	mongoClient, err := mongo.Connect(clientOptions)
 	if err != nil {
 		return opened, fmt.Errorf("connect to MongoDB: %w", err)
 	}
 	if err := mongoClient.Ping(ctx, nil); err != nil {
-		disconnectContext, cancel := context.WithTimeout(context.Background(), loaded.shutdownTimeout)
+		disconnectContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = mongoClient.Disconnect(disconnectContext)
 		return opened, fmt.Errorf("ping MongoDB: %w", err)
 	}
 
 	storageOptions := mongodb.Options{
-		Store:       loaded.mongoStore,
-		HiddenField: loaded.mongoHiddenField,
-		Bindings:    loaded.mongoBindings,
+		Store:         configured.name,
+		MetadataField: configured.mongoMetadataField,
 	}
 	store, err := mongodb.New(mongoClient, storageOptions)
 	if err != nil {
-		disconnectContext, cancel := context.WithTimeout(context.Background(), loaded.shutdownTimeout)
+		disconnectContext, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		_ = mongoClient.Disconnect(disconnectContext)
 		return opened, err
@@ -201,16 +229,15 @@ func openMongoStorage(ctx context.Context, loaded config) (openedStorage, error)
 	return opened, nil
 }
 
-func openSearchStorage(ctx context.Context, loaded config) (openedStorage, error) {
-	var opened openedStorage
+func openSearchStorage(ctx context.Context, configured backendConfig) (openedBackend, error) {
+	var opened openedBackend
 	searchOptions := searchstorage.Options{
-		Driver:    loaded.searchDriver,
-		Endpoints: loaded.searchEndpoints,
-		Store:     loaded.searchStore,
-		Bindings:  loaded.searchBindings,
-		Username:  loaded.searchUsername,
-		Password:  loaded.searchPassword,
-		APIKey:    loaded.searchAPIKey,
+		Driver:    configured.searchDriver,
+		Endpoints: configured.searchEndpoints,
+		Store:     configured.name,
+		Username:  configured.searchUsername,
+		Password:  configured.searchPassword,
+		APIKey:    configured.searchAPIKey,
 	}
 	store, err := searchstorage.New(searchOptions)
 	if err != nil {
@@ -292,11 +319,18 @@ func (a *application) close() {
 	if a.publisher != nil {
 		a.publisher.Close()
 	}
-	if a.mongoClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), a.config.shutdownTimeout)
-		defer cancel()
-		if err := a.mongoClient.Disconnect(ctx); err != nil {
-			slog.Error("disconnect MongoDB", "error", err)
+	disconnectMongoClients(a.mongoClients, a.config.shutdownTimeout)
+}
+
+func disconnectMongoClients(clients map[string]*mongo.Client, timeout time.Duration) {
+	if len(clients) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	for name, client := range clients {
+		if err := client.Disconnect(ctx); err != nil {
+			slog.Error("disconnect MongoDB", "storage", name, "error", err)
 		}
 	}
 }
