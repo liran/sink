@@ -42,8 +42,8 @@ message OpaqueValue {
 }
 
 // Document contains a lossless, encoded user document. Sink passes documents
-// through unchanged for ordinary reads and puts. A merge profile selects a
-// codec only when it needs to inspect fields.
+// through unchanged for ordinary reads and puts. Lua merges currently inspect
+// application/json objects only.
 message Document {
   string content_type = 1;
   bytes data = 2;
@@ -101,6 +101,10 @@ message WriteRequest {
   // Operations for the same address are executed in request order. Operations
   // for different addresses may execute concurrently.
   repeated WriteOperation operations = 2;
+
+  // Programs can be declared once and referenced by digest from multiple merge
+  // operations, avoiding repeated Lua source bytes in a synchronous batch.
+  repeated LuaProgram lua_programs = 3;
 }
 
 message WriteOperation {
@@ -125,18 +129,27 @@ enum WriteMode {
   WRITE_MODE_UPSERT = 3;
 }
 
-// MergeOperation carries the original merge intent. In asynchronous mode this
-// message is queued as-is so the worker merges against the document version it
-// reads at execution time.
+// MergeOperation carries the original merge intent. In asynchronous mode Sink
+// expands any program reference before queueing the operation so the worker can
+// merge against the document version it reads at execution time.
 message MergeOperation {
   Document incoming_document = 1;
-  MergeProfile profile = 2;
+  reserved 2;
+  reserved "profile";
   MissingDocumentMode missing_document_mode = 3;
+  LuaProgram lua_program = 4;
 }
 
-message MergeProfile {
-  string name = 1;
-  uint64 version = 2;
+// LuaProgram is self-contained so merge rules can be versioned and deployed
+// with the calling application instead of being registered in Sink.
+message LuaProgram {
+  // Source may be omitted from a merge operation when the matching full program
+  // is present in WriteRequest.lua_programs. Workers always receive full source.
+  bytes source = 1;
+
+  // Optional SHA-256 digest. Sink verifies it when present and always uses the
+  // computed digest as the compiled-program cache key.
+  bytes sha256 = 2;
 }
 
 enum MissingDocumentMode {

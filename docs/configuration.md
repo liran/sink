@@ -60,6 +60,12 @@ storages:
 service:
   max_operations: 1000
   max_merge_attempts: 3
+  lua:
+    timeout_milliseconds: 100
+    max_source_bytes: 65536
+    max_result_bytes: 16777216
+    max_cached_programs: 256
+    max_instructions: 1000000
 
 kafka:
   max_poll_records: 500
@@ -176,6 +182,11 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].search.api_key` | string | No | empty | Any API key accepted by the search service | API key used instead of basic authentication. |
 | `service.max_operations` | positive integer | No | `1000` | Integer greater than `0` | Maximum operation count accepted in one Read, Write, or Delete batch request. |
 | `service.max_merge_attempts` | positive integer | No | `3` | Integer greater than `0` | Maximum attempts for a merge after revision conflicts. |
+| `service.lua.timeout_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Maximum wall-clock duration of one Lua execution. |
+| `service.lua.max_source_bytes` | positive integer | No | `65536` | Integer greater than `0` | Maximum Lua source size per merge operation. |
+| `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum encoded JSON merge result size. |
+| `service.lua.max_cached_programs` | positive integer | No | `256` | Integer greater than `0` | Maximum compiled Lua programs retained in the process-local LRU cache. |
+| `service.lua.max_instructions` | positive integer | No | `1000000` | Integer greater than `0` | Maximum VM instruction checkpoints per execution. |
 | `kafka.brokers` | list of strings | Conditionally | `[]` | Zero or more Kafka bootstrap addresses | Configure together with `kafka.topic` to enable durable asynchronous acceptance. Required in `worker` and `all` modes. |
 | `kafka.topic` | string | Conditionally | empty | Any valid Kafka topic name | Topic used for durable mutation publication and consumption. Required with brokers. |
 | `kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Required in `worker` and `all` modes. |
@@ -217,12 +228,57 @@ record is committed only after it applies successfully or its original key and
 value are durably copied to that topic with source topic, partition, offset, and
 error headers.
 
-## Built-in merge profile
+## Lua merge programs
 
-The stock binary registers `json-merge-patch@1` for `application/json`
-documents. Both the current document and incoming patch must be JSON objects.
-Null fields delete existing values and nested objects merge recursively. The
-profile is deterministic and safe for Sink's CAS retry loop.
+Each write request declares each unique Lua source chunk once. Merge operations
+reference it by SHA-256 digest; a raw protocol client may also embed full source
+directly in an operation. The chunk must return exactly one function:
+
+```lua
+return function(current, incoming, context)
+    current = current or json.object()
+    current.stock = incoming.stock
+    current.last_found_at = context.observed_at
+    return current
+end
+```
+
+`current` is `nil` when `MISSING_DOCUMENT_MODE_CREATE` creates a missing record.
+`incoming` is the operation's incoming JSON object. `context.observed_at` is an
+RFC 3339 timestamp fixed across CAS retries of one execution. The returned value
+must be a JSON object. Both documents must use `application/json`; BSON merges
+are not supported.
+
+JSON null is represented by `json.null` instead of Lua `nil`, which would remove
+a table key. The bridge preserves empty input objects and arrays. Use
+`json.object()` or `json.array()` when creating an intentionally empty table in
+Lua; an untagged empty `{}` is encoded as an object. `json.is_null(value)` tests
+the null sentinel. Lua integers preserve signed 64-bit JSON integer values.
+
+Sink opens deterministic base, string, table, math, and UTF-8 functionality.
+Host I/O, operating-system, package loading, dynamic code loading, coroutines,
+debug APIs, output, random numbers, metatable mutation, and unbounded string
+repetition are unavailable. Each merge runs in a new VM. Only immutable
+compiled programs are shared through a bounded process-local LRU cache keyed by
+the computed SHA-256 digest; a supplied digest must match the source.
+
+Wall-clock, instruction, call-depth, VM-stack, source-size, and result-size
+limits protect the service. Call depth is fixed at 256 and VM stack slots at
+65,536; the other limits are configurable above. The embedded runtime does not
+provide a strict per-VM heap quota, so normal container or pod memory limits
+remain required.
+The Go client automatically deduplicates identical programs within a synchronous
+batch. Before publishing an asynchronous mutation, Sink expands the reference
+so every Kafka record contains the full program and remains independently
+replayable. This keeps Sink stateless with respect to customer rules. The source
+is sent once per request but necessarily travels with every durable Kafka
+mutation; transport-level compression can reduce its wire cost further.
+
+This contract replaces the former named merge-profile field. Before upgrading
+an existing asynchronous deployment, drain or dead-letter queued profile-based
+merge mutations, then deploy Lua-capable workers, servers, and clients as one
+coordinated protocol change. Old profile mutations do not contain Lua source and
+cannot be replayed by the new engine.
 
 ## Handling credentials
 

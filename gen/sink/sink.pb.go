@@ -644,8 +644,8 @@ func (x *OpaqueValue) GetData() []byte {
 }
 
 // Document contains a lossless, encoded user document. Sink passes documents
-// through unchanged for ordinary reads and puts. A merge profile selects a
-// codec only when it needs to inspect fields.
+// through unchanged for ordinary reads and puts. Lua merges currently inspect
+// application/json objects only.
 type Document struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ContentType   string                 `protobuf:"bytes,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
@@ -958,7 +958,10 @@ type WriteRequest struct {
 	CompletionMode CompletionMode         `protobuf:"varint,1,opt,name=completion_mode,json=completionMode,proto3,enum=sink.v1.CompletionMode" json:"completion_mode,omitempty"`
 	// Operations for the same address are executed in request order. Operations
 	// for different addresses may execute concurrently.
-	Operations    []*WriteOperation `protobuf:"bytes,2,rep,name=operations,proto3" json:"operations,omitempty"`
+	Operations []*WriteOperation `protobuf:"bytes,2,rep,name=operations,proto3" json:"operations,omitempty"`
+	// Programs can be declared once and referenced by digest from multiple merge
+	// operations, avoiding repeated Lua source bytes in a synchronous batch.
+	LuaPrograms   []*LuaProgram `protobuf:"bytes,3,rep,name=lua_programs,json=luaPrograms,proto3" json:"lua_programs,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1003,6 +1006,13 @@ func (x *WriteRequest) GetCompletionMode() CompletionMode {
 func (x *WriteRequest) GetOperations() []*WriteOperation {
 	if x != nil {
 		return x.Operations
+	}
+	return nil
+}
+
+func (x *WriteRequest) GetLuaPrograms() []*LuaProgram {
+	if x != nil {
+		return x.LuaPrograms
 	}
 	return nil
 }
@@ -1150,14 +1160,14 @@ func (x *PutOperation) GetMode() WriteMode {
 	return WriteMode_WRITE_MODE_UNSPECIFIED
 }
 
-// MergeOperation carries the original merge intent. In asynchronous mode this
-// message is queued as-is so the worker merges against the document version it
-// reads at execution time.
+// MergeOperation carries the original merge intent. In asynchronous mode Sink
+// expands any program reference before queueing the operation so the worker can
+// merge against the document version it reads at execution time.
 type MergeOperation struct {
 	state               protoimpl.MessageState `protogen:"open.v1"`
 	IncomingDocument    *Document              `protobuf:"bytes,1,opt,name=incoming_document,json=incomingDocument,proto3" json:"incoming_document,omitempty"`
-	Profile             *MergeProfile          `protobuf:"bytes,2,opt,name=profile,proto3" json:"profile,omitempty"`
 	MissingDocumentMode MissingDocumentMode    `protobuf:"varint,3,opt,name=missing_document_mode,json=missingDocumentMode,proto3,enum=sink.v1.MissingDocumentMode" json:"missing_document_mode,omitempty"`
+	LuaProgram          *LuaProgram            `protobuf:"bytes,4,opt,name=lua_program,json=luaProgram,proto3" json:"lua_program,omitempty"`
 	unknownFields       protoimpl.UnknownFields
 	sizeCache           protoimpl.SizeCache
 }
@@ -1199,13 +1209,6 @@ func (x *MergeOperation) GetIncomingDocument() *Document {
 	return nil
 }
 
-func (x *MergeOperation) GetProfile() *MergeProfile {
-	if x != nil {
-		return x.Profile
-	}
-	return nil
-}
-
 func (x *MergeOperation) GetMissingDocumentMode() MissingDocumentMode {
 	if x != nil {
 		return x.MissingDocumentMode
@@ -1213,28 +1216,41 @@ func (x *MergeOperation) GetMissingDocumentMode() MissingDocumentMode {
 	return MissingDocumentMode_MISSING_DOCUMENT_MODE_UNSPECIFIED
 }
 
-type MergeProfile struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Version       uint64                 `protobuf:"varint,2,opt,name=version,proto3" json:"version,omitempty"`
+func (x *MergeOperation) GetLuaProgram() *LuaProgram {
+	if x != nil {
+		return x.LuaProgram
+	}
+	return nil
+}
+
+// LuaProgram is self-contained so merge rules can be versioned and deployed
+// with the calling application instead of being registered in Sink.
+type LuaProgram struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Source may be omitted from a merge operation when the matching full program
+	// is present in WriteRequest.lua_programs. Workers always receive full source.
+	Source []byte `protobuf:"bytes,1,opt,name=source,proto3" json:"source,omitempty"`
+	// Optional SHA-256 digest. Sink verifies it when present and always uses the
+	// computed digest as the compiled-program cache key.
+	Sha256        []byte `protobuf:"bytes,2,opt,name=sha256,proto3" json:"sha256,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
-func (x *MergeProfile) Reset() {
-	*x = MergeProfile{}
+func (x *LuaProgram) Reset() {
+	*x = LuaProgram{}
 	mi := &file_sink_sink_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
 
-func (x *MergeProfile) String() string {
+func (x *LuaProgram) String() string {
 	return protoimpl.X.MessageStringOf(x)
 }
 
-func (*MergeProfile) ProtoMessage() {}
+func (*LuaProgram) ProtoMessage() {}
 
-func (x *MergeProfile) ProtoReflect() protoreflect.Message {
+func (x *LuaProgram) ProtoReflect() protoreflect.Message {
 	mi := &file_sink_sink_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
@@ -1246,23 +1262,23 @@ func (x *MergeProfile) ProtoReflect() protoreflect.Message {
 	return mi.MessageOf(x)
 }
 
-// Deprecated: Use MergeProfile.ProtoReflect.Descriptor instead.
-func (*MergeProfile) Descriptor() ([]byte, []int) {
+// Deprecated: Use LuaProgram.ProtoReflect.Descriptor instead.
+func (*LuaProgram) Descriptor() ([]byte, []int) {
 	return file_sink_sink_proto_rawDescGZIP(), []int{13}
 }
 
-func (x *MergeProfile) GetName() string {
+func (x *LuaProgram) GetSource() []byte {
 	if x != nil {
-		return x.Name
+		return x.Source
 	}
-	return ""
+	return nil
 }
 
-func (x *MergeProfile) GetVersion() uint64 {
+func (x *LuaProgram) GetSha256() []byte {
 	if x != nil {
-		return x.Version
+		return x.Sha256
 	}
-	return 0
+	return nil
 }
 
 type WriteResponse struct {
@@ -1678,12 +1694,13 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x06status\x18\x02 \x01(\x0e2\x13.sink.v1.ReadStatusR\x06status\x12-\n" +
 	"\bdocument\x18\x03 \x01(\v2\x11.sink.v1.DocumentR\bdocument\x122\n" +
 	"\brevision\x18\x04 \x01(\v2\x16.sink.v1.RevisionTokenR\brevision\x12*\n" +
-	"\afailure\x18\x05 \x01(\v2\x10.sink.v1.FailureR\afailure\"\x89\x01\n" +
+	"\afailure\x18\x05 \x01(\v2\x10.sink.v1.FailureR\afailure\"\xc1\x01\n" +
 	"\fWriteRequest\x12@\n" +
 	"\x0fcompletion_mode\x18\x01 \x01(\x0e2\x17.sink.v1.CompletionModeR\x0ecompletionMode\x127\n" +
 	"\n" +
 	"operations\x18\x02 \x03(\v2\x17.sink.v1.WriteOperationR\n" +
-	"operations\"\xa8\x01\n" +
+	"operations\x126\n" +
+	"\flua_programs\x18\x03 \x03(\v2\x13.sink.v1.LuaProgramR\vluaPrograms\"\xa8\x01\n" +
 	"\x0eWriteOperation\x120\n" +
 	"\aaddress\x18\x01 \x01(\v2\x16.sink.v1.RecordAddressR\aaddress\x12)\n" +
 	"\x03put\x18\x02 \x01(\v2\x15.sink.v1.PutOperationH\x00R\x03put\x12/\n" +
@@ -1691,14 +1708,16 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x06action\"e\n" +
 	"\fPutOperation\x12-\n" +
 	"\bdocument\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\bdocument\x12&\n" +
-	"\x04mode\x18\x02 \x01(\x0e2\x12.sink.v1.WriteModeR\x04mode\"\xd3\x01\n" +
+	"\x04mode\x18\x02 \x01(\x0e2\x12.sink.v1.WriteModeR\x04mode\"\xe7\x01\n" +
 	"\x0eMergeOperation\x12>\n" +
-	"\x11incoming_document\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\x10incomingDocument\x12/\n" +
-	"\aprofile\x18\x02 \x01(\v2\x15.sink.v1.MergeProfileR\aprofile\x12P\n" +
-	"\x15missing_document_mode\x18\x03 \x01(\x0e2\x1c.sink.v1.MissingDocumentModeR\x13missingDocumentMode\"<\n" +
-	"\fMergeProfile\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\aversion\x18\x02 \x01(\x04R\aversion\"?\n" +
+	"\x11incoming_document\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\x10incomingDocument\x12P\n" +
+	"\x15missing_document_mode\x18\x03 \x01(\x0e2\x1c.sink.v1.MissingDocumentModeR\x13missingDocumentMode\x124\n" +
+	"\vlua_program\x18\x04 \x01(\v2\x13.sink.v1.LuaProgramR\n" +
+	"luaProgramJ\x04\b\x02\x10\x03R\aprofile\"<\n" +
+	"\n" +
+	"LuaProgram\x12\x16\n" +
+	"\x06source\x18\x01 \x01(\fR\x06source\x12\x16\n" +
+	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"?\n" +
 	"\rWriteResponse\x12.\n" +
 	"\aresults\x18\x01 \x03(\v2\x14.sink.v1.WriteResultR\aresults\"\xc4\x01\n" +
 	"\vWriteResult\x12'\n" +
@@ -1803,7 +1822,7 @@ var file_sink_sink_proto_goTypes = []any{
 	(*WriteOperation)(nil),   // 17: sink.v1.WriteOperation
 	(*PutOperation)(nil),     // 18: sink.v1.PutOperation
 	(*MergeOperation)(nil),   // 19: sink.v1.MergeOperation
-	(*MergeProfile)(nil),     // 20: sink.v1.MergeProfile
+	(*LuaProgram)(nil),       // 20: sink.v1.LuaProgram
 	(*WriteResponse)(nil),    // 21: sink.v1.WriteResponse
 	(*WriteResult)(nil),      // 22: sink.v1.WriteResult
 	(*DeleteRequest)(nil),    // 23: sink.v1.DeleteRequest
@@ -1824,36 +1843,37 @@ var file_sink_sink_proto_depIdxs = []int32{
 	27, // 8: sink.v1.ReadResult.failure:type_name -> sink.v1.Failure
 	0,  // 9: sink.v1.WriteRequest.completion_mode:type_name -> sink.v1.CompletionMode
 	17, // 10: sink.v1.WriteRequest.operations:type_name -> sink.v1.WriteOperation
-	7,  // 11: sink.v1.WriteOperation.address:type_name -> sink.v1.RecordAddress
-	18, // 12: sink.v1.WriteOperation.put:type_name -> sink.v1.PutOperation
-	19, // 13: sink.v1.WriteOperation.merge:type_name -> sink.v1.MergeOperation
-	10, // 14: sink.v1.PutOperation.document:type_name -> sink.v1.Document
-	2,  // 15: sink.v1.PutOperation.mode:type_name -> sink.v1.WriteMode
-	10, // 16: sink.v1.MergeOperation.incoming_document:type_name -> sink.v1.Document
-	20, // 17: sink.v1.MergeOperation.profile:type_name -> sink.v1.MergeProfile
+	20, // 11: sink.v1.WriteRequest.lua_programs:type_name -> sink.v1.LuaProgram
+	7,  // 12: sink.v1.WriteOperation.address:type_name -> sink.v1.RecordAddress
+	18, // 13: sink.v1.WriteOperation.put:type_name -> sink.v1.PutOperation
+	19, // 14: sink.v1.WriteOperation.merge:type_name -> sink.v1.MergeOperation
+	10, // 15: sink.v1.PutOperation.document:type_name -> sink.v1.Document
+	2,  // 16: sink.v1.PutOperation.mode:type_name -> sink.v1.WriteMode
+	10, // 17: sink.v1.MergeOperation.incoming_document:type_name -> sink.v1.Document
 	3,  // 18: sink.v1.MergeOperation.missing_document_mode:type_name -> sink.v1.MissingDocumentMode
-	22, // 19: sink.v1.WriteResponse.results:type_name -> sink.v1.WriteResult
-	4,  // 20: sink.v1.WriteResult.status:type_name -> sink.v1.WriteStatus
-	11, // 21: sink.v1.WriteResult.revision:type_name -> sink.v1.RevisionToken
-	27, // 22: sink.v1.WriteResult.failure:type_name -> sink.v1.Failure
-	0,  // 23: sink.v1.DeleteRequest.completion_mode:type_name -> sink.v1.CompletionMode
-	24, // 24: sink.v1.DeleteRequest.operations:type_name -> sink.v1.DeleteOperation
-	7,  // 25: sink.v1.DeleteOperation.address:type_name -> sink.v1.RecordAddress
-	26, // 26: sink.v1.DeleteResponse.results:type_name -> sink.v1.DeleteResult
-	5,  // 27: sink.v1.DeleteResult.status:type_name -> sink.v1.DeleteStatus
-	27, // 28: sink.v1.DeleteResult.failure:type_name -> sink.v1.Failure
-	6,  // 29: sink.v1.Failure.code:type_name -> sink.v1.FailureCode
-	12, // 30: sink.v1.Sink.Read:input_type -> sink.v1.ReadRequest
-	16, // 31: sink.v1.Sink.Write:input_type -> sink.v1.WriteRequest
-	23, // 32: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
-	14, // 33: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
-	21, // 34: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
-	25, // 35: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
-	33, // [33:36] is the sub-list for method output_type
-	30, // [30:33] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	20, // 19: sink.v1.MergeOperation.lua_program:type_name -> sink.v1.LuaProgram
+	22, // 20: sink.v1.WriteResponse.results:type_name -> sink.v1.WriteResult
+	4,  // 21: sink.v1.WriteResult.status:type_name -> sink.v1.WriteStatus
+	11, // 22: sink.v1.WriteResult.revision:type_name -> sink.v1.RevisionToken
+	27, // 23: sink.v1.WriteResult.failure:type_name -> sink.v1.Failure
+	0,  // 24: sink.v1.DeleteRequest.completion_mode:type_name -> sink.v1.CompletionMode
+	24, // 25: sink.v1.DeleteRequest.operations:type_name -> sink.v1.DeleteOperation
+	7,  // 26: sink.v1.DeleteOperation.address:type_name -> sink.v1.RecordAddress
+	26, // 27: sink.v1.DeleteResponse.results:type_name -> sink.v1.DeleteResult
+	5,  // 28: sink.v1.DeleteResult.status:type_name -> sink.v1.DeleteStatus
+	27, // 29: sink.v1.DeleteResult.failure:type_name -> sink.v1.Failure
+	6,  // 30: sink.v1.Failure.code:type_name -> sink.v1.FailureCode
+	12, // 31: sink.v1.Sink.Read:input_type -> sink.v1.ReadRequest
+	16, // 32: sink.v1.Sink.Write:input_type -> sink.v1.WriteRequest
+	23, // 33: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
+	14, // 34: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
+	21, // 35: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
+	25, // 36: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
+	34, // [34:37] is the sub-list for method output_type
+	31, // [31:34] is the sub-list for method input_type
+	31, // [31:31] is the sub-list for extension type_name
+	31, // [31:31] is the sub-list for extension extendee
+	0,  // [0:31] is the sub-list for field type_name
 }
 
 func init() { file_sink_sink_proto_init() }

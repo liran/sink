@@ -3,6 +3,7 @@ module github.com/liran/sink
 go 1.27.0
 
 require (
+	github.com/iceisfun/golua v1.1.1
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10
 	github.com/prometheus/client_golang v1.23.2
 	github.com/twmb/franz-go v1.21.6

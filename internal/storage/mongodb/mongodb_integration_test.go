@@ -4,16 +4,12 @@ package mongodb_test
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"strconv"
 	"sync"
 	"testing"
 	"time"
 
-	sink "github.com/liran/sink/gen/sink"
-	"github.com/liran/sink/internal/merge"
-	"github.com/liran/sink/internal/service"
 	"github.com/liran/sink/internal/storage"
 	"github.com/liran/sink/internal/storage/mongodb"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -265,148 +261,12 @@ func TestMongoDBConcurrentUpsertsDoNotSurfaceDuplicateKey(t *testing.T) {
 	}
 }
 
-type counterMerger struct{}
-
-func (counterMerger) Merge(_ context.Context, req merge.Request) (merge.Result, error) {
-	current := int64(0)
-	if req.Current != nil {
-		value := bson.Raw(req.Current.Data).Lookup("counter")
-		parsed, ok := value.AsInt64OK()
-		if !ok {
-			var empty merge.Result
-			return empty, fmt.Errorf("current counter is not an integer")
-		}
-		current = parsed
-	}
-	deltaValue := bson.Raw(req.Incoming.Data).Lookup("delta")
-	delta, ok := deltaValue.AsInt64OK()
-	if !ok {
-		var empty merge.Result
-		return empty, fmt.Errorf("delta is not an integer")
-	}
-	value := bson.D{{Key: "counter", Value: current + delta}}
-	document, err := bson.Marshal(value)
-	if err != nil {
-		var empty merge.Result
-		return empty, err
-	}
-	merged := storage.Document{ContentType: mongodb.ContentTypeBSON, Data: document}
-	result := merge.Result{Document: merged}
-	return result, nil
-}
-
-func TestMongoDBServiceConcurrentMergeIsAtomic(t *testing.T) {
-	fixture := newIntegrationFixture(t)
-	registry := merge.NewRegistry()
-	profile := merge.Profile{Name: "counter", Version: 1}
-	merger := counterMerger{}
-	if err := registry.Register(profile, merger); err != nil {
-		t.Fatalf("Register() error = %v", err)
-	}
-	serverOptions := service.Options{
-		Storage:          fixture.store,
-		Merges:           registry,
-		MaxMergeAttempts: 200,
-	}
-	server, err := service.New(serverOptions)
-	if err != nil {
-		t.Fatalf("service.New() error = %v", err)
-	}
-	address := fixture.sinkAddress("counter")
-	initialValue := bson.D{{Key: "counter", Value: int64(0)}}
-	initial := sinkDocument(t, initialValue)
-	put := &sink.PutOperation{Document: initial, Mode: sink.WriteMode_WRITE_MODE_CREATE}
-	putOperation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
-	putRequest := &sink.WriteRequest{
-		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
-		Operations:     []*sink.WriteOperation{putOperation},
-	}
-	putResponse, err := server.Write(context.Background(), putRequest)
-	if err != nil {
-		t.Fatalf("Write(initial counter) error = %v", err)
-	}
-	if putResponse.Results[0].Status != sink.WriteStatus_WRITE_STATUS_APPLIED {
-		t.Fatalf("Write(initial counter) result = %#v", putResponse.Results[0])
-	}
-
-	const mutations = 50
-	incomingValue := bson.D{{Key: "delta", Value: int64(1)}}
-	incoming := sinkDocument(t, incomingValue)
-	statuses := make(chan sink.WriteStatus, mutations)
-	errorsChannel := make(chan error, mutations)
-	var workers sync.WaitGroup
-	workers.Add(mutations)
-	for range mutations {
-		go func() {
-			defer workers.Done()
-			mergeProfile := &sink.MergeProfile{Name: "counter", Version: 1}
-			mergeOperation := &sink.MergeOperation{
-				IncomingDocument:    incoming,
-				Profile:             mergeProfile,
-				MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
-			}
-			operation := &sink.WriteOperation{
-				Address: address,
-				Action:  &sink.WriteOperation_Merge{Merge: mergeOperation},
-			}
-			request := &sink.WriteRequest{
-				CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
-				Operations:     []*sink.WriteOperation{operation},
-			}
-			response, writeErr := server.Write(context.Background(), request)
-			if writeErr != nil {
-				errorsChannel <- writeErr
-				return
-			}
-			statuses <- response.Results[0].Status
-		}()
-	}
-	workers.Wait()
-	close(statuses)
-	close(errorsChannel)
-	for writeErr := range errorsChannel {
-		t.Errorf("Write(concurrent merge) error = %v", writeErr)
-	}
-	for status := range statuses {
-		if status != sink.WriteStatus_WRITE_STATUS_APPLIED {
-			t.Errorf("Write(concurrent merge) status = %v", status)
-		}
-	}
-	if t.Failed() {
-		return
-	}
-
-	readRequest := storage.ReadRequest{
-		Operations: []storage.ReadOperation{{Address: fixture.address("counter")}},
-	}
-	read, err := fixture.store.Read(context.Background(), readRequest)
-	if err != nil {
-		t.Fatalf("Read(final counter) error = %v", err)
-	}
-	counterValue := bson.Raw(read.Results[0].Document.Data).Lookup("counter")
-	counter, ok := counterValue.AsInt64OK()
-	if !ok || counter != mutations {
-		t.Fatalf("final counter = %d, want %d", counter, mutations)
-	}
-}
-
 func (f *integrationFixture) address(key string) storage.Address {
 	address := storage.Address{
 		Store:     "primary",
 		Namespace: f.database,
 		Dataset:   "documents",
 		Key:       storage.Key{Type: "string", Data: []byte(key)},
-	}
-	return address
-}
-
-func (f *integrationFixture) sinkAddress(key string) *sink.RecordAddress {
-	recordKey := &sink.RecordKey{Kind: &sink.RecordKey_StringValue{StringValue: key}}
-	address := &sink.RecordAddress{
-		Store:     "primary",
-		Namespace: f.database,
-		Dataset:   "documents",
-		Key:       recordKey,
 	}
 	return address
 }
@@ -418,15 +278,5 @@ func bsonStorageDocument(t *testing.T, value bson.D) storage.Document {
 		t.Fatalf("bson.Marshal() error = %v", err)
 	}
 	document := storage.Document{ContentType: mongodb.ContentTypeBSON, Data: encoded}
-	return document
-}
-
-func sinkDocument(t *testing.T, value bson.D) *sink.Document {
-	t.Helper()
-	encoded, err := bson.Marshal(value)
-	if err != nil {
-		t.Fatalf("bson.Marshal() error = %v", err)
-	}
-	document := &sink.Document{ContentType: mongodb.ContentTypeBSON, Data: encoded}
 	return document
 }

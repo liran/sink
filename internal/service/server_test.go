@@ -2,8 +2,9 @@ package service_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/json"
 	"errors"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,6 +15,8 @@ import (
 	"github.com/liran/sink/internal/service"
 	"github.com/liran/sink/internal/storage"
 	"github.com/liran/sink/internal/storage/memory"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type unavailableStorage struct{}
@@ -46,29 +49,12 @@ func (unavailableStorage) Delete(_ context.Context, req storage.DeleteRequest) (
 
 const testMergeAttempts = 1000
 
-type incrementMerger struct{}
-
-func (incrementMerger) Merge(_ context.Context, req merge.Request) (merge.Result, error) {
-	var emptyResult merge.Result
-	current := 0
-	if req.Current != nil {
-		parsed, err := strconv.Atoi(string(req.Current.Data))
-		if err != nil {
-			return emptyResult, err
-		}
-		current = parsed
-	}
-	increment, err := strconv.Atoi(string(req.Incoming.Data))
-	if err != nil {
-		return emptyResult, err
-	}
-	document := storage.Document{
-		ContentType: "text/plain",
-		Data:        []byte(strconv.Itoa(current + increment)),
-	}
-	result := merge.Result{Document: document}
-	return result, nil
-}
+const incrementLua = `
+return function(current, incoming, context)
+    current = current or {value = 0}
+    current.value = current.value + incoming.value
+    return current
+end`
 
 type recordingPublisher struct {
 	mu        sync.Mutex
@@ -99,12 +85,19 @@ func (p *recordingPublisher) mutationCount() int {
 	return count
 }
 
+func (p *recordingPublisher) mutation(index int) queue.Mutation {
+	p.mu.Lock()
+	mutation := p.mutations[index]
+	p.mu.Unlock()
+	return mutation
+}
+
 func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()
 	seed := memory.SeedRequest{
 		Address:  storageAddress("counter"),
-		Document: storageDocument("0"),
+		Document: storageJSONDocument(`{"value":0}`),
 	}
 	store.Seed(seed)
 	server := newTestServer(t, store, nil)
@@ -136,15 +129,18 @@ func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	got, err := strconv.Atoi(string(readResponse.GetResults()[0].GetDocument().GetData()))
+	var final struct {
+		Value int `json:"value"`
+	}
+	err = json.Unmarshal(readResponse.GetResults()[0].GetDocument().GetData(), &final)
 	if err != nil {
-		t.Fatalf("parse final counter: %v", err)
+		t.Fatalf("decode final counter: %v", err)
 	}
-	if got != int(applied.Load()) {
-		t.Fatalf("final counter = %d, successful writes = %d", got, applied.Load())
+	if final.Value != int(applied.Load()) {
+		t.Fatalf("final counter = %d, successful writes = %d", final.Value, applied.Load())
 	}
-	if got != writers {
-		t.Fatalf("final counter = %d, want %d", got, writers)
+	if final.Value != writers {
+		t.Fatalf("final counter = %d, want %d", final.Value, writers)
 	}
 }
 
@@ -209,6 +205,11 @@ func TestAsyncWritePublishesOriginalMergeIntent(t *testing.T) {
 	if publisher.mutationCount() != 1 {
 		t.Fatalf("published mutations = %d, want 1", publisher.mutationCount())
 	}
+	published := publisher.mutation(0)
+	publishedProgram := published.Write.GetMerge().GetLuaProgram()
+	if string(publishedProgram.GetSource()) != incrementLua || len(publishedProgram.GetSha256()) != sha256.Size {
+		t.Fatalf("published Lua program = %+v", publishedProgram)
+	}
 
 	readResponse, err := server.Read(ctx, readRequest("async"))
 	if err != nil {
@@ -217,6 +218,90 @@ func TestAsyncWritePublishesOriginalMergeIntent(t *testing.T) {
 	if readResponse.GetResults()[0].GetStatus() != sink.ReadStatus_READ_STATUS_NOT_FOUND {
 		t.Fatalf("async write changed storage before worker execution")
 	}
+}
+
+func TestLuaMergeReturnsSpecificFailureCodes(t *testing.T) {
+	tests := []struct {
+		name       string
+		source     string
+		seed       storage.Document
+		failure    sink.FailureCode
+		seedRecord bool
+	}{
+		{
+			name:    "invalid program",
+			source:  "return @",
+			failure: sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT,
+		},
+		{
+			name:       "runtime error",
+			source:     `return function(current, incoming, context) error("bad rule") end`,
+			seed:       storageJSONDocument(`{"value":0}`),
+			failure:    sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT,
+			seedRecord: true,
+		},
+		{
+			name:       "call depth limit",
+			source:     `return function(current, incoming, context) local function recurse() return 1 + recurse() end return recurse() end`,
+			seed:       storageJSONDocument(`{"value":0}`),
+			failure:    sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED,
+			seedRecord: true,
+		},
+		{
+			name:       "invalid stored document",
+			source:     `return function(current, incoming, context) return incoming end`,
+			seed:       storageDocument("bad"),
+			failure:    sink.FailureCode_FAILURE_CODE_INTERNAL,
+			seedRecord: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			store := memory.New()
+			if test.seedRecord {
+				seed := memory.SeedRequest{Address: storageAddress(test.name), Document: test.seed}
+				store.Seed(seed)
+			}
+			server := newTestServer(t, store, nil)
+			request := mergeWriteRequestWithSource(test.name, "1", test.source)
+			response, err := server.Write(t.Context(), request)
+			if err != nil {
+				t.Fatalf("Write() error = %v", err)
+			}
+			result := response.GetResults()[0]
+			if result.GetStatus() != sink.WriteStatus_WRITE_STATUS_FAILED || result.GetFailure().GetCode() != test.failure {
+				t.Fatalf("Write() result = %+v", result)
+			}
+		})
+	}
+}
+
+func TestWriteRejectsInvalidLuaProgramDeclarations(t *testing.T) {
+	store := memory.New()
+	server := newTestServer(t, store, nil)
+
+	t.Run("undeclared reference", func(t *testing.T) {
+		request := mergeWriteRequest("undeclared", "1")
+		request.LuaPrograms = nil
+		response, err := server.Write(t.Context(), request)
+		if err != nil {
+			t.Fatalf("Write() error = %v", err)
+		}
+		failure := response.GetResults()[0].GetFailure()
+		if failure.GetCode() != sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT {
+			t.Fatalf("Write() failure = %+v", failure)
+		}
+	})
+
+	t.Run("mismatched declaration digest", func(t *testing.T) {
+		request := mergeWriteRequest("mismatch", "1")
+		request.LuaPrograms[0].Sha256[0]++
+		_, err := server.Write(t.Context(), request)
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("Write() code = %s, want InvalidArgument", status.Code(err))
+		}
+	})
 }
 
 func TestDeleteIsHardAndMissingDeleteSucceeds(t *testing.T) {
@@ -259,15 +344,14 @@ func TestDeleteIsHardAndMissingDeleteSucceeds(t *testing.T) {
 
 func newTestServer(t *testing.T, store storage.Storage, publisher queue.Publisher) *service.Server {
 	t.Helper()
-	registry := merge.NewRegistry()
-	profile := merge.Profile{Name: "increment", Version: 1}
-	merger := incrementMerger{}
-	if err := registry.Register(profile, merger); err != nil {
-		t.Fatalf("Register() error = %v", err)
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("NewLuaEngine() error = %v", err)
 	}
 	options := service.Options{
 		Storage:          store,
-		Merges:           registry,
+		Lua:              luaEngine,
 		Publisher:        publisher,
 		MaxMergeAttempts: testMergeAttempts,
 	}
@@ -279,11 +363,17 @@ func newTestServer(t *testing.T, store storage.Storage, publisher queue.Publishe
 }
 
 func mergeWriteRequest(key string, increment string) *sink.WriteRequest {
-	profile := &sink.MergeProfile{Name: "increment", Version: 1}
-	incoming := protoDocument(increment)
+	return mergeWriteRequestWithSource(key, increment, incrementLua)
+}
+
+func mergeWriteRequestWithSource(key string, increment string, source string) *sink.WriteRequest {
+	incoming := &sink.Document{ContentType: "application/json", Data: []byte(`{"value":` + increment + `}`)}
+	digest := sha256.Sum256([]byte(source))
+	programReference := &sink.LuaProgram{Sha256: digest[:]}
+	program := &sink.LuaProgram{Source: []byte(source), Sha256: digest[:]}
 	mergeOperation := &sink.MergeOperation{
 		IncomingDocument:    incoming,
-		Profile:             profile,
+		LuaProgram:          programReference,
 		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
 	}
 	operation := &sink.WriteOperation{
@@ -293,6 +383,7 @@ func mergeWriteRequest(key string, increment string) *sink.WriteRequest {
 	request := &sink.WriteRequest{
 		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
 		Operations:     []*sink.WriteOperation{operation},
+		LuaPrograms:    []*sink.LuaProgram{program},
 	}
 	return request
 }
@@ -349,10 +440,15 @@ func storageAddress(key string) storage.Address {
 	return address
 }
 
-func storageDocument(value string) storage.Document {
+func storageJSONDocument(value string) storage.Document {
 	document := storage.Document{
-		ContentType: "text/plain",
+		ContentType: "application/json",
 		Data:        []byte(value),
 	}
+	return document
+}
+
+func storageDocument(value string) storage.Document {
+	document := storage.Document{ContentType: "text/plain", Data: []byte(value)}
 	return document
 }

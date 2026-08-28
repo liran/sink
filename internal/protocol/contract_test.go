@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"crypto/sha256"
 	"slices"
 	"testing"
 
@@ -50,13 +51,15 @@ func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 		Action:  &sink.WriteOperation_Put{Put: put},
 	}
 
-	profile := &sink.MergeProfile{
-		Name:    "merge-product",
-		Version: 1,
+	source := []byte("return function(current, incoming, context) return incoming end")
+	digest := sha256.Sum256(source)
+	programReference := &sink.LuaProgram{
+		Sha256: digest[:],
 	}
+	fullProgram := &sink.LuaProgram{Source: source, Sha256: digest[:]}
 	merge := &sink.MergeOperation{
 		IncomingDocument:    document,
-		Profile:             profile,
+		LuaProgram:          programReference,
 		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
 	}
 	mergeOperation := &sink.WriteOperation{
@@ -67,6 +70,7 @@ func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 	request := &sink.WriteRequest{
 		CompletionMode: sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED,
 		Operations:     []*sink.WriteOperation{putOperation, mergeOperation},
+		LuaPrograms:    []*sink.LuaProgram{fullProgram},
 	}
 
 	encoded, err := request.MarshalVT()

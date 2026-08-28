@@ -19,6 +19,12 @@ storages:
 service:
   max_operations: 1000
   max_merge_attempts: 3
+  lua:
+    timeout_milliseconds: 100
+    max_source_bytes: 65536
+    max_result_bytes: 16777216
+    max_cached_programs: 256
+    max_instructions: 1000000
 
 kafka:
   brokers:

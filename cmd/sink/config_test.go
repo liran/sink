@@ -33,6 +33,11 @@ storages:
 	if loaded.maxOperations != 1000 || loaded.maxMergeAttempts != 3 || loaded.shutdownTimeout != 15*time.Second {
 		t.Fatalf("loadConfig() service defaults = %#v", loaded)
 	}
+	if loaded.luaOptions.Timeout != 100*time.Millisecond || loaded.luaOptions.MaxSourceBytes != 64<<10 ||
+		loaded.luaOptions.MaxResultBytes != 16<<20 || loaded.luaOptions.MaxCachedPrograms != 256 ||
+		loaded.luaOptions.MaxInstructions != 1_000_000 {
+		t.Fatalf("loadConfig() Lua defaults = %#v", loaded.luaOptions)
+	}
 	if loaded.grpcMaxReceiveBytes != 64<<20 || loaded.grpcMaxSendBytes != 64<<20 {
 		t.Fatalf("loadConfig() gRPC limits = %#v", loaded)
 	}
@@ -142,6 +147,12 @@ kafka:
 service:
   max_operations: 2000
   max_merge_attempts: 5
+  lua:
+    timeout_milliseconds: 250
+    max_source_bytes: 32768
+    max_result_bytes: 1048576
+    max_cached_programs: 128
+    max_instructions: 2000000
 shutdown_timeout_seconds: 30
 `)
 	loaded, err := loadConfig(path)
@@ -156,6 +167,28 @@ shutdown_timeout_seconds: 30
 	}
 	if loaded.maxOperations != 2000 || loaded.maxMergeAttempts != 5 || loaded.shutdownTimeout != 30*time.Second {
 		t.Fatalf("loadConfig() service settings = %#v", loaded)
+	}
+	if loaded.luaOptions.Timeout != 250*time.Millisecond || loaded.luaOptions.MaxSourceBytes != 32768 ||
+		loaded.luaOptions.MaxResultBytes != 1048576 || loaded.luaOptions.MaxCachedPrograms != 128 ||
+		loaded.luaOptions.MaxInstructions != 2_000_000 {
+		t.Fatalf("loadConfig() Lua settings = %#v", loaded.luaOptions)
+	}
+}
+
+func TestLoadConfigRejectsNonPositiveLuaLimits(t *testing.T) {
+	path := writeConfig(t, `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+service:
+  lua:
+    max_source_bytes: 0
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "service.lua.max_source_bytes") {
+		t.Fatalf("loadConfig() error = %v", err)
 	}
 }
 
