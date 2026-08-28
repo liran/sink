@@ -7,10 +7,17 @@ import (
 var configEnvironment = []string{
 	"SINK_MODE",
 	"SINK_GRPC_ADDRESS",
+	"SINK_STORAGE_DRIVER",
 	"SINK_MONGODB_URI",
 	"SINK_MONGODB_STORE",
 	"SINK_MONGODB_HIDDEN_FIELD",
 	"SINK_MONGODB_BINDINGS",
+	"SINK_SEARCH_ENDPOINTS",
+	"SINK_SEARCH_STORE",
+	"SINK_SEARCH_BINDINGS",
+	"SINK_SEARCH_USERNAME",
+	"SINK_SEARCH_PASSWORD",
+	"SINK_SEARCH_API_KEY",
 	"SINK_MAX_OPERATIONS",
 	"SINK_MAX_MERGE_ATTEMPTS",
 	"SINK_KAFKA_BROKERS",
@@ -27,11 +34,57 @@ func TestLoadConfigDefaultsToSynchronousServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.mode != modeServer || loaded.grpcAddress != ":8080" || loaded.mongoStore != "primary" {
+	if loaded.mode != modeServer || loaded.grpcAddress != ":8080" || loaded.storageDriver != driverMongoDB || loaded.mongoStore != "primary" {
 		t.Fatalf("loadConfig() = %#v", loaded)
 	}
 	if len(loaded.kafkaBrokers) != 0 || loaded.kafkaTopic != "" {
 		t.Fatalf("loadConfig() Kafka configuration = %#v", loaded)
+	}
+}
+
+func TestLoadConfigElasticsearchStorage(t *testing.T) {
+	resetConfigEnvironment(t)
+	t.Setenv("SINK_STORAGE_DRIVER", "elasticsearch")
+	t.Setenv("SINK_SEARCH_ENDPOINTS", "http://search-1:9200, http://search-2:9200")
+	t.Setenv("SINK_SEARCH_API_KEY", "api-key")
+	t.Setenv("SINK_SEARCH_BINDINGS", `[{"namespace":"logical","dataset":"records","index":"legacy-records"}]`)
+	loaded, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if loaded.storageDriver != driverElasticsearch || len(loaded.searchEndpoints) != 2 || loaded.searchAPIKey != "api-key" {
+		t.Fatalf("loadConfig() = %#v", loaded)
+	}
+	if len(loaded.searchBindings) != 1 || loaded.searchStore != "primary" {
+		t.Fatalf("loadConfig() search bindings = %#v", loaded.searchBindings)
+	}
+}
+
+func TestLoadConfigOpenSearchBasicAuthentication(t *testing.T) {
+	resetConfigEnvironment(t)
+	t.Setenv("SINK_STORAGE_DRIVER", "opensearch")
+	t.Setenv("SINK_SEARCH_ENDPOINTS", "https://search:9200")
+	t.Setenv("SINK_SEARCH_USERNAME", "sink")
+	t.Setenv("SINK_SEARCH_PASSWORD", "password")
+	loaded, err := loadConfig()
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if loaded.storageDriver != driverOpenSearch || loaded.searchUsername != "sink" || loaded.searchPassword != "password" {
+		t.Fatalf("loadConfig() = %#v", loaded)
+	}
+}
+
+func TestLoadConfigRejectsConflictingSearchAuthentication(t *testing.T) {
+	resetConfigEnvironment(t)
+	t.Setenv("SINK_STORAGE_DRIVER", "elasticsearch")
+	t.Setenv("SINK_SEARCH_ENDPOINTS", "http://search:9200")
+	t.Setenv("SINK_SEARCH_USERNAME", "sink")
+	t.Setenv("SINK_SEARCH_PASSWORD", "password")
+	t.Setenv("SINK_SEARCH_API_KEY", "api-key")
+	_, err := loadConfig()
+	if err == nil {
+		t.Fatal("loadConfig() error = nil")
 	}
 }
 
