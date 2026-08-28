@@ -85,6 +85,23 @@ Docker, runs the storage and concurrent-RMW integration tests, and stops the
 container. The Kafka path is tested with franz-go's in-process Kafka broker in
 the normal test suite.
 
+## Docker Compose quickstart
+
+Start a complete local stack and run the end-to-end example with one command:
+
+```shell
+make quickstart
+```
+
+The quickstart builds Sink locally, starts a single-node MongoDB ReplicaSet and
+Apache Kafka in KRaft mode, creates the asynchronous mutation topic, then tests
+batch synchronous writes and reads, asynchronous delivery, and hard deletes
+through the public gRPC API. The stack remains running for further testing at
+`127.0.0.1:8080`; use `make quickstart-down` to stop it.
+
+See [`examples/quickstart`](examples/quickstart) for the exposed dependency
+ports, direct Docker Compose commands, and reset instructions.
+
 ## Container
 
 Published releases build multi-platform images for `linux/amd64` and

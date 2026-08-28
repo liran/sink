@@ -1,4 +1,4 @@
-.PHONY: proto build test test-unit test-integration lint clean
+.PHONY: proto build test test-unit test-integration lint quickstart quickstart-down clean
 
 PROTO_DIR := proto
 GEN_DIR := gen
@@ -22,6 +22,12 @@ test-unit:
 
 test-integration:
 	bash scripts/test-mongodb-integration.sh
+
+quickstart:
+	bash examples/quickstart/run.sh
+
+quickstart-down:
+	docker compose --file examples/quickstart/compose.yaml down
 
 lint:
 	go vet ./...

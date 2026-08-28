@@ -75,3 +75,21 @@ jobs:
           build-args: VERSION=ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  quickstart:
+    name: Docker Compose quickstart
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run end-to-end example
+        run: bash examples/quickstart/run.sh
+
+      - name: Print service logs after failure
+        if: failure()
+        run: docker compose --file examples/quickstart/compose.yaml logs --no-color || true
+
+      - name: Stop example services
+        if: always()
+        run: docker compose --file examples/quickstart/compose.yaml down --volumes --remove-orphans
