@@ -111,8 +111,8 @@ func (s *Store) replacement(
 	foundID := false
 	for _, element := range elements {
 		key := element.Key()
-		if key == s.hiddenField {
-			return empty, fmt.Errorf("document field %q is reserved by Sink", s.hiddenField)
+		if key == s.metadataField {
+			return empty, fmt.Errorf("document field %q is reserved by Sink", s.metadataField)
 		}
 		if key == "_id" {
 			if foundID {
@@ -131,11 +131,11 @@ func (s *Store) replacement(
 		idDocument := bson.D{idField}
 		replacement = append(idDocument, replacement...)
 	}
-	hidden := bson.D{
+	metadata := bson.D{
 		{Key: "revision", Value: bson.Binary{Subtype: 0, Data: bytes.Clone(revision.Data)}},
 	}
-	hiddenField := bson.E{Key: s.hiddenField, Value: hidden}
-	replacement = append(replacement, hiddenField)
+	metadataField := bson.E{Key: s.metadataField, Value: metadata}
+	replacement = append(replacement, metadataField)
 	encoded, err := bson.Marshal(replacement)
 	if err != nil {
 		return empty, fmt.Errorf("encode MongoDB replacement document: %w", err)
@@ -156,28 +156,28 @@ func (s *Store) userDocument(raw bson.Raw) (storage.Document, storage.Revision, 
 
 	userFields := make(bson.D, 0, len(elements))
 	revision := storage.Revision{}
-	foundHidden := false
+	foundMetadata := false
 	for _, element := range elements {
-		if element.Key() != s.hiddenField {
+		if element.Key() != s.metadataField {
 			field := bson.E{Key: element.Key(), Value: element.Value()}
 			userFields = append(userFields, field)
 			continue
 		}
-		if foundHidden {
-			return emptyDocument, emptyRevision, fmt.Errorf("stored document contains more than one %q field", s.hiddenField)
+		if foundMetadata {
+			return emptyDocument, emptyRevision, fmt.Errorf("stored document contains more than one %q field", s.metadataField)
 		}
-		foundHidden = true
-		hidden, ok := element.Value().DocumentOK()
+		foundMetadata = true
+		metadata, ok := element.Value().DocumentOK()
 		if !ok {
-			return emptyDocument, emptyRevision, fmt.Errorf("stored document field %q is not a document", s.hiddenField)
+			return emptyDocument, emptyRevision, fmt.Errorf("stored document field %q is not a document", s.metadataField)
 		}
-		revisionValue, lookupErr := hidden.LookupErr("revision")
+		revisionValue, lookupErr := metadata.LookupErr("revision")
 		if lookupErr != nil {
-			return emptyDocument, emptyRevision, fmt.Errorf("stored document field %q has no revision", s.hiddenField)
+			return emptyDocument, emptyRevision, fmt.Errorf("stored document field %q has no revision", s.metadataField)
 		}
 		subtype, data, ok := revisionValue.BinaryOK()
 		if !ok || subtype != 0 || len(data) == 0 {
-			return emptyDocument, emptyRevision, fmt.Errorf("stored document field %q has an invalid revision", s.hiddenField)
+			return emptyDocument, emptyRevision, fmt.Errorf("stored document field %q has an invalid revision", s.metadataField)
 		}
 		revision.Data = bytes.Clone(data)
 	}

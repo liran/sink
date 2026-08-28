@@ -42,7 +42,7 @@ storages:
     driver: mongodb
     mongodb:
       uri: mongodb://mongo-main:27017
-      hidden_field: __revision
+      metadata_field: __revision
   - name: mongo-archive
     driver: mongodb
     mongodb:
@@ -62,7 +62,7 @@ storages:
 	if len(loaded.storages) != 3 {
 		t.Fatalf("loadConfig() storages = %#v", loaded.storages)
 	}
-	if loaded.storages[0].name != "mongo-main" || loaded.storages[0].mongoHiddenField != "__revision" {
+	if loaded.storages[0].name != "mongo-main" || loaded.storages[0].mongoMetadataField != "__revision" {
 		t.Fatalf("loadConfig() first storage = %#v", loaded.storages[0])
 	}
 	search := loaded.storages[2]

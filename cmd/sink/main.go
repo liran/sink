@@ -214,8 +214,8 @@ func openMongoStorage(ctx context.Context, configured backendConfig, shutdownTim
 	}
 
 	storageOptions := mongodb.Options{
-		Store:       configured.name,
-		HiddenField: configured.mongoHiddenField,
+		Store:         configured.name,
+		MetadataField: configured.mongoMetadataField,
 	}
 	store, err := mongodb.New(mongoClient, storageOptions)
 	if err != nil {

@@ -273,12 +273,12 @@ func (s *Store) preconditionFilter(operation writeWork) (bson.D, error) {
 			Subtype: 0,
 			Data:    operation.precondition.Revision.Data,
 		}
-		field := bson.E{Key: s.hiddenField + ".revision", Value: revision}
+		field := bson.E{Key: s.metadataField + ".revision", Value: revision}
 		filter = append(filter, field)
 		return filter, nil
 	case storage.PreconditionRevisionAbsent:
 		exists := bson.D{{Key: "$exists", Value: false}}
-		field := bson.E{Key: s.hiddenField, Value: exists}
+		field := bson.E{Key: s.metadataField, Value: exists}
 		filter = append(filter, field)
 		return filter, nil
 	default:

@@ -11,7 +11,7 @@ import (
 )
 
 func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
-	store := &Store{hiddenField: defaultHiddenField}
+	store := &Store{metadataField: defaultMetadataField}
 	inputValue := bson.D{
 		{Key: "name", Value: "legacy"},
 		{Key: "tags", Value: bson.A{"a", "b"}},
@@ -30,11 +30,11 @@ func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
 	if got := replacement.Lookup("_id").StringValue(); got != "record-1" {
 		t.Fatalf("replacement _id = %q", got)
 	}
-	hidden, ok := replacement.Lookup(defaultHiddenField).DocumentOK()
+	metadata, ok := replacement.Lookup(defaultMetadataField).DocumentOK()
 	if !ok {
-		t.Fatal("replacement hidden metadata is not a document")
+		t.Fatal("replacement metadata is not a document")
 	}
-	_, revisionData, ok := hidden.Lookup("revision").BinaryOK()
+	_, revisionData, ok := metadata.Lookup("revision").BinaryOK()
 	if !ok || !bytes.Equal(revisionData, revision.Data) {
 		t.Fatalf("replacement revision = %x", revisionData)
 	}
@@ -50,13 +50,13 @@ func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
 	if got := userRaw.Lookup("name").StringValue(); got != "legacy" {
 		t.Fatalf("decoded name = %q", got)
 	}
-	if !userRaw.Lookup(defaultHiddenField).IsZero() {
-		t.Fatal("decoded user document contains hidden metadata")
+	if !userRaw.Lookup(defaultMetadataField).IsZero() {
+		t.Fatal("decoded user document contains Sink metadata")
 	}
 }
 
 func TestUserDocumentAcceptsLegacyDocumentWithoutRevision(t *testing.T) {
-	store := &Store{hiddenField: defaultHiddenField}
+	store := &Store{metadataField: defaultMetadataField}
 	legacyValue := bson.D{
 		{Key: "_id", Value: "legacy-1"},
 		{Key: "value", Value: int32(42)},
@@ -78,10 +78,10 @@ func TestUserDocumentAcceptsLegacyDocumentWithoutRevision(t *testing.T) {
 }
 
 func TestReplacementRejectsReservedFieldAndMismatchedID(t *testing.T) {
-	store := &Store{hiddenField: defaultHiddenField}
+	store := &Store{metadataField: defaultMetadataField}
 	revision := storage.Revision{Data: []byte("revision")}
 
-	reservedValue := bson.D{{Key: defaultHiddenField, Value: bson.D{}}}
+	reservedValue := bson.D{{Key: defaultMetadataField, Value: bson.D{}}}
 	reserved, err := bson.Marshal(reservedValue)
 	if err != nil {
 		t.Fatalf("bson.Marshal(reserved) error = %v", err)
@@ -105,7 +105,7 @@ func TestReplacementRejectsReservedFieldAndMismatchedID(t *testing.T) {
 }
 
 func TestReplacementAcceptsEquivalentInt32ID(t *testing.T) {
-	store := &Store{hiddenField: defaultHiddenField}
+	store := &Store{metadataField: defaultMetadataField}
 	inputValue := bson.D{{Key: "_id", Value: int32(42)}}
 	input, err := bson.Marshal(inputValue)
 	if err != nil {

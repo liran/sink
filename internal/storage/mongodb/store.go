@@ -12,20 +12,20 @@ import (
 
 const (
 	ContentTypeBSON         = "application/bson"
-	defaultHiddenField      = "__sink"
+	defaultMetadataField    = "__sink"
 	defaultConcurrentWrites = 64
 )
 
 type Options struct {
 	Store               string
-	HiddenField         string
+	MetadataField       string
 	MaxConcurrentWrites int
 }
 
 type Store struct {
 	client              *mongo.Client
 	store               string
-	hiddenField         string
+	metadataField       string
 	maxConcurrentWrites int
 }
 
@@ -40,12 +40,12 @@ func New(client *mongo.Client, opts Options) (*Store, error) {
 		return nil, errors.New("create MongoDB storage: max concurrent writes cannot be negative")
 	}
 
-	hiddenField := opts.HiddenField
-	if hiddenField == "" {
-		hiddenField = defaultHiddenField
+	metadataField := opts.MetadataField
+	if metadataField == "" {
+		metadataField = defaultMetadataField
 	}
-	if hiddenField == "_id" || strings.ContainsAny(hiddenField, ".$\x00") {
-		return nil, errors.New("create MongoDB storage: hidden field is invalid")
+	if metadataField == "_id" || strings.ContainsAny(metadataField, ".$\x00") {
+		return nil, errors.New("create MongoDB storage: metadata field is invalid")
 	}
 
 	maxConcurrentWrites := opts.MaxConcurrentWrites
@@ -55,7 +55,7 @@ func New(client *mongo.Client, opts Options) (*Store, error) {
 	store := &Store{
 		client:              client,
 		store:               opts.Store,
-		hiddenField:         hiddenField,
+		metadataField:       metadataField,
 		maxConcurrentWrites: maxConcurrentWrites,
 	}
 	return store, nil

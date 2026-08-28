@@ -43,15 +43,15 @@ type config struct {
 }
 
 type backendConfig struct {
-	name             string
-	driver           storageDriver
-	mongoURI         string
-	mongoHiddenField string
-	searchDriver     searchstorage.Driver
-	searchEndpoints  []string
-	searchUsername   string
-	searchPassword   string
-	searchAPIKey     string
+	name               string
+	driver             storageDriver
+	mongoURI           string
+	mongoMetadataField string
+	searchDriver       searchstorage.Driver
+	searchEndpoints    []string
+	searchUsername     string
+	searchPassword     string
+	searchAPIKey       string
 }
 
 type configFile struct {
@@ -75,8 +75,8 @@ type storageConfigFile struct {
 }
 
 type mongoDBConfigFile struct {
-	URI         string `yaml:"uri"`
-	HiddenField string `yaml:"hidden_field"`
+	URI           string `yaml:"uri"`
+	MetadataField string `yaml:"metadata_field"`
 }
 
 type searchConfigFile struct {
@@ -190,7 +190,7 @@ func loadStorageConfig(index int, file storageConfigFile) (backendConfig, error)
 		if loaded.mongoURI == "" {
 			return loaded, fmt.Errorf("%s.mongodb.uri is required when driver is mongodb", prefix)
 		}
-		loaded.mongoHiddenField = strings.TrimSpace(file.MongoDB.HiddenField)
+		loaded.mongoMetadataField = strings.TrimSpace(file.MongoDB.MetadataField)
 		return loaded, nil
 	case driverElasticsearch:
 		loaded.searchDriver = searchstorage.DriverElasticsearch

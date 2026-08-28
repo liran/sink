@@ -35,7 +35,7 @@ storages:
     driver: mongodb
     mongodb:
       uri: mongodb://mongo-main:27017
-      hidden_field: __sink
+      metadata_field: __sink
 
   - name: mongo-archive
     driver: mongodb
@@ -98,10 +98,11 @@ configured receives a per-operation failure.
 The former top-level `storage` object is replaced by the `storages` list. Move
 the former `storage.mongodb.store` or `storage.search.store` value to the
 entry's required `name`, keep the driver-specific connection fields under that
-entry, and remove `bindings`. Update client addresses so their namespace and
-dataset contain the direct MongoDB database/collection names. For search
-drivers, keep the logical namespace and put the complete existing index or alias
-name in `dataset`.
+entry, rename `storage.mongodb.hidden_field` to
+`storages[].mongodb.metadata_field`, and remove `bindings`. Update client
+addresses so their namespace and dataset contain the direct MongoDB
+database/collection names. For search drivers, keep the logical namespace and
+put the complete existing index or alias name in `dataset`.
 
 ## Configuration reference
 
@@ -117,7 +118,7 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].name` | string | Yes | none | Any unique, non-empty name | Exact value selected by `address.store`. |
 | `storages[].driver` | enum string | Yes | none | `mongodb`, `elasticsearch`, `opensearch` | Adapter used by this storage instance. See [Storage driver values](#storage-driver-values). |
 | `storages[].mongodb.uri` | string | Conditionally | none | Valid MongoDB connection string | Required when the entry's driver is `mongodb`. |
-| `storages[].mongodb.hidden_field` | string | No | `__sink` | Any valid MongoDB field except `_id`; cannot contain `.`, `$`, or a null byte | Top-level field used for Sink's hidden revision metadata. |
+| `storages[].mongodb.metadata_field` | string | No | `__sink` | Any valid MongoDB field except `_id`; cannot contain `.`, `$`, or a null byte | Reserved top-level field where Sink stores internal metadata such as the record revision; removed from documents returned to clients. |
 | `storages[].search.endpoints` | list of strings | Conditionally | none | One or more HTTP(S) endpoints | Required for `elasticsearch` and `opensearch`. |
 | `storages[].search.username` | string | Conditionally | empty | Any username accepted by the search service | Basic-auth username. Must be configured together with `password`. |
 | `storages[].search.password` | string | Conditionally | empty | Any password accepted by the search service | Basic-auth password. Must be configured together with `username`. |
