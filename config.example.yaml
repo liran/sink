@@ -1,0 +1,21 @@
+mode: server
+
+grpc:
+  address: ":8080"
+
+storage:
+  driver: mongodb
+  mongodb:
+    uri: mongodb://mongodb:27017
+    store: primary
+    hidden_field: __sink
+    bindings: []
+
+service:
+  max_operations: 1000
+  max_merge_attempts: 3
+
+kafka:
+  max_poll_records: 500
+
+shutdown_timeout_seconds: 15

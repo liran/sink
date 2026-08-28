@@ -3,11 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,14 +36,35 @@ func main() {
 		fmt.Println(version)
 		return
 	}
-	if err := run(); err != nil {
+	configPath, err := parseConfigPath(os.Args[1:])
+	if err == nil {
+		err = run(configPath)
+	}
+	if err != nil {
 		slog.Error("sink stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
-	loaded, err := loadConfig()
+func parseConfigPath(args []string) (string, error) {
+	flags := flag.NewFlagSet("sink", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	configPath := flags.String("config", "", "path to the YAML configuration file")
+	if err := flags.Parse(args); err != nil {
+		return "", fmt.Errorf("parse command arguments: %w", err)
+	}
+	if flags.NArg() != 0 {
+		return "", fmt.Errorf("unexpected command argument %q", flags.Arg(0))
+	}
+	trimmed := strings.TrimSpace(*configPath)
+	if trimmed == "" {
+		return "", errors.New("--config is required")
+	}
+	return trimmed, nil
+}
+
+func run(configPath string) error {
+	loaded, err := loadConfig(configPath)
 	if err != nil {
 		return err
 	}

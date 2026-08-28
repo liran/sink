@@ -1,0 +1,23 @@
+mode: all
+
+grpc:
+  address: ":8080"
+
+storage:
+  driver: mongodb
+  mongodb:
+    uri: mongodb://mongo:27017/?replicaSet=rs0
+    store: primary
+
+service:
+  max_operations: 1000
+  max_merge_attempts: 3
+
+kafka:
+  brokers:
+    - kafka:19092
+  topic: sink-mutations
+  group_id: sink-quickstart
+  max_poll_records: 500
+
+shutdown_timeout_seconds: 15
