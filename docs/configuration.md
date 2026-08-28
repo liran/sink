@@ -29,6 +29,8 @@ mode: server
 
 grpc:
   address: ":8080"
+  max_receive_message_bytes: 67108864
+  max_send_message_bytes: 67108864
 
 prometheus:
   address: ":9090"
@@ -39,6 +41,8 @@ storages:
     mongodb:
       uri: mongodb://mongo-main:27017
       metadata_field: __sink
+      max_concurrent_writes: 64
+      max_concurrent_groups: 16
 
   - name: mongo-archive
     driver: mongodb
@@ -59,6 +63,9 @@ service:
 
 kafka:
   max_poll_records: 500
+  max_retry_attempts: 10
+  retry_backoff_milliseconds: 100
+  max_retry_backoff_milliseconds: 10000
 
 shutdown_timeout_seconds: 15
 ```
@@ -116,11 +123,21 @@ Sink metrics:
 | `sink_grpc_server_requests_total` | counter | `method`, `code` | Completed Sink gRPC requests by method and canonical gRPC status code. |
 | `sink_grpc_server_request_duration_seconds` | histogram | `method` | End-to-end Sink gRPC request latency. |
 | `sink_grpc_server_operation_results_total` | counter | `method`, `status` | Per-operation results returned inside batch responses. |
+| `sink_kafka_publisher_records_total` | counter | `status` | Mutation records accepted or rejected by Kafka. |
+| `sink_kafka_publisher_duration_seconds` | histogram | none | Synchronous Kafka publish batch latency. |
+| `sink_kafka_worker_mutations_total` | counter | `status` | Mutations applied or failed by workers. |
+| `sink_kafka_worker_retries_total` | counter | none | Retried Kafka mutations. |
+| `sink_kafka_worker_dead_letters_total` | counter | none | Mutations copied to the dead-letter topic. |
 
 Labels intentionally exclude storage names, namespaces, datasets, record keys,
 and error messages to keep metric cardinality bounded. The endpoint has no
 application-level authentication; bind it to a private interface or protect it
 with the deployment network policy.
+
+The standard gRPC health service is the readiness signal for `server` and `all`
+modes. Sink checks every configured storage and the Kafka publisher every five
+seconds with a three-second timeout, reporting `NOT_SERVING` while a required
+dependency is unavailable.
 
 ### Migrating a single-storage configuration
 
@@ -143,12 +160,16 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | --- | --- | --- | --- | --- | --- |
 | `mode` | enum string | No | `server` | `server`, `worker`, `all` | Process role. See [Mode values](#mode-values). |
 | `grpc.address` | string | No | `:8080` | Any valid TCP listen address | TCP listen address for the gRPC and gRPC health services. Used in `server` and `all` modes. |
+| `grpc.max_receive_message_bytes` | positive integer | No | `67108864` | Integer greater than `0` | Maximum encoded gRPC request size accepted by the server. |
+| `grpc.max_send_message_bytes` | positive integer | No | `67108864` | Integer greater than `0` | Maximum encoded gRPC response size sent by the server. |
 | `prometheus.address` | string | No | empty (disabled) | Empty or any valid TCP listen address | HTTP listen address for Prometheus `/metrics`. Available in every runtime mode. |
 | `storages` | list | Yes | none | One or more storage objects | Storage instances available for address routing. |
 | `storages[].name` | string | Yes | none | Any unique, non-empty name | Exact value selected by `address.store`. |
 | `storages[].driver` | enum string | Yes | none | `mongodb`, `elasticsearch`, `opensearch` | Adapter used by this storage instance. See [Storage driver values](#storage-driver-values). |
 | `storages[].mongodb.uri` | string | Conditionally | none | Valid MongoDB connection string | Required when the entry's driver is `mongodb`. |
 | `storages[].mongodb.metadata_field` | string | No | `__sink` | Any valid MongoDB field except `_id`; cannot contain `.`, `$`, or a null byte | Reserved top-level field where Sink stores internal metadata such as the record revision; removed from documents returned to clients. |
+| `storages[].mongodb.max_concurrent_writes` | positive integer | No | `64` | Integer greater than `0` | Maximum concurrent MongoDB conditional writes. |
+| `storages[].mongodb.max_concurrent_groups` | positive integer | No | `16` | Integer greater than `0` | Maximum collection groups executed concurrently inside one batch wave. |
 | `storages[].search.endpoints` | list of strings | Conditionally | none | One or more HTTP(S) endpoints | Required for `elasticsearch` and `opensearch`. |
 | `storages[].search.username` | string | Conditionally | empty | Any username accepted by the search service | Basic-auth username. Must be configured together with `password`. |
 | `storages[].search.password` | string | Conditionally | empty | Any password accepted by the search service | Basic-auth password. Must be configured together with `username`. |
@@ -159,6 +180,10 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `kafka.topic` | string | Conditionally | empty | Any valid Kafka topic name | Topic used for durable mutation publication and consumption. Required with brokers. |
 | `kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Required in `worker` and `all` modes. |
 | `kafka.max_poll_records` | positive integer | No | `500` | Integer greater than `0` | Maximum number of mutations handled in one consumer fetch batch. |
+| `kafka.dead_letter_topic` | string | No | `<kafka.topic>.dlq` | Non-empty Kafka topic | Destination for malformed, permanent, and retry-exhausted worker records. Used in `worker` and `all` modes. |
+| `kafka.max_retry_attempts` | positive integer | No | `10` | Integer greater than `0` | Maximum total handler attempts before a mutation is dead-lettered. |
+| `kafka.retry_backoff_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Initial worker retry backoff before jitter. |
+| `kafka.max_retry_backoff_milliseconds` | positive integer | No | `10000` | Integer at least the initial backoff | Maximum worker retry backoff before jitter. |
 | `shutdown_timeout_seconds` | positive integer | No | `15` | Integer greater than `0` | Maximum graceful-shutdown time for gRPC and MongoDB disconnect operations. |
 
 ### Mode values
@@ -186,6 +211,18 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
   listen address.
 - `all` requires brokers, topic, and group ID and runs both publishing and
   consuming in one process.
+
+Worker deployments must create the dead-letter topic before startup. A source
+record is committed only after it applies successfully or its original key and
+value are durably copied to that topic with source topic, partition, offset, and
+error headers.
+
+## Built-in merge profile
+
+The stock binary registers `json-merge-patch@1` for `application/json`
+documents. Both the current document and incoming patch must be JSON objects.
+Null fields delete existing values and nested objects merge recursively. The
+profile is deterministic and safe for Sink's CAS retry loop.
 
 ## Handling credentials
 

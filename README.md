@@ -7,7 +7,9 @@ the public record address selects an instance by its configured store name.
 
 ## API model
 
-The gRPC service exposes three batch-native methods:
+The gRPC service exposes three batch-native methods. The stock server accepts
+encoded requests and responses up to 64 MiB by default; both limits are
+configurable.
 
 - `Read` reads one or more records.
 - `Write` accepts either a complete-document `put` or a profile-driven `merge`.
@@ -33,9 +35,12 @@ mutations for one record stay in one partition and retain submission order.
 The publisher waits for Kafka acknowledgement before reporting `ACCEPTED`.
 The worker disables auto-commit, applies fetched mutations in dependency waves
 through the synchronous batch service path, and commits offsets only after the
-fetched records finish. A crash after storage applies a mutation but before
-Kafka commits its offset can therefore execute that mutation again; this is
-the documented at-least-once behavior.
+fetched records finish. Retryable failures use bounded exponential backoff with
+jitter. Malformed records, permanent failures, and exhausted retries are copied
+to the configured dead-letter topic before their source offsets are committed.
+A crash after storage applies a mutation but before Kafka commits its offset can
+therefore execute that mutation again; this is the documented at-least-once
+behavior.
 
 ## Legacy documents
 
@@ -68,8 +73,8 @@ existing index or alias name.
 
 - `internal/service` implements validation, same-record ordering, batched puts,
   and CAS retry for merge profiles.
-- `internal/storage` routes each operation by `address.store` and preserves
-  result order for batches that span multiple storage instances.
+- `internal/storage` routes each operation by `address.store`, executes
+  independent storage instances concurrently, and preserves result order.
 - `internal/storage/mongodb` implements MongoDB storage.
 - `internal/storage/search` implements the shared Elasticsearch and OpenSearch
   REST storage adapter.
@@ -112,6 +117,10 @@ the Prometheus endpoint. The stack remains running for further testing at
 `127.0.0.1:8080`, with metrics at `http://127.0.0.1:9090/metrics`; use
 `make quickstart-down` to stop it.
 
+The standard gRPC health service reports dynamic readiness. It changes to
+`NOT_SERVING` when a configured storage or Kafka publisher fails its periodic
+dependency check and returns to `SERVING` after recovery.
+
 See [`examples/quickstart`](examples/quickstart) for the exposed dependency
 ports, direct Docker Compose commands, and reset instructions.
 
@@ -142,10 +151,10 @@ function, required condition, default, validation rules, address routing, and
 multi-storage examples. A ready-to-edit MongoDB file is available at
 [`config.example.yaml`](config.example.yaml).
 
-The stock image intentionally registers no application-specific merge
-profiles. It supports reads, puts, deletes, and the complete async pipeline;
-deployments that need field-aware RMW profiles should register their mergers
-in a project-specific binary until a profile-loading mechanism is defined.
+The stock image registers `json-merge-patch@1`, a deterministic RFC 7396-style
+object merge for `application/json` documents. Null fields delete existing
+values and nested objects merge recursively. Deployments can register
+additional application-specific profiles in a project-specific binary.
 
 Publishing a GitHub Release triggers `.github/workflows/release-image.yml`.
 Semantic version tags such as `v0.1.0` publish `0.1.0`, `0.1`, `0`, and—when

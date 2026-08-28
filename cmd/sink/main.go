@@ -33,6 +33,11 @@ import (
 
 var version = "dev"
 
+const (
+	healthCheckInterval = 5 * time.Second
+	healthCheckTimeout  = 3 * time.Second
+)
+
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "version" {
 		fmt.Println(version)
@@ -85,6 +90,7 @@ func run(configPath string) error {
 type application struct {
 	config          config
 	mongoClients    map[string]*mongo.Client
+	storage         storagecontract.Storage
 	publisher       *queuekafka.Publisher
 	worker          *queuekafka.Worker
 	grpcServer      *grpc.Server
@@ -99,11 +105,24 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 	if err != nil {
 		return nil, err
 	}
-	app := &application{config: loaded, mongoClients: opened.mongoClients}
+	app := &application{config: loaded, mongoClients: opened.mongoClients, storage: opened.value}
+	var observed *sinkmetrics.Metrics
+	if loaded.prometheusAddress != "" {
+		observed, err = sinkmetrics.New(version)
+		if err != nil {
+			app.close()
+			return nil, err
+		}
+		if err := app.configurePrometheus(observed.Handler()); err != nil {
+			app.close()
+			return nil, err
+		}
+	}
 	if len(loaded.kafkaBrokers) > 0 && (loaded.mode == modeServer || loaded.mode == modeAll) {
 		publisherOptions := queuekafka.PublisherOptions{
 			Brokers: loaded.kafkaBrokers,
 			Topic:   loaded.kafkaTopic,
+			Metrics: observed,
 		}
 		app.publisher, err = queuekafka.NewPublisher(publisherOptions)
 		if err != nil {
@@ -117,6 +136,10 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 	}
 
 	registry := merge.NewRegistry()
+	if err := merge.RegisterBuiltins(registry); err != nil {
+		app.close()
+		return nil, err
+	}
 	serverOptions := service.Options{
 		Storage:          opened.value,
 		Merges:           registry,
@@ -128,18 +151,6 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 	if err != nil {
 		app.close()
 		return nil, err
-	}
-	var observed *sinkmetrics.Metrics
-	if loaded.prometheusAddress != "" {
-		observed, err = sinkmetrics.New(version)
-		if err != nil {
-			app.close()
-			return nil, err
-		}
-		if err := app.configurePrometheus(observed.Handler()); err != nil {
-			app.close()
-			return nil, err
-		}
 	}
 	if loaded.mode == modeServer || loaded.mode == modeAll {
 		if err := app.configureGRPC(sinkServer, observed); err != nil {
@@ -154,11 +165,16 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 			return nil, processorErr
 		}
 		workerOptions := queuekafka.WorkerOptions{
-			Brokers:        loaded.kafkaBrokers,
-			Topic:          loaded.kafkaTopic,
-			GroupID:        loaded.kafkaGroupID,
-			Handler:        processor,
-			MaxPollRecords: loaded.kafkaMaxPollRecords,
+			Brokers:          loaded.kafkaBrokers,
+			Topic:            loaded.kafkaTopic,
+			GroupID:          loaded.kafkaGroupID,
+			DeadLetterTopic:  loaded.kafkaDeadLetterTopic,
+			Handler:          processor,
+			MaxPollRecords:   loaded.kafkaMaxPollRecords,
+			MaxRetryAttempts: loaded.kafkaMaxRetryAttempts,
+			RetryBackoff:     loaded.kafkaRetryBackoff,
+			MaxRetryBackoff:  loaded.kafkaMaxRetryBackoff,
+			Metrics:          observed,
 		}
 		app.worker, err = queuekafka.NewWorker(workerOptions)
 		if err != nil {
@@ -230,8 +246,10 @@ func openMongoStorage(ctx context.Context, configured backendConfig, shutdownTim
 	}
 
 	storageOptions := mongodb.Options{
-		Store:         configured.name,
-		MetadataField: configured.mongoMetadataField,
+		Store:               configured.name,
+		MetadataField:       configured.mongoMetadataField,
+		MaxConcurrentWrites: configured.mongoMaxConcurrentWrites,
+		MaxConcurrentGroups: configured.mongoMaxConcurrentGroups,
 	}
 	store, err := mongodb.New(mongoClient, storageOptions)
 	if err != nil {
@@ -271,7 +289,9 @@ func (a *application) configureGRPC(server *service.Server, observed *sinkmetric
 	if err != nil {
 		return fmt.Errorf("listen for gRPC: %w", err)
 	}
-	serverOptions := make([]grpc.ServerOption, 0, 1)
+	serverOptions := make([]grpc.ServerOption, 0, 3)
+	serverOptions = append(serverOptions, grpc.MaxRecvMsgSize(a.config.grpcMaxReceiveBytes))
+	serverOptions = append(serverOptions, grpc.MaxSendMsgSize(a.config.grpcMaxSendBytes))
 	if observed != nil {
 		interceptor := observed.UnaryServerInterceptor()
 		serverOptions = append(serverOptions, grpc.UnaryInterceptor(interceptor))
@@ -330,12 +350,43 @@ func (a *application) run(ctx context.Context) error {
 			}
 		}()
 	}
+	if a.health != nil {
+		go a.runHealthChecks(runContext)
+	}
 	select {
 	case <-runContext.Done():
 		return nil
 	case err := <-runErrors:
 		return err
 	}
+}
+
+func (a *application) runHealthChecks(ctx context.Context) {
+	ticker := time.NewTicker(healthCheckInterval)
+	defer ticker.Stop()
+	for {
+		a.updateHealth(ctx)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+func (a *application) updateHealth(parent context.Context) {
+	ctx, cancel := context.WithTimeout(parent, healthCheckTimeout)
+	defer cancel()
+	status := healthpb.HealthCheckResponse_SERVING
+	if err := a.storage.Ping(ctx); err != nil {
+		status = healthpb.HealthCheckResponse_NOT_SERVING
+	}
+	if status == healthpb.HealthCheckResponse_SERVING && a.publisher != nil {
+		if err := a.publisher.Ping(ctx); err != nil {
+			status = healthpb.HealthCheckResponse_NOT_SERVING
+		}
+	}
+	a.health.SetServingStatus("", status)
 }
 
 func (a *application) close() {
