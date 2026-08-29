@@ -30,6 +30,8 @@ type Metrics struct {
 	batcherQueuedOps       *prometheus.GaugeVec
 	batcherQueuedBytes     *prometheus.GaugeVec
 	batcherRejected        *prometheus.CounterVec
+	mergeConflicts         prometheus.Counter
+	mergeExhausted         prometheus.Counter
 	kafkaPublished         *prometheus.CounterVec
 	kafkaPublishDuration   prometheus.Histogram
 	kafkaWorkerMutations   *prometheus.CounterVec
@@ -129,6 +131,20 @@ func New(version string) (*Metrics, error) {
 		Help:      "Total number of synchronous requests rejected before batching.",
 	}
 	batcherRejected := prometheus.NewCounterVec(rejectedOptions, []string{"method", "reason"})
+	mergeConflictOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "merge",
+		Name:      "conflicts_total",
+		Help:      "Total number of revision conflicts retried by Lua merges.",
+	}
+	mergeConflicts := prometheus.NewCounter(mergeConflictOptions)
+	mergeExhaustedOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "merge",
+		Name:      "exhausted_total",
+		Help:      "Total number of Lua merges that exhausted the configured revision-conflict attempts.",
+	}
+	mergeExhausted := prometheus.NewCounter(mergeExhaustedOptions)
 	publishedOptions := prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: "kafka_publisher",
@@ -190,6 +206,8 @@ func New(version string) (*Metrics, error) {
 		batcherQueuedOps,
 		batcherQueuedBytes,
 		batcherRejected,
+		mergeConflicts,
+		mergeExhausted,
 		kafkaPublished,
 		kafkaPublishDuration,
 		kafkaWorkerMutations,
@@ -214,6 +232,8 @@ func New(version string) (*Metrics, error) {
 		batcherQueuedOps:       batcherQueuedOps,
 		batcherQueuedBytes:     batcherQueuedBytes,
 		batcherRejected:        batcherRejected,
+		mergeConflicts:         mergeConflicts,
+		mergeExhausted:         mergeExhausted,
 		kafkaPublished:         kafkaPublished,
 		kafkaPublishDuration:   kafkaPublishDuration,
 		kafkaWorkerMutations:   kafkaWorkerMutations,
@@ -221,6 +241,20 @@ func New(version string) (*Metrics, error) {
 		kafkaWorkerDeadLetters: kafkaWorkerDeadLetters,
 	}
 	return metrics, nil
+}
+
+func (m *Metrics) ObserveMergeConflict(count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.mergeConflicts.Add(float64(count))
+}
+
+func (m *Metrics) ObserveMergeExhausted(count int) {
+	if m == nil || count <= 0 {
+		return
+	}
+	m.mergeExhausted.Add(float64(count))
 }
 
 func (m *Metrics) AdjustBatchQueue(method string, operations int, bytes int) {

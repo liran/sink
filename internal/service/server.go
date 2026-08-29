@@ -10,6 +10,7 @@ import (
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
+	sinkmetrics "github.com/liran/sink/internal/metrics"
 	"github.com/liran/sink/internal/queue"
 	"github.com/liran/sink/internal/storage"
 	"google.golang.org/grpc/codes"
@@ -28,6 +29,7 @@ type Options struct {
 	Publisher        queue.Publisher
 	MaxOperations    int
 	MaxMergeAttempts int
+	Metrics          *sinkmetrics.Metrics
 }
 
 type Server struct {
@@ -38,6 +40,7 @@ type Server struct {
 	publisher        queue.Publisher
 	maxOperations    int
 	maxMergeAttempts int
+	metrics          *sinkmetrics.Metrics
 }
 
 func New(opts Options) (*Server, error) {
@@ -69,6 +72,7 @@ func New(opts Options) (*Server, error) {
 		publisher:        opts.Publisher,
 		maxOperations:    maxOperations,
 		maxMergeAttempts: maxMergeAttempts,
+		metrics:          opts.Metrics,
 	}
 	return server, nil
 }

@@ -5,12 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
+	sinkmetrics "github.com/liran/sink/internal/metrics"
 	"github.com/liran/sink/internal/queue"
 	"github.com/liran/sink/internal/service"
 	"github.com/liran/sink/internal/storage"
@@ -20,6 +24,37 @@ import (
 )
 
 type unavailableStorage struct{}
+
+type conflictStorage struct{}
+
+func (conflictStorage) Ping(context.Context) error {
+	return nil
+}
+
+func (conflictStorage) Read(_ context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	response := storage.ReadResponse{Results: make([]storage.ReadResult, len(req.Operations))}
+	for index := range response.Results {
+		response.Results[index] = storage.ReadResult{
+			Status:   storage.ReadStatusFound,
+			Document: storageJSONDocument(`{"value":0}`),
+			Revision: storage.Revision{Data: []byte("revision")},
+		}
+	}
+	return response, nil
+}
+
+func (conflictStorage) Write(_ context.Context, req storage.WriteRequest) (storage.WriteResponse, error) {
+	response := storage.WriteResponse{Results: make([]storage.WriteResult, len(req.Operations))}
+	for index := range response.Results {
+		response.Results[index].Status = storage.WriteStatusPreconditionFailed
+	}
+	return response, nil
+}
+
+func (conflictStorage) Delete(_ context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	response := storage.DeleteResponse{Results: make([]storage.DeleteResult, len(req.Operations))}
+	return response, nil
+}
 
 func (unavailableStorage) Ping(context.Context) error {
 	return nil
@@ -165,6 +200,49 @@ func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 	}
 	if final.Value != writers {
 		t.Fatalf("final counter = %d, want %d", final.Value, writers)
+	}
+}
+
+func TestMergeConflictMetricsRecordRetriesAndExhaustion(t *testing.T) {
+	observed, err := sinkmetrics.New("test")
+	if err != nil {
+		t.Fatalf("metrics.New() error = %v", err)
+	}
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("merge.NewLuaEngine() error = %v", err)
+	}
+	options := service.Options{
+		Storage:          conflictStorage{},
+		Lua:              luaEngine,
+		MaxMergeAttempts: 2,
+		Metrics:          observed,
+	}
+	server, err := service.New(options)
+	if err != nil {
+		t.Fatalf("service.New() error = %v", err)
+	}
+	request := mergeWriteRequest("conflict", "1")
+	response, err := server.Write(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	result := response.GetResults()[0]
+	if result.GetStatus() != sink.WriteStatus_WRITE_STATUS_PRECONDITION_FAILED ||
+		result.GetFailure().GetCode() != sink.FailureCode_FAILURE_CODE_CONFLICT {
+		t.Fatalf("Write() result = %+v", result)
+	}
+
+	httpRequest := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	recorder := httptest.NewRecorder()
+	observed.Handler().ServeHTTP(recorder, httpRequest)
+	body := recorder.Body.String()
+	if !strings.Contains(body, "sink_merge_conflicts_total 2") {
+		t.Fatal("metrics do not contain two merge conflicts")
+	}
+	if !strings.Contains(body, "sink_merge_exhausted_total 1") {
+		t.Fatal("metrics do not contain one exhausted merge")
 	}
 }
 
