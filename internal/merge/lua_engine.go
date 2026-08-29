@@ -247,6 +247,7 @@ func (e *LuaEngine) newVM(ctx context.Context) (*vm.VM, *luaJSONBridge) {
 	options := []vm.VMOption{vm.WithContext(ctx), vm.WithLimits(limits)}
 	luaVM := vm.New(options...)
 	stdlib.Open(luaVM)
+	addUnicodeTextFunctions(luaVM)
 	bridge := newLuaJSONBridge(luaVM)
 	restrictLuaEnvironment(luaVM)
 	return luaVM, bridge

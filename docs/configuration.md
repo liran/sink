@@ -316,6 +316,8 @@ Lua; an untagged empty `{}` is encoded as an object. `json.is_null(value)` tests
 the null sentinel. Lua integers preserve signed 64-bit JSON integer values.
 
 Sink opens deterministic base, string, table, math, and UTF-8 functionality.
+Lua's standard `string.upper` is ASCII-only; `utf8.upper(value)` applies Go's
+deterministic Unicode uppercase mapping when application data requires it.
 Host I/O, operating-system, package loading, dynamic code loading, coroutines,
 debug APIs, output, random numbers, metatable mutation, and unbounded string
 repetition are unavailable. Each merge runs in a new VM. Only immutable
