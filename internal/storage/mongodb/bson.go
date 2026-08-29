@@ -91,10 +91,15 @@ func (s *Store) replacement(
 	revision storage.Revision,
 ) (bson.Raw, error) {
 	var empty bson.Raw
-	if document.ContentType != ContentTypeBSON {
-		return empty, fmt.Errorf("MongoDB storage requires content type %q", ContentTypeBSON)
+	var decoded bson.D
+	if err := bson.UnmarshalExtJSON(document.JSON, false, &decoded); err != nil {
+		return empty, fmt.Errorf("decode JSON document for MongoDB: %w", err)
 	}
-	raw := bson.Raw(document.Data)
+	encoded, err := bson.Marshal(decoded)
+	if err != nil {
+		return empty, fmt.Errorf("encode MongoDB BSON document: %w", err)
+	}
+	raw := bson.Raw(encoded)
 	if err := raw.Validate(); err != nil {
 		return empty, fmt.Errorf("validate BSON document: %w", err)
 	}
@@ -136,7 +141,7 @@ func (s *Store) replacement(
 	}
 	metadataField := bson.E{Key: s.metadataField, Value: metadata}
 	replacement = append(replacement, metadataField)
-	encoded, err := bson.Marshal(replacement)
+	encoded, err = bson.Marshal(replacement)
 	if err != nil {
 		return empty, fmt.Errorf("encode MongoDB replacement document: %w", err)
 	}
@@ -182,13 +187,12 @@ func (s *Store) userDocument(raw bson.Raw) (storage.Document, storage.Revision, 
 		revision.Data = bytes.Clone(data)
 	}
 
-	encoded, err := bson.Marshal(userFields)
+	encoded, err := bson.MarshalExtJSON(userFields, false, false)
 	if err != nil {
-		return emptyDocument, emptyRevision, fmt.Errorf("encode user BSON document: %w", err)
+		return emptyDocument, emptyRevision, fmt.Errorf("encode user JSON document: %w", err)
 	}
 	document := storage.Document{
-		ContentType: ContentTypeBSON,
-		Data:        encoded,
+		JSON: encoded,
 	}
 	return document, revision, nil
 }

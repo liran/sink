@@ -138,8 +138,7 @@ func appendPart(destination []byte, part []byte) []byte {
 }
 
 type Document struct {
-	ContentType string
-	Data        []byte
+	JSON []byte
 }
 
 type Revision struct {
@@ -175,7 +174,8 @@ const (
 )
 
 type WriteRequest struct {
-	Operations []WriteOperation
+	Operations       []WriteOperation
+	WaitUntilVisible bool
 }
 
 type WriteOperation struct {
@@ -219,7 +219,8 @@ const (
 )
 
 type DeleteRequest struct {
-	Operations []DeleteOperation
+	Operations       []DeleteOperation
+	WaitUntilVisible bool
 }
 
 type DeleteOperation struct {

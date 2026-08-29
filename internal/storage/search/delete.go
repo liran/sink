@@ -36,7 +36,7 @@ func (s *Store) Delete(ctx context.Context, req storage.DeleteRequest) (storage.
 		}
 		return response, nil
 	}
-	items, err := s.performBulk(ctx, payload, len(works))
+	items, err := s.performBulk(ctx, payload, len(works), req.WaitUntilVisible)
 	if err != nil {
 		for _, work := range works {
 			setDeleteError(&response.Results[work.resultIndex], err)

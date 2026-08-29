@@ -209,7 +209,7 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 
 | Value | Behavior | Required driver-specific configuration |
 | --- | --- | --- |
-| `mongodb` | Stores BSON documents in MongoDB. | `storages[].mongodb.uri` |
+| `mongodb` | Converts protocol JSON to BSON inside the adapter and stores it in MongoDB. | `storages[].mongodb.uri` |
 | `elasticsearch` | Stores JSON documents in Elasticsearch. | At least one `storages[].search.endpoints` entry |
 | `opensearch` | Stores JSON documents in OpenSearch. | At least one `storages[].search.endpoints` entry |
 
@@ -246,8 +246,8 @@ end
 `current` is `nil` when `MISSING_DOCUMENT_MODE_CREATE` creates a missing record.
 `incoming` is the operation's incoming JSON object. `context.observed_at` is an
 RFC 3339 timestamp fixed across CAS retries of one execution. The returned value
-must be a JSON object. Both documents must use `application/json`; BSON merges
-are not supported.
+must be a JSON object. All documents use the protocol's JSON representation;
+storage-specific conversion happens after the merge.
 
 JSON null is represented by `json.null` instead of Lua `nil`, which would remove
 a table key. The bridge preserves empty input objects and arrays. Use

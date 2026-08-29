@@ -38,10 +38,7 @@ func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 		Dataset:   "products",
 		Key:       key,
 	}
-	document := &sink.Document{
-		ContentType: "application/bson",
-		Data:        []byte{5, 0, 0, 0, 0},
-	}
+	document := &sink.Document{Json: []byte(`{"value":1}`)}
 	put := &sink.PutOperation{
 		Document: document,
 		Mode:     sink.WriteMode_WRITE_MODE_UPSERT,

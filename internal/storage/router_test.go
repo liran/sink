@@ -52,8 +52,8 @@ func TestRouterRoutesMixedStoreBatch(t *testing.T) {
 
 	mongoAddress := routerTestAddress("mongo-main", "mongo-record")
 	searchAddress := routerTestAddress("search-main", "search-record")
-	mongoDocument := storage.Document{ContentType: "application/bson", Data: []byte("mongo")}
-	searchDocument := storage.Document{ContentType: "application/json", Data: []byte("search")}
+	mongoDocument := storage.Document{JSON: []byte(`{"store":"mongo"}`)}
+	searchDocument := storage.Document{JSON: []byte(`{"store":"search"}`)}
 	writeOperations := []storage.WriteOperation{
 		{Address: searchAddress, Document: searchDocument},
 		{Address: mongoAddress, Document: mongoDocument},
@@ -76,7 +76,7 @@ func TestRouterRoutesMixedStoreBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	if string(read.Results[0].Document.Data) != "mongo" || string(read.Results[1].Document.Data) != "search" {
+	if string(read.Results[0].Document.JSON) != `{"store":"mongo"}` || string(read.Results[1].Document.JSON) != `{"store":"search"}` {
 		t.Fatalf("Read() results = %#v", read.Results)
 	}
 
@@ -120,7 +120,7 @@ func TestRouterReturnsPerOperationFailuresForUnknownStorage(t *testing.T) {
 		t.Fatalf("Read() result = %#v", read.Results[0])
 	}
 
-	writeOperation := storage.WriteOperation{Address: address, Document: storage.Document{ContentType: "application/json", Data: []byte("{}")}}
+	writeOperation := storage.WriteOperation{Address: address, Document: storage.Document{JSON: []byte("{}")}}
 	writeRequest := storage.WriteRequest{Operations: []storage.WriteOperation{writeOperation}}
 	written, err := router.Write(t.Context(), writeRequest)
 	if err != nil {

@@ -18,6 +18,7 @@ import (
 type expectedRequest struct {
 	method        string
 	path          string
+	rawQuery      string
 	contentType   string
 	authorization string
 	bodyContains  []string
@@ -48,6 +49,9 @@ func (h *scriptedHandler) ServeHTTP(writer http.ResponseWriter, request *http.Re
 	}
 	if request.Method != expected.method || request.URL.Path != expected.path {
 		h.t.Errorf("request = %s %s, expected %s %s", request.Method, request.URL.Path, expected.method, expected.path)
+	}
+	if request.URL.RawQuery != expected.rawQuery {
+		h.t.Errorf("query = %q, expected %q", request.URL.RawQuery, expected.rawQuery)
 	}
 	if expected.contentType != "" && request.Header.Get("Content-Type") != expected.contentType {
 		h.t.Errorf("Content-Type = %q, expected %q", request.Header.Get("Content-Type"), expected.contentType)
@@ -123,8 +127,8 @@ func TestStoreReadsExistingAndMissingDocuments(t *testing.T) {
 	if response.Results[0].Status != storage.ReadStatusFound || response.Results[1].Status != storage.ReadStatusNotFound {
 		t.Fatalf("Read() statuses = %v, %v", response.Results[0].Status, response.Results[1].Status)
 	}
-	if string(response.Results[0].Document.Data) != `{"name":"legacy"}` {
-		t.Fatalf("Read() document = %s", response.Results[0].Document.Data)
+	if string(response.Results[0].Document.JSON) != `{"name":"legacy"}` {
+		t.Fatalf("Read() document = %s", response.Results[0].Document.JSON)
 	}
 	revision, err := decodeRevision(response.Results[0].Revision)
 	if err != nil || revision.sequenceNumber != 7 || revision.primaryTerm != 2 {
@@ -191,6 +195,7 @@ func TestStoreMapsBulkConflictsAndMissingDeletes(t *testing.T) {
 		{
 			method:       http.MethodPost,
 			path:         "/_bulk",
+			rawQuery:     "refresh=wait_for",
 			contentType:  "application/x-ndjson",
 			bodyContains: []string{`"if_seq_no":1`, `"if_primary_term":1`},
 			statusCode:   http.StatusOK,
@@ -199,6 +204,7 @@ func TestStoreMapsBulkConflictsAndMissingDeletes(t *testing.T) {
 		{
 			method:       http.MethodPost,
 			path:         "/_bulk",
+			rawQuery:     "refresh=wait_for",
 			contentType:  "application/x-ndjson",
 			bodyContains: []string{`"delete":{"_index":"legacy-records","_id":"missing"}`},
 			statusCode:   http.StatusOK,
@@ -218,7 +224,10 @@ func TestStoreMapsBulkConflictsAndMissingDeletes(t *testing.T) {
 			Revision: revision,
 		},
 	}
-	writeRequest := storage.WriteRequest{Operations: []storage.WriteOperation{writeOperation}}
+	writeRequest := storage.WriteRequest{
+		Operations:       []storage.WriteOperation{writeOperation},
+		WaitUntilVisible: true,
+	}
 	written, err := store.Write(t.Context(), writeRequest)
 	if err != nil {
 		t.Fatalf("Write() error = %v", err)
@@ -227,7 +236,10 @@ func TestStoreMapsBulkConflictsAndMissingDeletes(t *testing.T) {
 		t.Fatalf("Write() status = %v", written.Results[0].Status)
 	}
 	deleteOperation := storage.DeleteOperation{Address: testAddress("missing")}
-	deleteRequest := storage.DeleteRequest{Operations: []storage.DeleteOperation{deleteOperation}}
+	deleteRequest := storage.DeleteRequest{
+		Operations:       []storage.DeleteOperation{deleteOperation},
+		WaitUntilVisible: true,
+	}
 	deleted, err := store.Delete(t.Context(), deleteRequest)
 	if err != nil {
 		t.Fatalf("Delete() error = %v", err)
@@ -286,7 +298,7 @@ func testAddress(id string) storage.Address {
 }
 
 func testDocument(raw string) storage.Document {
-	document := storage.Document{ContentType: ContentTypeJSON, Data: []byte(raw)}
+	document := storage.Document{JSON: []byte(raw)}
 	return document
 }
 

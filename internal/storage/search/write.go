@@ -39,7 +39,7 @@ func (s *Store) Write(ctx context.Context, req storage.WriteRequest) (storage.Wr
 
 	waves := buildWriteWaves(prepared)
 	for _, wave := range waves {
-		s.writeWave(ctx, wave, response.Results)
+		s.writeWave(ctx, wave, response.Results, req.WaitUntilVisible)
 	}
 	return response, nil
 }
@@ -60,17 +60,14 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 		resultIndex:  index,
 		routingKey:   operation.Address.RoutingKey(),
 		document:     document,
-		source:       bytes.Clone(operation.Document.Data),
+		source:       bytes.Clone(operation.Document.JSON),
 		precondition: operation.Precondition,
 	}
 	return work, nil
 }
 
 func validateJSONDocument(document storage.Document) error {
-	if document.ContentType != ContentTypeJSON {
-		return fmt.Errorf("search storage requires content type %q", ContentTypeJSON)
-	}
-	trimmed := bytes.TrimSpace(document.Data)
+	trimmed := bytes.TrimSpace(document.JSON)
 	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' || !json.Valid(trimmed) {
 		return errors.New("search storage requires a valid JSON object")
 	}
@@ -106,7 +103,12 @@ func buildWriteWaves(prepared []writeWork) [][]writeWork {
 	return waves
 }
 
-func (s *Store) writeWave(ctx context.Context, wave []writeWork, results []storage.WriteResult) {
+func (s *Store) writeWave(
+	ctx context.Context,
+	wave []writeWork,
+	results []storage.WriteResult,
+	waitUntilVisible bool,
+) {
 	eligible := make([]bool, len(wave))
 	existsWorks := make([]readWork, 0)
 	existsIndexes := make([]int, 0)
@@ -153,7 +155,7 @@ func (s *Store) writeWave(ctx context.Context, wave []writeWork, results []stora
 		}
 		return
 	}
-	items, err := s.performBulk(ctx, payload, len(ready))
+	items, err := s.performBulk(ctx, payload, len(ready), waitUntilVisible)
 	if err != nil {
 		for _, work := range ready {
 			setWriteError(&results[work.resultIndex], err)

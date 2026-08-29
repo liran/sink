@@ -131,7 +131,7 @@ func applyMultiGetDocument(result *storage.ReadResult, document multiGetDocument
 		return
 	}
 	result.Status = storage.ReadStatusFound
-	result.Document = storage.Document{ContentType: ContentTypeJSON, Data: bytes.Clone(document.Source)}
+	result.Document = storage.Document{JSON: bytes.Clone(document.Source)}
 	result.Revision = revision
 }
 

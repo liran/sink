@@ -12,7 +12,6 @@ import (
 )
 
 const (
-	ContentTypeBSON         = "application/bson"
 	defaultMetadataField    = "__sink"
 	defaultConcurrentWrites = 64
 	defaultConcurrentGroups = 16

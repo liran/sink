@@ -47,6 +47,30 @@ func (unavailableStorage) Delete(_ context.Context, req storage.DeleteRequest) (
 	return response, nil
 }
 
+type visibilityStorage struct {
+	backend           *memory.Store
+	writeWaitVisible  bool
+	deleteWaitVisible bool
+}
+
+func (s *visibilityStorage) Ping(ctx context.Context) error {
+	return s.backend.Ping(ctx)
+}
+
+func (s *visibilityStorage) Read(ctx context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	return s.backend.Read(ctx, req)
+}
+
+func (s *visibilityStorage) Write(ctx context.Context, req storage.WriteRequest) (storage.WriteResponse, error) {
+	s.writeWaitVisible = req.WaitUntilVisible
+	return s.backend.Write(ctx, req)
+}
+
+func (s *visibilityStorage) Delete(ctx context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	s.deleteWaitVisible = req.WaitUntilVisible
+	return s.backend.Delete(ctx, req)
+}
+
 const testMergeAttempts = 1000
 
 const incrementLua = `
@@ -132,7 +156,7 @@ func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 	var final struct {
 		Value int `json:"value"`
 	}
-	err = json.Unmarshal(readResponse.GetResults()[0].GetDocument().GetData(), &final)
+	err = json.Unmarshal(readResponse.GetResults()[0].GetDocument().GetJson(), &final)
 	if err != nil {
 		t.Fatalf("decode final counter: %v", err)
 	}
@@ -141,6 +165,56 @@ func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 	}
 	if final.Value != writers {
 		t.Fatalf("final counter = %d, want %d", final.Value, writers)
+	}
+}
+
+func TestWaitUntilVisiblePropagatesThroughRouter(t *testing.T) {
+	backend := &visibilityStorage{backend: memory.New()}
+	backends := map[string]storage.Storage{"primary": backend}
+	router, err := storage.NewRouter(backends)
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	server := newTestServer(t, router, nil)
+
+	writeRequest := &sink.WriteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE,
+		Operations:     []*sink.WriteOperation{putWriteOperation("visible", "value")},
+	}
+	written, err := server.Write(t.Context(), writeRequest)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if written.GetResults()[0].GetStatus() != sink.WriteStatus_WRITE_STATUS_APPLIED || !backend.writeWaitVisible {
+		t.Fatalf("Write() result = %+v, wait visible = %t", written.GetResults()[0], backend.writeWaitVisible)
+	}
+	mergeSeed := memory.SeedRequest{
+		Address:  storageAddress("merge-visible"),
+		Document: storageJSONDocument(`{"value":0}`),
+	}
+	backend.backend.Seed(mergeSeed)
+	backend.writeWaitVisible = false
+	mergeRequest := mergeWriteRequest("merge-visible", "1")
+	mergeRequest.CompletionMode = sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE
+	merged, err := server.Write(t.Context(), mergeRequest)
+	if err != nil {
+		t.Fatalf("Write(merge) error = %v", err)
+	}
+	if merged.GetResults()[0].GetStatus() != sink.WriteStatus_WRITE_STATUS_APPLIED || !backend.writeWaitVisible {
+		t.Fatalf("Write(merge) result = %+v, wait visible = %t", merged.GetResults()[0], backend.writeWaitVisible)
+	}
+
+	deleteOperation := &sink.DeleteOperation{Address: protoAddress("visible")}
+	deleteRequest := &sink.DeleteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE,
+		Operations:     []*sink.DeleteOperation{deleteOperation},
+	}
+	deleted, err := server.Delete(t.Context(), deleteRequest)
+	if err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	if deleted.GetResults()[0].GetStatus() != sink.DeleteStatus_DELETE_STATUS_APPLIED || !backend.deleteWaitVisible {
+		t.Fatalf("Delete() result = %+v, wait visible = %t", deleted.GetResults()[0], backend.deleteWaitVisible)
 	}
 }
 
@@ -181,8 +255,8 @@ func TestWritePreservesSameRecordRequestOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	got := string(readResponse.GetResults()[0].GetDocument().GetData())
-	if got != "second" {
+	got := string(readResponse.GetResults()[0].GetDocument().GetJson())
+	if got != `{"value":"second"}` {
 		t.Fatalf("stored document = %q, want second", got)
 	}
 }
@@ -367,7 +441,7 @@ func mergeWriteRequest(key string, increment string) *sink.WriteRequest {
 }
 
 func mergeWriteRequestWithSource(key string, increment string, source string) *sink.WriteRequest {
-	incoming := &sink.Document{ContentType: "application/json", Data: []byte(`{"value":` + increment + `}`)}
+	incoming := &sink.Document{Json: []byte(`{"value":` + increment + `}`)}
 	digest := sha256.Sum256([]byte(source))
 	programReference := &sink.LuaProgram{Sha256: digest[:]}
 	program := &sink.LuaProgram{Source: []byte(source), Sha256: digest[:]}
@@ -420,10 +494,7 @@ func protoAddress(key string) *sink.RecordAddress {
 }
 
 func protoDocument(value string) *sink.Document {
-	document := &sink.Document{
-		ContentType: "text/plain",
-		Data:        []byte(value),
-	}
+	document := &sink.Document{Json: []byte(`{"value":"` + value + `"}`)}
 	return document
 }
 
@@ -441,14 +512,11 @@ func storageAddress(key string) storage.Address {
 }
 
 func storageJSONDocument(value string) storage.Document {
-	document := storage.Document{
-		ContentType: "application/json",
-		Data:        []byte(value),
-	}
+	document := storage.Document{JSON: []byte(value)}
 	return document
 }
 
 func storageDocument(value string) storage.Document {
-	document := storage.Document{ContentType: "text/plain", Data: []byte(value)}
+	document := storage.Document{JSON: []byte(value)}
 	return document
 }
