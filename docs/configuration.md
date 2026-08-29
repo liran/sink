@@ -213,10 +213,14 @@ and error messages to keep metric cardinality bounded. The endpoint has no
 application-level authentication; bind it to a private interface or protect it
 with the deployment network policy.
 
-The standard gRPC health service is the readiness signal for `server` and `all`
-modes. Sink checks every configured storage and the Kafka publisher every five
-seconds with a three-second timeout, reporting `NOT_SERVING` while a required
-dependency is unavailable.
+The default standard gRPC health service is the process readiness signal for
+`server` and `all` modes. It remains `SERVING` during a runtime failure of one
+store dependency, allowing unrelated stores to continue serving traffic. Sink
+checks dependencies every five seconds with a three-second timeout and exposes
+their status under `sink.storage.<store>` and, when Kafka is configured,
+`sink.kafka.<store>`. A dependency-specific service reports `NOT_SERVING` until
+that dependency recovers. Startup remains strict: Sink must initialize and ping
+every configured dependency before opening the gRPC service.
 
 ### Migrating a single-storage configuration
 

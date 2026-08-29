@@ -143,9 +143,10 @@ the Prometheus endpoint. The stack remains running for further testing at
 `127.0.0.1:8080`, with metrics at `http://127.0.0.1:9090/metrics`; use
 `make quickstart-down` to stop it.
 
-The standard gRPC health service reports dynamic readiness. It changes to
-`NOT_SERVING` when a configured storage or Kafka publisher fails its periodic
-dependency check and returns to `SERVING` after recovery.
+The default standard gRPC health service reports process readiness and remains
+`SERVING` when one configured store has a runtime dependency failure. Periodic
+dependency health is available separately as `sink.storage.<store>` and
+`sink.kafka.<store>`, so one store cannot remove healthy stores from service.
 
 See [`examples/quickstart`](examples/quickstart) for the exposed dependency
 ports, direct Docker Compose commands, and reset instructions.
