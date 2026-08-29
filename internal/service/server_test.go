@@ -439,7 +439,7 @@ func TestDeleteIsHardAndMissingDeleteSucceeds(t *testing.T) {
 	}
 }
 
-func newTestServer(t *testing.T, store storage.Storage, publisher queue.Publisher) *service.Server {
+func newTestServer(t testing.TB, store storage.Storage, publisher queue.Publisher) *service.Server {
 	t.Helper()
 	luaOptions := merge.LuaOptions{}
 	luaEngine, err := merge.NewLuaEngine(luaOptions)

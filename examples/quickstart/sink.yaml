@@ -19,6 +19,13 @@ storages:
 service:
   max_operations: 1000
   max_merge_attempts: 3
+  batching:
+    enabled: true
+    max_wait_milliseconds: 2
+    max_operations: 1000
+    max_bytes: 16777216
+    max_queued_operations: 10000
+    max_queued_bytes: 134217728
   lua:
     timeout_milliseconds: 100
     max_source_bytes: 65536
