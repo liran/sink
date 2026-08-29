@@ -11,7 +11,10 @@ import (
 
 func TestMutationCodecRoundTrip(t *testing.T) {
 	address := testQueueAddress("record-1")
-	document := &sink.Document{Json: []byte(`{"value":1}`)}
+	document := &sink.Document{
+		Json:          []byte(`{"created_at":"2026-08-29T04:34:56Z","value":1}`),
+		DateTimePaths: []string{"/created_at"},
+	}
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 	mutation := queue.Mutation{Write: operation}

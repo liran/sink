@@ -152,10 +152,7 @@ func preconditionMatches(condition storage.Precondition, stored record, exists b
 }
 
 func cloneDocument(document storage.Document) storage.Document {
-	cloned := storage.Document{
-		JSON: bytes.Clone(document.JSON),
-	}
-	return cloned
+	return storage.CloneDocument(document)
 }
 
 func cloneRevision(revision storage.Revision) storage.Revision {

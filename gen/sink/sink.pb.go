@@ -651,8 +651,12 @@ func (x *OpaqueValue) GetData() []byte {
 // Document contains a JSON-encoded user object. Storage-specific encodings are
 // private implementation details of storage adapters.
 type Document struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Json          []byte                 `protobuf:"bytes,1,opt,name=json,proto3" json:"json,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Json  []byte                 `protobuf:"bytes,1,opt,name=json,proto3" json:"json,omitempty"`
+	// RFC 6901 JSON Pointers identifying strings that originated as typed
+	// date-time values. Adapters that support a native date-time type may use
+	// this metadata without changing the JSON representation.
+	DateTimePaths []string `protobuf:"bytes,2,rep,name=date_time_paths,json=dateTimePaths,proto3" json:"date_time_paths,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -690,6 +694,13 @@ func (*Document) Descriptor() ([]byte, []int) {
 func (x *Document) GetJson() []byte {
 	if x != nil {
 		return x.Json
+	}
+	return nil
+}
+
+func (x *Document) GetDateTimePaths() []string {
+	if x != nil {
+		return x.DateTimePaths
 	}
 	return nil
 }
@@ -1670,9 +1681,10 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x04kind\"5\n" +
 	"\vOpaqueValue\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"\x1e\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"F\n" +
 	"\bDocument\x12\x12\n" +
-	"\x04json\x18\x01 \x01(\fR\x04json\"#\n" +
+	"\x04json\x18\x01 \x01(\fR\x04json\x12&\n" +
+	"\x0fdate_time_paths\x18\x02 \x03(\tR\rdateTimePaths\"#\n" +
 	"\rRevisionToken\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"E\n" +
 	"\vReadRequest\x126\n" +

@@ -260,6 +260,15 @@ func (m *Document) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i -= len(m.unknownFields)
 		copy(dAtA[i:], m.unknownFields)
 	}
+	if len(m.DateTimePaths) > 0 {
+		for iNdEx := len(m.DateTimePaths) - 1; iNdEx >= 0; iNdEx-- {
+			i -= len(m.DateTimePaths[iNdEx])
+			copy(dAtA[i:], m.DateTimePaths[iNdEx])
+			i = protohelpers.EncodeVarint(dAtA, i, uint64(len(m.DateTimePaths[iNdEx])))
+			i--
+			dAtA[i] = 0x12
+		}
+	}
 	if len(m.Json) > 0 {
 		i -= len(m.Json)
 		copy(dAtA[i:], m.Json)
@@ -1283,6 +1292,12 @@ func (m *Document) SizeVT() (n int) {
 	if l > 0 {
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
 	}
+	if len(m.DateTimePaths) > 0 {
+		for _, s := range m.DateTimePaths {
+			l = len(s)
+			n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
+		}
+	}
 	n += len(m.unknownFields)
 	return n
 }
@@ -2165,6 +2180,38 @@ func (m *Document) UnmarshalVT(dAtA []byte) error {
 			if m.Json == nil {
 				m.Json = []byte{}
 			}
+			iNdEx = postIndex
+		case 2:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field DateTimePaths", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return protohelpers.ErrIntOverflow
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return protohelpers.ErrInvalidLength
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.DateTimePaths = append(m.DateTimePaths, string(dAtA[iNdEx:postIndex]))
 			iNdEx = postIndex
 		default:
 			iNdEx = preIndex

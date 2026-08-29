@@ -3,6 +3,7 @@ package merge
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -15,18 +16,31 @@ import (
 )
 
 type luaJSONBridge struct {
-	objectMeta *vm.Table
-	arrayMeta  *vm.Table
-	nullMeta   *vm.Table
-	nullTable  *vm.Table
+	objectMeta      *vm.Table
+	arrayMeta       *vm.Table
+	nullMeta        *vm.Table
+	nullTable       *vm.Table
+	dateTimeValues  map[string]struct{}
+	typedPathValues map[string]map[string]struct{}
+	untypedValues   map[string]struct{}
+}
+
+type decodedJSONObject struct {
+	value           map[string]any
+	dateTimeValues  map[string]struct{}
+	typedPathValues map[string]map[string]struct{}
+	untypedValues   map[string]struct{}
 }
 
 func newLuaJSONBridge(luaVM *vm.VM) *luaJSONBridge {
 	bridge := &luaJSONBridge{
-		objectMeta: protectedMetatable("JSON object"),
-		arrayMeta:  protectedMetatable("JSON array"),
-		nullMeta:   protectedMetatable("JSON null"),
-		nullTable:  vm.NewEmptyTable(),
+		objectMeta:      protectedMetatable("JSON object"),
+		arrayMeta:       protectedMetatable("JSON array"),
+		nullMeta:        protectedMetatable("JSON null"),
+		nullTable:       vm.NewEmptyTable(),
+		dateTimeValues:  make(map[string]struct{}),
+		typedPathValues: make(map[string]map[string]struct{}),
+		untypedValues:   make(map[string]struct{}),
 	}
 	bridge.nullTable.SetMetatable(bridge.nullMeta)
 
@@ -63,22 +77,55 @@ func protectedMetatable(label string) *vm.Table {
 	return meta
 }
 
-func decodeJSONObject(document storage.Document) (map[string]any, error) {
+func decodeJSONObject(document storage.Document) (decodedJSONObject, error) {
+	var result decodedJSONObject
 	decoder := json.NewDecoder(bytes.NewReader(document.JSON))
 	decoder.UseNumber()
 	var decoded any
 	if err := decoder.Decode(&decoded); err != nil {
-		return nil, fmt.Errorf("decode JSON: %w", err)
+		return result, fmt.Errorf("decode JSON: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return nil, errors.New("decode JSON: unexpected trailing content")
+		return result, errors.New("decode JSON: unexpected trailing content")
 	}
 	object, ok := decoded.(map[string]any)
 	if !ok {
-		return nil, errors.New("JSON document must be an object")
+		return result, errors.New("JSON document must be an object")
 	}
-	return object, nil
+	dateTimeValues, err := storage.DateTimeValues(decoded, document.DateTimePaths)
+	if err != nil {
+		return result, fmt.Errorf("decode date-time metadata: %w", err)
+	}
+	result.value = object
+	result.dateTimeValues = dateTimeValues
+	result.typedPathValues = make(map[string]map[string]struct{}, len(document.DateTimePaths))
+	result.untypedValues = make(map[string]struct{})
+	typedPaths := make(map[string]struct{}, len(document.DateTimePaths))
+	for _, path := range document.DateTimePaths {
+		typedPaths[path] = struct{}{}
+	}
+	classifyDateTimeStrings(decoded, "", typedPaths, result.typedPathValues, result.untypedValues)
+	return result, nil
+}
+
+func (b *luaJSONBridge) addDateTimeDocument(document decodedJSONObject) {
+	for value := range document.dateTimeValues {
+		b.dateTimeValues[value] = struct{}{}
+	}
+	for value := range document.untypedValues {
+		b.untypedValues[value] = struct{}{}
+	}
+	for path, values := range document.typedPathValues {
+		known := b.typedPathValues[path]
+		if known == nil {
+			known = make(map[string]struct{}, len(values))
+			b.typedPathValues[path] = known
+		}
+		for value := range values {
+			known[value] = struct{}{}
+		}
+	}
 }
 
 func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
@@ -132,19 +179,88 @@ func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
 	}
 }
 
-func (b *luaJSONBridge) encodeJSONObject(value vm.Value) ([]byte, error) {
+func (b *luaJSONBridge) encodeJSONObject(value vm.Value) (storage.Document, error) {
+	var document storage.Document
 	decoded, err := b.luaToGo(value, make(map[*vm.Table]bool))
 	if err != nil {
-		return nil, err
+		return document, err
 	}
 	if _, ok := decoded.(map[string]any); !ok {
-		return nil, errors.New("merge result must be a JSON object")
+		return document, errors.New("merge result must be a JSON object")
 	}
 	encoded, err := json.Marshal(decoded)
 	if err != nil {
-		return nil, fmt.Errorf("encode JSON: %w", err)
+		return document, fmt.Errorf("encode JSON: %w", err)
 	}
-	return encoded, nil
+	document.JSON = encoded
+	document.DateTimePaths = b.dateTimePaths(decoded)
+	return document, nil
+}
+
+func (b *luaJSONBridge) dateTimePaths(value any) []string {
+	paths := make([]string, 0)
+	b.collectResultDateTimePaths(value, "", &paths)
+	sort.Strings(paths)
+	return paths
+}
+
+func (b *luaJSONBridge) collectResultDateTimePaths(value any, pointer jsontext.Pointer, paths *[]string) {
+	switch typed := value.(type) {
+	case string:
+		if _, isDateTime := b.dateTimeValues[typed]; !isDateTime {
+			return
+		}
+		path := string(pointer)
+		valuesAtPath := b.typedPathValues[path]
+		_, preservedAtPath := valuesAtPath[typed]
+		_, alsoUntyped := b.untypedValues[typed]
+		if preservedAtPath || !alsoUntyped {
+			*paths = append(*paths, path)
+		}
+	case []any:
+		for index, item := range typed {
+			child := pointer.AppendToken(strconv.Itoa(index))
+			b.collectResultDateTimePaths(item, child, paths)
+		}
+	case map[string]any:
+		for key, item := range typed {
+			child := pointer.AppendToken(key)
+			b.collectResultDateTimePaths(item, child, paths)
+		}
+	}
+}
+
+func classifyDateTimeStrings(
+	value any,
+	pointer jsontext.Pointer,
+	typedPaths map[string]struct{},
+	typedPathValues map[string]map[string]struct{},
+	untypedValues map[string]struct{},
+) {
+	switch typed := value.(type) {
+	case string:
+		path := string(pointer)
+		if _, isTyped := typedPaths[path]; !isTyped {
+			untypedValues[typed] = struct{}{}
+			return
+		}
+		values := typedPathValues[path]
+		if values == nil {
+			values = make(map[string]struct{})
+			typedPathValues[path] = values
+		}
+		values[typed] = struct{}{}
+	case []any:
+		for index, item := range typed {
+			child := pointer.AppendToken(strconv.Itoa(index))
+			classifyDateTimeStrings(item, child, typedPaths, typedPathValues, untypedValues)
+		}
+	case map[string]any:
+		for key, item := range typed {
+			child := pointer.AppendToken(key)
+			classifyDateTimeStrings(item, child, typedPaths, typedPathValues, untypedValues)
+		}
+	}
 }
 
 func (b *luaJSONBridge) luaToGo(value vm.Value, active map[*vm.Table]bool) (any, error) {

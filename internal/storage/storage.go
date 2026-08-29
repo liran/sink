@@ -138,7 +138,8 @@ func appendPart(destination []byte, part []byte) []byte {
 }
 
 type Document struct {
-	JSON []byte
+	JSON          []byte
+	DateTimePaths []string
 }
 
 type Revision struct {

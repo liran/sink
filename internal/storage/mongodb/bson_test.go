@@ -4,12 +4,66 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
+
+func TestReplacementPreservesDateTimeTypes(t *testing.T) {
+	store := &Store{metadataField: defaultMetadataField}
+	document := storage.Document{
+		JSON:          []byte(`{"created_at":"2026-08-29T04:34:56.789Z","events":[{"at":"2026-08-30T04:34:56Z"}],"literal":"2026-08-31T04:34:56Z"}`),
+		DateTimePaths: []string{"/created_at", "/events/0/at"},
+	}
+	revision := storage.Revision{Data: []byte("revision-date-time")}
+	replacement, err := store.replacement(document, "record-date-time", revision)
+	if err != nil {
+		t.Fatalf("replacement() error = %v", err)
+	}
+	if replacement.Lookup("created_at").Type != bson.TypeDateTime {
+		t.Fatalf("created_at BSON type = %s", replacement.Lookup("created_at").Type)
+	}
+	event := replacement.Lookup("events").Array().Index(0).Document()
+	if event.Lookup("at").Type != bson.TypeDateTime {
+		t.Fatalf("events[0].at BSON type = %s", event.Lookup("at").Type)
+	}
+	if replacement.Lookup("literal").Type != bson.TypeString {
+		t.Fatalf("literal BSON type = %s", replacement.Lookup("literal").Type)
+	}
+
+	decoded, decodedRevision, err := store.userDocument(replacement)
+	if err != nil {
+		t.Fatalf("userDocument() error = %v", err)
+	}
+	if !bytes.Equal(decodedRevision.Data, revision.Data) {
+		t.Fatalf("decoded revision = %x", decodedRevision.Data)
+	}
+	wantPaths := []string{"/created_at", "/events/0/at"}
+	if !slices.Equal(decoded.DateTimePaths, wantPaths) {
+		t.Fatalf("decoded date-time paths = %v, want %v", decoded.DateTimePaths, wantPaths)
+	}
+	var values struct {
+		CreatedAt time.Time `json:"created_at"`
+		Events    []struct {
+			At time.Time `json:"at"`
+		} `json:"events"`
+		Literal string `json:"literal"`
+	}
+	if err := json.Unmarshal(decoded.JSON, &values); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if values.CreatedAt.Format(time.RFC3339Nano) != "2026-08-29T04:34:56.789Z" ||
+		values.Events[0].At.Format(time.RFC3339Nano) != "2026-08-30T04:34:56Z" {
+		t.Fatalf("decoded date-times = %#v", values)
+	}
+	if values.Literal != "2026-08-31T04:34:56Z" {
+		t.Fatalf("decoded literal = %q", values.Literal)
+	}
+}
 
 func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}

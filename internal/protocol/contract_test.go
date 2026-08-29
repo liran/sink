@@ -38,7 +38,10 @@ func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 		Dataset:   "products",
 		Key:       key,
 	}
-	document := &sink.Document{Json: []byte(`{"value":1}`)}
+	document := &sink.Document{
+		Json:          []byte(`{"created_at":"2026-08-29T04:34:56Z","value":1}`),
+		DateTimePaths: []string{"/created_at"},
+	}
 	put := &sink.PutOperation{
 		Document: document,
 		Mode:     sink.WriteMode_WRITE_MODE_UPSERT,

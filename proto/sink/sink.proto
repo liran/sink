@@ -45,6 +45,11 @@ message OpaqueValue {
 // private implementation details of storage adapters.
 message Document {
   bytes json = 1;
+
+  // RFC 6901 JSON Pointers identifying strings that originated as typed
+  // date-time values. Adapters that support a native date-time type may use
+  // this metadata without changing the JSON representation.
+  repeated string date_time_paths = 2;
 }
 
 // RevisionToken is interpreted only by the selected storage adapter.
