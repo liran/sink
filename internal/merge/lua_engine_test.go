@@ -246,6 +246,50 @@ end`)
 	}
 }
 
+func TestLuaMergeProvidesUnicodeUpper(t *testing.T) {
+	source := []byte(`
+return function(current, incoming, context)
+    return {brand = utf8.upper(incoming.brand)}
+end`)
+	options := merge.LuaOptions{}
+	merger := compileTestProgram(t, source, options)
+	request := merge.Request{Incoming: jsonDocument(`{"brand":"café Straße 品牌"}`), ObservedAt: time.Now()}
+	result, err := merger.Merge(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	want := `{"brand":"CAFÉ STRAßE 品牌"}`
+	if string(result.Document.JSON) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	}
+}
+
+func TestLuaMergeUnicodeUpperRejectsInvalidInput(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   string
+		incoming string
+	}{
+		{name: "missing", source: `utf8.upper()`, incoming: `{}`},
+		{name: "number", source: `utf8.upper(incoming.brand)`, incoming: `{"brand":1}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := []byte(`
+return function(current, incoming, context)
+    return {brand = ` + test.source + `}
+end`)
+			options := merge.LuaOptions{}
+			merger := compileTestProgram(t, source, options)
+			request := merge.Request{Incoming: jsonDocument(test.incoming), ObservedAt: time.Now()}
+			_, err := merger.Merge(t.Context(), request)
+			if !errors.Is(err, merge.ErrExecution) {
+				t.Fatalf("Merge() error = %v", err)
+			}
+		})
+	}
+}
+
 func TestLuaEngineValidatesProgram(t *testing.T) {
 	options := merge.LuaOptions{MaxSourceBytes: 8}
 	engine, err := merge.NewLuaEngine(options)
