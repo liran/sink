@@ -25,10 +25,11 @@ each configured store. A slow or busy store cannot block another store's batch
 queue. This lets many crawler threads use simple single-record RPCs while
 storage adapters still receive batch work. The short collection window, batch
 limits, and per-store queue limits are configurable. `RETURN_AFTER_ACCEPTED`
-mutations bypass this layer because Kafka already batches the asynchronous
-path. Explicit multi-store requests go directly to the concurrent storage
-router. Explicit client batches remain useful because they avoid per-RPC
-transport overhead, and aggregation does not cross stores or Sink pods.
+mutations bypass this layer because each store's Kafka publisher already
+batches its asynchronous path. Explicit multi-store requests go directly to
+the concurrent storage and queue routers. Explicit client batches remain
+useful because they avoid per-RPC transport overhead, and aggregation does not
+cross stores or Sink pods.
 
 `Write` and `Delete` support three completion modes:
 
@@ -45,9 +46,13 @@ resulting change using a storage revision precondition. This makes each RMW
 attempt atomic without exposing database-specific CAS primitives through the
 API.
 
-Kafka records use a deterministic encoded record address as their key, so all
-mutations for one record stay in one partition and retain submission order.
-The publisher waits for Kafka acknowledgement before reporting `ACCEPTED`.
+Kafka is configured independently inside each store. Stores can use separate
+clusters, topics, consumer groups, retry policies, and dead-letter topics. A
+store without Kafka remains fully synchronous and returns a retryable
+per-operation failure for `RETURN_AFTER_ACCEPTED`. Kafka records use a
+deterministic encoded record address as their key, so all mutations for one
+record stay in one partition and retain submission order. The selected store
+publisher waits for Kafka acknowledgement before reporting `ACCEPTED`.
 The worker disables auto-commit, applies fetched mutations in dependency waves
 through the synchronous batch service path, and commits offsets only after the
 fetched records finish. Retryable failures use bounded exponential backoff with
@@ -99,6 +104,8 @@ existing index or alias name.
   REST storage adapter.
 - `internal/queue/kafka` implements durable mutation publication and manual
   offset consumption.
+- `internal/queue` routes asynchronous mutations to the publisher selected by
+  `address.store` while preserving batch result order.
 - `internal/worker` applies queued operations through the synchronous Sink
   service, keeping one execution path for sync and async writes.
 - `internal/storage/memory` is the deterministic test and local-development

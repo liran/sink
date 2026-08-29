@@ -15,6 +15,16 @@ storages:
       uri: mongodb://mongo:27017/?replicaSet=rs0
       max_concurrent_writes: 64
       max_concurrent_groups: 16
+    kafka:
+      brokers:
+        - kafka:19092
+      topic: sink-mutations
+      group_id: sink-quickstart
+      dead_letter_topic: sink-mutations.dlq
+      max_poll_records: 500
+      max_retry_attempts: 10
+      retry_backoff_milliseconds: 100
+      max_retry_backoff_milliseconds: 10000
 
 service:
   max_operations: 1000
@@ -32,16 +42,5 @@ service:
     max_result_bytes: 16777216
     max_cached_programs: 256
     max_instructions: 1000000
-
-kafka:
-  brokers:
-    - kafka:19092
-  topic: sink-mutations
-  group_id: sink-quickstart
-  dead_letter_topic: sink-mutations.dlq
-  max_poll_records: 500
-  max_retry_attempts: 10
-  retry_backoff_milliseconds: 100
-  max_retry_backoff_milliseconds: 10000
 
 shutdown_timeout_seconds: 15

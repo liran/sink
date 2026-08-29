@@ -46,8 +46,8 @@ storages:
 	if loaded.grpcMaxReceiveBytes != 64<<20 || loaded.grpcMaxSendBytes != 64<<20 {
 		t.Fatalf("loadConfig() gRPC limits = %#v", loaded)
 	}
-	if loaded.kafkaMaxPollRecords != 500 || loaded.kafkaMaxRetryAttempts != 10 || loaded.kafkaRetryBackoff != 100*time.Millisecond || loaded.kafkaMaxRetryBackoff != 10*time.Second || len(loaded.kafkaBrokers) != 0 || loaded.kafkaTopic != "" {
-		t.Fatalf("loadConfig() Kafka configuration = %#v", loaded)
+	if configured.kafka.configured {
+		t.Fatalf("loadConfig() Kafka configuration = %#v", configured.kafka)
 	}
 }
 
@@ -210,17 +210,17 @@ storages:
     driver: mongodb
     mongodb:
       uri: mongodb://mongodb:27017
-kafka:
-  brokers:
-    - kafka-1:9092
-    - kafka-2:9092
-  topic: sink-mutations
-  group_id: sink-workers
-  max_poll_records: 250
-  dead_letter_topic: sink-dead-letters
-  max_retry_attempts: 4
-  retry_backoff_milliseconds: 20
-  max_retry_backoff_milliseconds: 200
+    kafka:
+      brokers:
+        - kafka-1:9092
+        - kafka-2:9092
+      topic: sink-mutations
+      group_id: sink-workers
+      max_poll_records: 250
+      dead_letter_topic: sink-dead-letters
+      max_retry_attempts: 4
+      retry_backoff_milliseconds: 20
+      max_retry_backoff_milliseconds: 200
 service:
   max_operations: 2000
   max_merge_attempts: 5
@@ -236,11 +236,12 @@ shutdown_timeout_seconds: 30
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.mode != modeWorker || len(loaded.kafkaBrokers) != 2 || loaded.kafkaMaxPollRecords != 250 {
+	configured := loaded.storages[0]
+	if loaded.mode != modeWorker || len(configured.kafka.brokers) != 2 || configured.kafka.maxPollRecords != 250 {
 		t.Fatalf("loadConfig() = %#v", loaded)
 	}
-	if loaded.kafkaDeadLetterTopic != "sink-dead-letters" || loaded.kafkaMaxRetryAttempts != 4 || loaded.kafkaRetryBackoff != 20*time.Millisecond || loaded.kafkaMaxRetryBackoff != 200*time.Millisecond {
-		t.Fatalf("loadConfig() Kafka retry settings = %#v", loaded)
+	if configured.kafka.deadLetterTopic != "sink-dead-letters" || configured.kafka.maxRetryAttempts != 4 || configured.kafka.retryBackoff != 20*time.Millisecond || configured.kafka.maxRetryBackoff != 200*time.Millisecond {
+		t.Fatalf("loadConfig() Kafka retry settings = %#v", configured.kafka)
 	}
 	if loaded.maxOperations != 2000 || loaded.maxMergeAttempts != 5 || loaded.shutdownTimeout != 30*time.Second {
 		t.Fatalf("loadConfig() service settings = %#v", loaded)
@@ -249,6 +250,90 @@ shutdown_timeout_seconds: 30
 		loaded.luaOptions.MaxResultBytes != 1048576 || loaded.luaOptions.MaxCachedPrograms != 128 ||
 		loaded.luaOptions.MaxInstructions != 2_000_000 {
 		t.Fatalf("loadConfig() Lua settings = %#v", loaded.luaOptions)
+	}
+}
+
+func TestLoadConfigSupportsIndependentStoreKafkaClusters(t *testing.T) {
+	path := writeConfig(t, `
+mode: worker
+storages:
+  - name: catalog
+    driver: mongodb
+    mongodb:
+      uri: mongodb://catalog:27017
+    kafka:
+      brokers: [catalog-kafka:9092]
+      topic: mutations
+      group_id: workers
+  - name: search
+    driver: opensearch
+    search:
+      endpoints: [https://search:9200]
+    kafka:
+      brokers: [search-kafka:9092]
+      topic: mutations
+      group_id: workers
+`)
+	loaded, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if len(loaded.storages) != 2 {
+		t.Fatalf("loadConfig() storages = %#v", loaded.storages)
+	}
+	for _, configured := range loaded.storages {
+		if !configured.kafka.configured || configured.kafka.topic != "mutations" || configured.kafka.groupID != "workers" {
+			t.Fatalf("loadConfig() storage Kafka = %#v", configured.kafka)
+		}
+	}
+}
+
+func TestLoadConfigRejectsDuplicateKafkaResourcesOnSameCluster(t *testing.T) {
+	path := writeConfig(t, `
+mode: worker
+storages:
+  - name: first
+    driver: mongodb
+    mongodb:
+      uri: mongodb://first:27017
+    kafka:
+      brokers: [kafka-1:9092, kafka-2:9092]
+      topic: shared-mutations
+      group_id: first-workers
+  - name: second
+    driver: mongodb
+    mongodb:
+      uri: mongodb://second:27017
+    kafka:
+      brokers: [kafka-2:9092, kafka-1:9092]
+      topic: shared-mutations
+      group_id: second-workers
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "duplicate Kafka topic") {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigServerAllowsStoreKafkaWithoutConsumerGroup(t *testing.T) {
+	path := writeConfig(t, `
+mode: server
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+    kafka:
+      brokers: [kafka:9092]
+      topic: sink-mutations
+`)
+	loaded, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	configured := loaded.storages[0].kafka
+	if configured.groupID != "" || configured.deadLetterTopic != "sink-mutations.dlq" {
+		t.Fatalf("loadConfig() Kafka = %#v", configured)
 	}
 }
 
@@ -344,12 +429,62 @@ storages:
     driver: mongodb
     mongodb:
       uri: mongodb://mongodb:27017
-kafka:
-  brokers: [kafka:9092]
+    kafka:
+      brokers: [kafka:9092]
 `)
 	_, err := loadConfig(path)
-	if err == nil {
-		t.Fatal("loadConfig() error = nil")
+	if err == nil || !strings.Contains(err.Error(), "storages[0].kafka") {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigWorkerRequiresGroupForEveryKafkaStore(t *testing.T) {
+	path := writeConfig(t, `
+mode: worker
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+    kafka:
+      brokers: [kafka:9092]
+      topic: sink-mutations
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "storages[0].kafka.group_id") {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigRejectsTopLevelKafkaConfiguration(t *testing.T) {
+	path := writeConfig(t, `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+kafka:
+  brokers: [kafka:9092]
+  topic: sink-mutations
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "field kafka not found") {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+}
+
+func TestLoadConfigWorkerRequiresAtLeastOneKafkaStore(t *testing.T) {
+	path := writeConfig(t, `
+mode: worker
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+`)
+	_, err := loadConfig(path)
+	if err == nil || !strings.Contains(err.Error(), "worker and all modes require Kafka settings") {
+		t.Fatalf("loadConfig() error = %v", err)
 	}
 }
 
@@ -392,17 +527,20 @@ storages:
     driver: mongodb
     mongodb:
       uri: mongodb://mongodb:27017
-kafka:
-  brokers: [kafka:9092]
-  topic: sink-mutations
-  group_id: sink-workers
+    kafka:
+      brokers: [kafka:9092]
+      topic: sink-mutations
+      group_id: sink-workers
 `)
 	loaded, err := loadConfig(path)
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.kafkaDeadLetterTopic != "sink-mutations.dlq" {
-		t.Fatalf("dead-letter topic = %q", loaded.kafkaDeadLetterTopic)
+	configured := loaded.storages[0].kafka
+	if configured.deadLetterTopic != "sink-mutations.dlq" || configured.maxPollRecords != 500 ||
+		configured.maxRetryAttempts != 10 || configured.retryBackoff != 100*time.Millisecond ||
+		configured.maxRetryBackoff != 10*time.Second {
+		t.Fatalf("Kafka defaults = %#v", configured)
 	}
 }
 

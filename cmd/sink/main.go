@@ -18,6 +18,7 @@ import (
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
 	sinkmetrics "github.com/liran/sink/internal/metrics"
+	"github.com/liran/sink/internal/queue"
 	queuekafka "github.com/liran/sink/internal/queue/kafka"
 	"github.com/liran/sink/internal/service"
 	storagecontract "github.com/liran/sink/internal/storage"
@@ -91,14 +92,20 @@ type application struct {
 	config          config
 	mongoClients    map[string]*mongo.Client
 	storage         storagecontract.Storage
-	publisher       *queuekafka.Publisher
-	worker          *queuekafka.Worker
+	publisher       queue.Publisher
+	kafkaPublishers []*queuekafka.Publisher
+	workers         []configuredWorker
 	batchingServer  *service.BatchingServer
 	grpcServer      *grpc.Server
 	health          *health.Server
 	listener        net.Listener
 	metricsServer   *http.Server
 	metricsListener net.Listener
+}
+
+type configuredWorker struct {
+	store  string
+	worker *queuekafka.Worker
 }
 
 func newApplication(ctx context.Context, loaded config) (*application, error) {
@@ -119,20 +126,35 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 			return nil, err
 		}
 	}
-	if len(loaded.kafkaBrokers) > 0 && (loaded.mode == modeServer || loaded.mode == modeAll) {
-		publisherOptions := queuekafka.PublisherOptions{
-			Brokers: loaded.kafkaBrokers,
-			Topic:   loaded.kafkaTopic,
-			Metrics: observed,
+	if loaded.mode == modeServer || loaded.mode == modeAll {
+		storePublishers := make(map[string]queue.Publisher)
+		for _, configured := range loaded.storages {
+			if !configured.kafka.configured {
+				continue
+			}
+			publisherOptions := queuekafka.PublisherOptions{
+				Brokers: configured.kafka.brokers,
+				Topic:   configured.kafka.topic,
+				Metrics: observed,
+			}
+			publisher, publisherErr := queuekafka.NewPublisher(publisherOptions)
+			if publisherErr != nil {
+				app.close()
+				return nil, fmt.Errorf("create Kafka publisher for store %q: %w", configured.name, publisherErr)
+			}
+			app.kafkaPublishers = append(app.kafkaPublishers, publisher)
+			if pingErr := publisher.Ping(ctx); pingErr != nil {
+				app.close()
+				return nil, fmt.Errorf("ping Kafka for store %q: %w", configured.name, pingErr)
+			}
+			storePublishers[configured.name] = publisher
 		}
-		app.publisher, err = queuekafka.NewPublisher(publisherOptions)
-		if err != nil {
-			app.close()
-			return nil, err
-		}
-		if err := app.publisher.Ping(ctx); err != nil {
-			app.close()
-			return nil, fmt.Errorf("ping Kafka: %w", err)
+		if len(storePublishers) > 0 {
+			app.publisher, err = queue.NewRoutingPublisher(storePublishers)
+			if err != nil {
+				app.close()
+				return nil, err
+			}
 		}
 	}
 
@@ -188,22 +210,30 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 			app.close()
 			return nil, processorErr
 		}
-		workerOptions := queuekafka.WorkerOptions{
-			Brokers:          loaded.kafkaBrokers,
-			Topic:            loaded.kafkaTopic,
-			GroupID:          loaded.kafkaGroupID,
-			DeadLetterTopic:  loaded.kafkaDeadLetterTopic,
-			Handler:          processor,
-			MaxPollRecords:   loaded.kafkaMaxPollRecords,
-			MaxRetryAttempts: loaded.kafkaMaxRetryAttempts,
-			RetryBackoff:     loaded.kafkaRetryBackoff,
-			MaxRetryBackoff:  loaded.kafkaMaxRetryBackoff,
-			Metrics:          observed,
-		}
-		app.worker, err = queuekafka.NewWorker(workerOptions)
-		if err != nil {
-			app.close()
-			return nil, err
+		for _, configured := range loaded.storages {
+			if !configured.kafka.configured {
+				continue
+			}
+			workerOptions := queuekafka.WorkerOptions{
+				Brokers:          configured.kafka.brokers,
+				Store:            configured.name,
+				Topic:            configured.kafka.topic,
+				GroupID:          configured.kafka.groupID,
+				DeadLetterTopic:  configured.kafka.deadLetterTopic,
+				Handler:          processor,
+				MaxPollRecords:   configured.kafka.maxPollRecords,
+				MaxRetryAttempts: configured.kafka.maxRetryAttempts,
+				RetryBackoff:     configured.kafka.retryBackoff,
+				MaxRetryBackoff:  configured.kafka.maxRetryBackoff,
+				Metrics:          observed,
+			}
+			kafkaWorker, workerErr := queuekafka.NewWorker(workerOptions)
+			if workerErr != nil {
+				app.close()
+				return nil, fmt.Errorf("create Kafka worker for store %q: %w", configured.name, workerErr)
+			}
+			workerInstance := configuredWorker{store: configured.name, worker: kafkaWorker}
+			app.workers = append(app.workers, workerInstance)
 		}
 	}
 	return app, nil
@@ -350,7 +380,7 @@ func (a *application) configurePrometheus(handler http.Handler) error {
 func (a *application) run(ctx context.Context) error {
 	runContext, cancel := context.WithCancel(ctx)
 	defer cancel()
-	runErrors := make(chan error, 3)
+	runErrors := make(chan error, 2+len(a.workers))
 	if a.grpcServer != nil {
 		go func() {
 			err := a.grpcServer.Serve(a.listener)
@@ -367,10 +397,10 @@ func (a *application) run(ctx context.Context) error {
 			}
 		}()
 	}
-	if a.worker != nil {
+	for _, configured := range a.workers {
 		go func() {
-			if err := a.worker.Run(runContext); err != nil {
-				runErrors <- fmt.Errorf("run Kafka worker: %w", err)
+			if err := configured.worker.Run(runContext); err != nil {
+				runErrors <- fmt.Errorf("run Kafka worker for store %q: %w", configured.store, err)
 			}
 		}()
 	}
@@ -405,8 +435,11 @@ func (a *application) updateHealth(parent context.Context) {
 	if err := a.storage.Ping(ctx); err != nil {
 		status = healthpb.HealthCheckResponse_NOT_SERVING
 	}
-	if status == healthpb.HealthCheckResponse_SERVING && a.publisher != nil {
-		if err := a.publisher.Ping(ctx); err != nil {
+	for _, publisher := range a.kafkaPublishers {
+		if status != healthpb.HealthCheckResponse_SERVING {
+			break
+		}
+		if err := publisher.Ping(ctx); err != nil {
 			status = healthpb.HealthCheckResponse_NOT_SERVING
 		}
 	}
@@ -450,11 +483,11 @@ func (a *application) close() {
 	if a.metricsListener != nil {
 		_ = a.metricsListener.Close()
 	}
-	if a.worker != nil {
-		a.worker.Close()
+	for _, configured := range a.workers {
+		configured.worker.Close()
 	}
-	if a.publisher != nil {
-		a.publisher.Close()
+	for _, publisher := range a.kafkaPublishers {
+		publisher.Close()
 	}
 	disconnectMongoClients(a.mongoClients, a.config.shutdownTimeout)
 }

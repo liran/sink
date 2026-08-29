@@ -34,10 +34,4 @@ service:
     max_cached_programs: 256
     max_instructions: 1000000
 
-kafka:
-  max_poll_records: 500
-  max_retry_attempts: 10
-  retry_backoff_milliseconds: 100
-  max_retry_backoff_milliseconds: 10000
-
 shutdown_timeout_seconds: 15

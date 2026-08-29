@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,14 +47,6 @@ type config struct {
 	batchingMaxQueuedOps   int
 	batchingMaxQueuedBytes int
 	luaOptions             merge.LuaOptions
-	kafkaBrokers           []string
-	kafkaTopic             string
-	kafkaGroupID           string
-	kafkaMaxPollRecords    int
-	kafkaDeadLetterTopic   string
-	kafkaMaxRetryAttempts  int
-	kafkaRetryBackoff      time.Duration
-	kafkaMaxRetryBackoff   time.Duration
 	shutdownTimeout        time.Duration
 }
 
@@ -69,6 +62,19 @@ type backendConfig struct {
 	searchUsername           string
 	searchPassword           string
 	searchAPIKey             string
+	kafka                    backendKafkaConfig
+}
+
+type backendKafkaConfig struct {
+	configured       bool
+	brokers          []string
+	topic            string
+	groupID          string
+	deadLetterTopic  string
+	maxPollRecords   int
+	maxRetryAttempts int
+	retryBackoff     time.Duration
+	maxRetryBackoff  time.Duration
 }
 
 type configFile struct {
@@ -77,7 +83,6 @@ type configFile struct {
 	Prometheus             prometheusConfigFile `yaml:"prometheus"`
 	Storages               []storageConfigFile  `yaml:"storages"`
 	Service                serviceConfigFile    `yaml:"service"`
-	Kafka                  kafkaConfigFile      `yaml:"kafka"`
 	ShutdownTimeoutSeconds *int                 `yaml:"shutdown_timeout_seconds"`
 }
 
@@ -96,6 +101,7 @@ type storageConfigFile struct {
 	Driver  string            `yaml:"driver"`
 	MongoDB mongoDBConfigFile `yaml:"mongodb"`
 	Search  searchConfigFile  `yaml:"search"`
+	Kafka   kafkaConfigFile   `yaml:"kafka"`
 }
 
 type mongoDBConfigFile struct {
@@ -244,43 +250,55 @@ func loadConfig(path string) (config, error) {
 		return loaded, err
 	}
 	loaded.luaOptions.MaxInstructions = int64(maxInstructions)
-	loaded.kafkaMaxPollRecords, err = positiveIntOrDefault("kafka.max_poll_records", file.Kafka.MaxPollRecords, 500)
-	if err != nil {
-		return loaded, err
-	}
-	loaded.kafkaMaxRetryAttempts, err = positiveIntOrDefault("kafka.max_retry_attempts", file.Kafka.MaxRetryAttempts, 10)
-	if err != nil {
-		return loaded, err
-	}
-	retryBackoffMilliseconds, err := positiveIntOrDefault("kafka.retry_backoff_milliseconds", file.Kafka.RetryBackoffMilliseconds, 100)
-	if err != nil {
-		return loaded, err
-	}
-	maxRetryBackoffMilliseconds, err := positiveIntOrDefault("kafka.max_retry_backoff_milliseconds", file.Kafka.MaxRetryBackoffMilliseconds, 10000)
-	if err != nil {
-		return loaded, err
-	}
-	if maxRetryBackoffMilliseconds < retryBackoffMilliseconds {
-		return loaded, errors.New("kafka.max_retry_backoff_milliseconds must be at least kafka.retry_backoff_milliseconds")
-	}
-	loaded.kafkaRetryBackoff = time.Duration(retryBackoffMilliseconds) * time.Millisecond
-	loaded.kafkaMaxRetryBackoff = time.Duration(maxRetryBackoffMilliseconds) * time.Millisecond
 	shutdownSeconds, err := positiveIntOrDefault("shutdown_timeout_seconds", file.ShutdownTimeoutSeconds, 15)
 	if err != nil {
 		return loaded, err
 	}
 	loaded.shutdownTimeout = time.Duration(shutdownSeconds) * time.Second
 
-	loaded.kafkaBrokers = nonEmptyValues(file.Kafka.Brokers)
-	loaded.kafkaTopic = strings.TrimSpace(file.Kafka.Topic)
-	loaded.kafkaGroupID = strings.TrimSpace(file.Kafka.GroupID)
-	loaded.kafkaDeadLetterTopic = strings.TrimSpace(file.Kafka.DeadLetterTopic)
-	if loaded.kafkaDeadLetterTopic == "" && (loaded.mode == modeWorker || loaded.mode == modeAll) && loaded.kafkaTopic != "" {
-		loaded.kafkaDeadLetterTopic = loaded.kafkaTopic + ".dlq"
-	}
 	if err := validateKafkaConfig(loaded); err != nil {
 		return loaded, err
 	}
+	return loaded, nil
+}
+
+func loadKafkaConfig(prefix string, file kafkaConfigFile) (backendKafkaConfig, error) {
+	var loaded backendKafkaConfig
+	loaded.brokers = nonEmptyValues(file.Brokers)
+	loaded.topic = strings.TrimSpace(file.Topic)
+	loaded.groupID = strings.TrimSpace(file.GroupID)
+	loaded.deadLetterTopic = strings.TrimSpace(file.DeadLetterTopic)
+	loaded.configured = len(file.Brokers) > 0 || loaded.topic != "" || loaded.groupID != "" || loaded.deadLetterTopic != "" ||
+		file.MaxPollRecords != nil || file.MaxRetryAttempts != nil || file.RetryBackoffMilliseconds != nil ||
+		file.MaxRetryBackoffMilliseconds != nil
+	if !loaded.configured {
+		return loaded, nil
+	}
+	if loaded.topic != "" && loaded.deadLetterTopic == "" {
+		loaded.deadLetterTopic = loaded.topic + ".dlq"
+	}
+	var err error
+	loaded.maxPollRecords, err = positiveIntOrDefault(prefix+".max_poll_records", file.MaxPollRecords, 500)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.maxRetryAttempts, err = positiveIntOrDefault(prefix+".max_retry_attempts", file.MaxRetryAttempts, 10)
+	if err != nil {
+		return loaded, err
+	}
+	retryBackoffMilliseconds, err := positiveIntOrDefault(prefix+".retry_backoff_milliseconds", file.RetryBackoffMilliseconds, 100)
+	if err != nil {
+		return loaded, err
+	}
+	maxRetryBackoffMilliseconds, err := positiveIntOrDefault(prefix+".max_retry_backoff_milliseconds", file.MaxRetryBackoffMilliseconds, 10000)
+	if err != nil {
+		return loaded, err
+	}
+	if maxRetryBackoffMilliseconds < retryBackoffMilliseconds {
+		return loaded, fmt.Errorf("%s.max_retry_backoff_milliseconds must be at least %s.retry_backoff_milliseconds", prefix, prefix)
+	}
+	loaded.retryBackoff = time.Duration(retryBackoffMilliseconds) * time.Millisecond
+	loaded.maxRetryBackoff = time.Duration(maxRetryBackoffMilliseconds) * time.Millisecond
 	return loaded, nil
 }
 
@@ -311,6 +329,11 @@ func loadStorageConfig(index int, file storageConfigFile) (backendConfig, error)
 	if loaded.name == "" {
 		return loaded, fmt.Errorf("%s.name is required", prefix)
 	}
+	kafkaConfig, err := loadKafkaConfig(prefix+".kafka", file.Kafka)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.kafka = kafkaConfig
 	loaded.driver = storageDriver(strings.TrimSpace(file.Driver))
 	switch loaded.driver {
 	case driverMongoDB:
@@ -403,16 +426,63 @@ func nonEmptyValues(raw []string) []string {
 	return values
 }
 
+type kafkaResourceKey struct {
+	cluster string
+	name    string
+}
+
 func validateKafkaConfig(loaded config) error {
-	hasBrokers := len(loaded.kafkaBrokers) > 0
-	hasTopic := loaded.kafkaTopic != ""
-	if hasBrokers != hasTopic {
-		return errors.New("kafka.brokers and kafka.topic must be configured together")
+	configuredStores := 0
+	topics := make(map[kafkaResourceKey]string)
+	groups := make(map[kafkaResourceKey]string)
+	deadLetterTopics := make(map[kafkaResourceKey]string)
+	for index, configured := range loaded.storages {
+		prefix := fmt.Sprintf("storages[%d].kafka", index)
+		if !configured.kafka.configured {
+			continue
+		}
+		if len(configured.kafka.brokers) == 0 || configured.kafka.topic == "" {
+			return fmt.Errorf("%s.brokers and %s.topic are required", prefix, prefix)
+		}
+		if (loaded.mode == modeWorker || loaded.mode == modeAll) && configured.kafka.groupID == "" {
+			return fmt.Errorf("%s.group_id is required in worker and all modes", prefix)
+		}
+		if configured.kafka.deadLetterTopic == configured.kafka.topic {
+			return fmt.Errorf("%s.dead_letter_topic must differ from topic", prefix)
+		}
+		cluster := kafkaClusterKey(configured.kafka.brokers)
+		topicKey := kafkaResourceKey{cluster: cluster, name: configured.kafka.topic}
+		if otherStore, exists := topics[topicKey]; exists {
+			return fmt.Errorf("stores %q and %q configure duplicate Kafka topic %q on the same cluster", otherStore, configured.name, configured.kafka.topic)
+		}
+		topics[topicKey] = configured.name
+		if configured.kafka.groupID != "" {
+			groupKey := kafkaResourceKey{cluster: cluster, name: configured.kafka.groupID}
+			if otherStore, exists := groups[groupKey]; exists {
+				return fmt.Errorf("stores %q and %q configure duplicate Kafka group ID %q on the same cluster", otherStore, configured.name, configured.kafka.groupID)
+			}
+			groups[groupKey] = configured.name
+		}
+		deadLetterKey := kafkaResourceKey{cluster: cluster, name: configured.kafka.deadLetterTopic}
+		if otherStore, exists := deadLetterTopics[deadLetterKey]; exists {
+			return fmt.Errorf("stores %q and %q configure duplicate Kafka dead-letter topic %q on the same cluster", otherStore, configured.name, configured.kafka.deadLetterTopic)
+		}
+		deadLetterTopics[deadLetterKey] = configured.name
+		configuredStores++
 	}
-	if loaded.mode == modeWorker || loaded.mode == modeAll {
-		if !hasBrokers || loaded.kafkaGroupID == "" {
-			return errors.New("worker and all modes require kafka.brokers, kafka.topic, and kafka.group_id")
+	if (loaded.mode == modeWorker || loaded.mode == modeAll) && configuredStores == 0 {
+		return errors.New("worker and all modes require Kafka settings on at least one store")
+	}
+	for topicKey, store := range topics {
+		if deadLetterStore, exists := deadLetterTopics[topicKey]; exists {
+			return fmt.Errorf("store %q Kafka topic %q conflicts with store %q dead-letter topic on the same cluster", store, topicKey.name, deadLetterStore)
 		}
 	}
 	return nil
+}
+
+func kafkaClusterKey(brokers []string) string {
+	ordered := append([]string(nil), brokers...)
+	sort.Strings(ordered)
+	return strings.Join(ordered, "\x00")
 }
