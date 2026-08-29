@@ -58,6 +58,43 @@ type latencyStorage struct {
 	concurrency chan struct{}
 }
 
+type blockingReadStorage struct {
+	backend storage.Storage
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *blockingReadStorage) Ping(ctx context.Context) error {
+	return s.backend.Ping(ctx)
+}
+
+func (s *blockingReadStorage) Read(ctx context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	s.once.Do(func() { close(s.started) })
+	select {
+	case <-s.release:
+		return s.backend.Read(ctx, req)
+	case <-ctx.Done():
+		var response storage.ReadResponse
+		return response, ctx.Err()
+	}
+}
+
+func (s *blockingReadStorage) Write(ctx context.Context, req storage.WriteRequest) (storage.WriteResponse, error) {
+	return s.backend.Write(ctx, req)
+}
+
+func (s *blockingReadStorage) Delete(ctx context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	return s.backend.Delete(ctx, req)
+}
+
+type storeBatchingTestOptions struct {
+	storage       storage.Storage
+	storeNames    []string
+	maxWait       time.Duration
+	maxOperations int
+}
+
 func (s *latencyStorage) Ping(ctx context.Context) error {
 	return s.backend.Ping(ctx)
 }
@@ -125,7 +162,7 @@ func updateMaximum(maximum *atomic.Int64, value int) {
 
 func TestNewBatchingServerValidatesLimits(t *testing.T) {
 	core := newTestServer(t, memory.New(), nil)
-	var defaultOptions service.BatchingOptions
+	defaultOptions := service.BatchingOptions{StoreNames: []string{"primary"}}
 	valid, err := service.NewBatchingServer(core, defaultOptions)
 	if err != nil {
 		t.Fatalf("NewBatchingServer() error = %v", err)
@@ -142,9 +179,21 @@ func TestNewBatchingServerValidatesLimits(t *testing.T) {
 			server: nil,
 		},
 		{
+			name:   "store required",
+			server: core,
+		},
+		{
+			name:   "duplicate store",
+			server: core,
+			options: service.BatchingOptions{
+				StoreNames: []string{"primary", "primary"},
+			},
+		},
+		{
 			name:   "batch operation limit exceeds service",
 			server: core,
 			options: service.BatchingOptions{
+				StoreNames:    []string{"primary"},
 				MaxOperations: 1001,
 			},
 		},
@@ -152,6 +201,7 @@ func TestNewBatchingServerValidatesLimits(t *testing.T) {
 			name:   "queue cannot hold one service request",
 			server: core,
 			options: service.BatchingOptions{
+				StoreNames:          []string{"primary"},
 				MaxQueuedOperations: 999,
 			},
 		},
@@ -159,6 +209,7 @@ func TestNewBatchingServerValidatesLimits(t *testing.T) {
 			name:   "byte queue is smaller than a batch",
 			server: core,
 			options: service.BatchingOptions{
+				StoreNames:     []string{"primary"},
 				MaxBytes:       1024,
 				MaxQueuedBytes: 512,
 			},
@@ -401,6 +452,233 @@ func TestBatchingServerAggregatesAcrossGRPCRPCs(t *testing.T) {
 	assertNoBatchErrors(t, errors)
 	if observed.readCalls.Load() != 1 || observed.maxReadOperations.Load() != requestCount {
 		t.Fatalf("storage reads = %d, max operations = %d", observed.readCalls.Load(), observed.maxReadOperations.Load())
+	}
+}
+
+func TestBatchingServerIsolatesStoreQueues(t *testing.T) {
+	slowBackend := &blockingReadStorage{
+		backend: memory.New(),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	slowObserved := &countingStorage{backend: slowBackend}
+	fastObserved := &countingStorage{backend: memory.New()}
+	backends := map[string]storage.Storage{
+		"slow": slowObserved,
+		"fast": fastObserved,
+	}
+	router, err := storage.NewRouter(backends)
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	serverOptions := storeBatchingTestOptions{
+		storage:       router,
+		storeNames:    []string{"slow", "fast"},
+		maxWait:       time.Second,
+		maxOperations: 1,
+	}
+	server := newStoreBatchingTestServer(t, serverOptions)
+	defer server.Close()
+
+	slowResult := make(chan error, 1)
+	go func() {
+		response, readErr := server.Read(t.Context(), readRequestForStore("slow", "record"))
+		if readErr == nil && response.GetResults()[0].GetStatus() != sink.ReadStatus_READ_STATUS_NOT_FOUND {
+			readErr = errUnexpectedStatus(response.GetResults()[0].GetStatus())
+		}
+		slowResult <- readErr
+	}()
+	select {
+	case <-slowBackend.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow store read did not start")
+	}
+
+	fastContext, cancelFast := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancelFast()
+	fastResponse, err := server.Read(fastContext, readRequestForStore("fast", "record"))
+	if err != nil {
+		t.Fatalf("fast store Read() error = %v", err)
+	}
+	if fastResponse.GetResults()[0].GetStatus() != sink.ReadStatus_READ_STATUS_NOT_FOUND {
+		t.Fatalf("fast store Read() status = %v", fastResponse.GetResults()[0].GetStatus())
+	}
+	if fastObserved.readCalls.Load() != 1 {
+		t.Fatalf("fast storage reads = %d, want 1", fastObserved.readCalls.Load())
+	}
+
+	close(slowBackend.release)
+	select {
+	case err := <-slowResult:
+		if err != nil {
+			t.Fatalf("slow store Read() error = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow store Read() did not finish")
+	}
+}
+
+func TestBatchingServerBatchesEachStoreIndependently(t *testing.T) {
+	const requestsPerStore = 16
+	firstObserved := &countingStorage{backend: memory.New()}
+	secondObserved := &countingStorage{backend: memory.New()}
+	backends := map[string]storage.Storage{
+		"first":  firstObserved,
+		"second": secondObserved,
+	}
+	router, err := storage.NewRouter(backends)
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	serverOptions := storeBatchingTestOptions{
+		storage:       router,
+		storeNames:    []string{"first", "second"},
+		maxWait:       time.Second,
+		maxOperations: requestsPerStore,
+	}
+	server := newStoreBatchingTestServer(t, serverOptions)
+	defer server.Close()
+
+	stores := []string{"first", "second"}
+	requestCount := requestsPerStore * len(stores)
+	errors := make(chan error, requestCount)
+	start := make(chan struct{})
+	var waitGroup sync.WaitGroup
+	waitGroup.Add(requestCount)
+	for _, store := range stores {
+		for index := range requestsPerStore {
+			go func() {
+				defer waitGroup.Done()
+				<-start
+				response, readErr := server.Read(t.Context(), readRequestForStore(store, batchTestKey(index)))
+				if readErr == nil && response.GetResults()[0].GetStatus() != sink.ReadStatus_READ_STATUS_NOT_FOUND {
+					readErr = errUnexpectedStatus(response.GetResults()[0].GetStatus())
+				}
+				errors <- readErr
+			}()
+		}
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errors)
+	assertNoBatchErrors(t, errors)
+	if firstObserved.readCalls.Load() != 1 || firstObserved.maxReadOperations.Load() != requestsPerStore {
+		t.Fatalf("first storage reads = %d, max operations = %d", firstObserved.readCalls.Load(), firstObserved.maxReadOperations.Load())
+	}
+	if secondObserved.readCalls.Load() != 1 || secondObserved.maxReadOperations.Load() != requestsPerStore {
+		t.Fatalf("second storage reads = %d, max operations = %d", secondObserved.readCalls.Load(), secondObserved.maxReadOperations.Load())
+	}
+}
+
+func TestBatchingServerBypassesCrossStoreRequests(t *testing.T) {
+	firstObserved := &countingStorage{backend: memory.New()}
+	secondObserved := &countingStorage{backend: memory.New()}
+	backends := map[string]storage.Storage{
+		"first":  firstObserved,
+		"second": secondObserved,
+	}
+	router, err := storage.NewRouter(backends)
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	serverOptions := storeBatchingTestOptions{
+		storage:       router,
+		storeNames:    []string{"first", "second"},
+		maxWait:       time.Hour,
+		maxOperations: 1000,
+	}
+	server := newStoreBatchingTestServer(t, serverOptions)
+	defer server.Close()
+
+	request := &sink.ReadRequest{
+		Operations: []*sink.ReadOperation{
+			{Address: protoAddressForStore("first", "record")},
+			{Address: protoAddressForStore("second", "record")},
+		},
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	response, err := server.Read(ctx, request)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	for _, result := range response.GetResults() {
+		if result.GetStatus() != sink.ReadStatus_READ_STATUS_NOT_FOUND {
+			t.Fatalf("Read() result = %+v", result)
+		}
+	}
+	if firstObserved.readCalls.Load() != 1 || secondObserved.readCalls.Load() != 1 {
+		t.Fatalf("storage reads = %d, %d", firstObserved.readCalls.Load(), secondObserved.readCalls.Load())
+	}
+
+	writeRequest := &sink.WriteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
+		Operations: []*sink.WriteOperation{
+			putWriteOperationForStore("first", "record", "first"),
+			putWriteOperationForStore("second", "record", "second"),
+		},
+	}
+	writeResponse, err := server.Write(ctx, writeRequest)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	for _, result := range writeResponse.GetResults() {
+		if result.GetStatus() != sink.WriteStatus_WRITE_STATUS_APPLIED {
+			t.Fatalf("Write() result = %+v", result)
+		}
+	}
+	if firstObserved.writeCalls.Load() != 1 || secondObserved.writeCalls.Load() != 1 {
+		t.Fatalf("storage writes = %d, %d", firstObserved.writeCalls.Load(), secondObserved.writeCalls.Load())
+	}
+
+	deleteRequest := &sink.DeleteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
+		Operations: []*sink.DeleteOperation{
+			{Address: protoAddressForStore("first", "record")},
+			{Address: protoAddressForStore("second", "record")},
+		},
+	}
+	deleteResponse, err := server.Delete(ctx, deleteRequest)
+	if err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	for _, result := range deleteResponse.GetResults() {
+		if result.GetStatus() != sink.DeleteStatus_DELETE_STATUS_APPLIED {
+			t.Fatalf("Delete() result = %+v", result)
+		}
+	}
+	if firstObserved.deleteCalls.Load() != 1 || secondObserved.deleteCalls.Load() != 1 {
+		t.Fatalf("storage deletes = %d, %d", firstObserved.deleteCalls.Load(), secondObserved.deleteCalls.Load())
+	}
+}
+
+func TestBatchingServerBypassesUnknownStores(t *testing.T) {
+	observed := &countingStorage{backend: memory.New()}
+	backends := map[string]storage.Storage{"primary": observed}
+	router, err := storage.NewRouter(backends)
+	if err != nil {
+		t.Fatalf("NewRouter() error = %v", err)
+	}
+	serverOptions := storeBatchingTestOptions{
+		storage:       router,
+		storeNames:    []string{"primary"},
+		maxWait:       time.Hour,
+		maxOperations: 1000,
+	}
+	server := newStoreBatchingTestServer(t, serverOptions)
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	response, err := server.Read(ctx, readRequestForStore("unknown", "record"))
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if response.GetResults()[0].GetStatus() != sink.ReadStatus_READ_STATUS_FAILED {
+		t.Fatalf("Read() result = %+v", response.GetResults()[0])
+	}
+	if observed.readCalls.Load() != 0 {
+		t.Fatalf("configured storage reads = %d, want 0", observed.readCalls.Load())
 	}
 }
 
@@ -758,6 +1036,7 @@ func BenchmarkSingleOperationReads(b *testing.B) {
 		observed := &countingStorage{backend: backend}
 		core := newTestServer(b, observed, nil)
 		options := service.BatchingOptions{
+			StoreNames:          []string{"primary"},
 			MaxWait:             100 * time.Microsecond,
 			MaxOperations:       1000,
 			MaxBytes:            16 << 20,
@@ -798,6 +1077,7 @@ func newBatchingTestServer(
 	t.Helper()
 	core := newTestServer(t, store, publisher)
 	options := service.BatchingOptions{
+		StoreNames:          []string{"primary"},
 		MaxWait:             100 * time.Millisecond,
 		MaxOperations:       maxOperations,
 		MaxBytes:            16 << 20,
@@ -819,6 +1099,7 @@ func newLongWaitBatchingTestServer(
 	t.Helper()
 	core := newTestServer(t, store, publisher)
 	options := service.BatchingOptions{
+		StoreNames:          []string{"primary"},
 		MaxWait:             time.Hour,
 		MaxOperations:       1000,
 		MaxBytes:            16 << 20,
@@ -830,6 +1111,45 @@ func newLongWaitBatchingTestServer(
 		t.Fatalf("NewBatchingServer() error = %v", err)
 	}
 	return server
+}
+
+func newStoreBatchingTestServer(
+	t *testing.T,
+	configured storeBatchingTestOptions,
+) *service.BatchingServer {
+	t.Helper()
+	core := newTestServer(t, configured.storage, nil)
+	options := service.BatchingOptions{
+		StoreNames:          configured.storeNames,
+		MaxWait:             configured.maxWait,
+		MaxOperations:       configured.maxOperations,
+		MaxBytes:            16 << 20,
+		MaxQueuedOperations: 1000,
+		MaxQueuedBytes:      128 << 20,
+	}
+	server, err := service.NewBatchingServer(core, options)
+	if err != nil {
+		t.Fatalf("NewBatchingServer() error = %v", err)
+	}
+	return server
+}
+
+func readRequestForStore(store string, key string) *sink.ReadRequest {
+	operation := &sink.ReadOperation{Address: protoAddressForStore(store, key)}
+	request := &sink.ReadRequest{Operations: []*sink.ReadOperation{operation}}
+	return request
+}
+
+func protoAddressForStore(store string, key string) *sink.RecordAddress {
+	address := protoAddress(key)
+	address.Store = store
+	return address
+}
+
+func putWriteOperationForStore(store string, key string, value string) *sink.WriteOperation {
+	operation := putWriteOperation(key, value)
+	operation.Address.Store = store
+	return operation
 }
 
 func batchTestKey(index int) string {

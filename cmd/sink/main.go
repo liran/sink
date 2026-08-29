@@ -156,7 +156,12 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 	if loaded.mode == modeServer || loaded.mode == modeAll {
 		var grpcService sink.SinkServer = sinkServer
 		if loaded.batchingEnabled {
+			storeNames := make([]string, len(loaded.storages))
+			for index, configured := range loaded.storages {
+				storeNames[index] = configured.name
+			}
 			batchingOptions := service.BatchingOptions{
+				StoreNames:          storeNames,
 				MaxWait:             loaded.batchingMaxWait,
 				MaxOperations:       loaded.batchingMaxOperations,
 				MaxBytes:            loaded.batchingMaxBytes,

@@ -119,11 +119,12 @@ configured receives a per-operation failure.
 ## Synchronous request batching
 
 In `server` and `all` modes, Sink coalesces concurrent one-operation RPCs into
-bounded, process-local batches by default. When batching is enabled, every
-`Read` uses this path. `Write` and `Delete` use it for `WAIT_UNTIL_APPLIED` and
-`WAIT_UNTIL_VISIBLE`; `RETURN_AFTER_ACCEPTED` bypasses it because Kafka already
-batches asynchronous mutations. Read, write, and delete have independent
-queues, so a slow write batch does not block reads or deletes.
+bounded, process-local batches for each configured store by default. When
+batching is enabled, every single-store `Read` uses this path. `Write` and
+`Delete` use it for `WAIT_UNTIL_APPLIED` and `WAIT_UNTIL_VISIBLE`;
+`RETURN_AFTER_ACCEPTED` bypasses it because Kafka already batches asynchronous
+mutations. Read, write, and delete have independent queues within each store.
+A slow batch therefore does not block another method or another store.
 
 The first queued request starts `service.batching.max_wait_milliseconds`.
 Collection stops when that timer expires or adding another request would cross
@@ -131,19 +132,26 @@ the operation or encoded-byte target. A single valid RPC larger than a batch
 target still runs alone. If a batch contains both synchronous mutation modes,
 the entire storage request waits until visible, preserving the stronger caller
 contract. Lua program declarations remain scoped to their original write RPC.
+An explicit request containing operations for multiple stores bypasses the
+micro-batch queues and goes directly to the storage router, which already
+executes store groups concurrently. This avoids splitting one RPC into partial
+queue admissions with ambiguous failure semantics.
 
-Queue operation and byte limits bound memory during a storage slowdown. A new
-request that would cross either limit fails with gRPC `RESOURCE_EXHAUSTED` and
-is not applied. Requests canceled before dispatch are omitted. Once a batch is
-dispatched, other live callers in that batch continue even if one caller
-cancels. Graceful shutdown first drains active gRPC calls, then stops the batch
-dispatchers.
+Queue operation and byte limits apply separately to every configured store and
+bound memory during a storage slowdown. One store cannot consume another
+store's queue allowance; the process-wide maximum is the per-store limit
+multiplied by the fixed number of configured stores and the three methods. A
+new single-store request that would cross its queue's limit fails with gRPC
+`RESOURCE_EXHAUSTED` and is not applied. Requests canceled before dispatch are
+omitted. Once a batch is dispatched, other live callers in that batch continue
+even if one caller cancels. Graceful shutdown first drains active gRPC calls,
+then stops every store's batch dispatchers.
 
-Batching happens only among requests reaching the same Sink process. More pods
-increase aggregate queue and storage concurrency, but they do not share a
-batcher. Explicit client-side batches still remove gRPC framing, scheduling,
-and serialization overhead and are therefore more efficient when the caller
-already has several records available.
+Batching happens only among requests for the same store reaching the same Sink
+process. More pods increase aggregate queue and storage concurrency, but they
+do not share a batcher. Explicit client-side batches still remove gRPC framing,
+scheduling, and serialization overhead and are therefore more efficient when
+the caller already has several records available.
 
 ## Prometheus metrics
 
@@ -230,8 +238,8 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `service.batching.max_wait_milliseconds` | positive integer | No | `2` | Integer greater than `0` | Maximum collection delay measured from the first request in a batch. |
 | `service.batching.max_operations` | positive integer | No | `service.max_operations` | Integer from `1` through `service.max_operations` | Operation target for one automatically formed batch. |
 | `service.batching.max_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Encoded-byte target for one automatically formed batch; one larger valid RPC still runs alone. |
-| `service.batching.max_queued_operations` | positive integer | No | max(`10000`, `service.max_operations`) | Integer at least `service.max_operations` and `service.batching.max_operations` | Maximum operations waiting across RPCs in each method queue. |
-| `service.batching.max_queued_bytes` | positive integer | No | max(`134217728`, `grpc.max_receive_message_bytes`) | Integer at least `grpc.max_receive_message_bytes` and `service.batching.max_bytes` | Maximum encoded request bytes waiting in each method queue. |
+| `service.batching.max_queued_operations` | positive integer | No | max(`10000`, `service.max_operations`) | Integer at least `service.max_operations` and `service.batching.max_operations` | Maximum operations waiting in each store and method queue. |
+| `service.batching.max_queued_bytes` | positive integer | No | max(`134217728`, `grpc.max_receive_message_bytes`) | Integer at least `grpc.max_receive_message_bytes` and `service.batching.max_bytes` | Maximum encoded request bytes waiting in each store and method queue. |
 | `service.lua.timeout_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Maximum wall-clock duration of one Lua execution. |
 | `service.lua.max_source_bytes` | positive integer | No | `65536` | Integer greater than `0` | Maximum Lua source size per merge operation. |
 | `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum encoded JSON merge result size. |

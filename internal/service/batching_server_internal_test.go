@@ -53,3 +53,37 @@ func TestSplitDeleteResponseRejectsInvalidResultCount(t *testing.T) {
 		t.Fatalf("split result = %+v", result)
 	}
 }
+
+func TestRequestStoreClassification(t *testing.T) {
+	primary := &sink.RecordAddress{Store: "primary"}
+	secondary := &sink.RecordAddress{Store: "secondary"}
+	readRequest := &sink.ReadRequest{
+		Operations: []*sink.ReadOperation{
+			{Address: primary},
+			{Address: primary},
+		},
+	}
+	store, same := requestStore(readRequest.GetOperations())
+	if !same || store != "primary" {
+		t.Fatalf("requestStore(Read) = %q, %t", store, same)
+	}
+
+	writeRequest := &sink.WriteRequest{
+		Operations: []*sink.WriteOperation{
+			{Address: primary},
+			{Address: secondary},
+		},
+	}
+	store, same = requestStore(writeRequest.GetOperations())
+	if same || store != "" {
+		t.Fatalf("requestStore(Write) = %q, %t", store, same)
+	}
+
+	deleteRequest := &sink.DeleteRequest{
+		Operations: []*sink.DeleteOperation{nil},
+	}
+	store, same = requestStore(deleteRequest.GetOperations())
+	if same || store != "" {
+		t.Fatalf("requestStore(Delete) = %q, %t", store, same)
+	}
+}

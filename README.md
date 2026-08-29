@@ -20,13 +20,15 @@ multi-record request is not a transaction. Operations for the same record are
 executed in request order, while different records may execute concurrently.
 
 The server automatically coalesces concurrent one-element `Read` calls and
-synchronous `Write` and `Delete` calls into bounded, process-local batches.
-This lets many crawler threads use simple single-record RPCs while storage
-adapters still receive batch work. The short collection window, batch limits,
-and queue limits are configurable. `RETURN_AFTER_ACCEPTED` mutations bypass
-this layer because Kafka already batches the asynchronous path. Explicit
-client batches remain useful because they avoid per-RPC transport overhead,
-and aggregation does not cross Sink pods.
+synchronous `Write` and `Delete` calls into bounded, process-local batches for
+each configured store. A slow or busy store cannot block another store's batch
+queue. This lets many crawler threads use simple single-record RPCs while
+storage adapters still receive batch work. The short collection window, batch
+limits, and per-store queue limits are configurable. `RETURN_AFTER_ACCEPTED`
+mutations bypass this layer because Kafka already batches the asynchronous
+path. Explicit multi-store requests go directly to the concurrent storage
+router. Explicit client batches remain useful because they avoid per-RPC
+transport overhead, and aggregation does not cross stores or Sink pods.
 
 `Write` and `Delete` support three completion modes:
 

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
@@ -22,6 +23,7 @@ const (
 )
 
 type BatchingOptions struct {
+	StoreNames          []string
 	MaxWait             time.Duration
 	MaxOperations       int
 	MaxBytes            int
@@ -34,9 +36,9 @@ type BatchingServer struct {
 	sink.UnimplementedSinkServer
 
 	server  *Server
-	reads   *requestBatcher[*sink.ReadRequest, *sink.ReadResponse]
-	writes  *requestBatcher[*sink.WriteRequest, *sink.WriteResponse]
-	deletes *requestBatcher[*sink.DeleteRequest, *sink.DeleteResponse]
+	reads   map[string]*requestBatcher[*sink.ReadRequest, *sink.ReadResponse]
+	writes  map[string]*requestBatcher[*sink.WriteRequest, *sink.WriteResponse]
+	deletes map[string]*requestBatcher[*sink.DeleteRequest, *sink.DeleteResponse]
 }
 
 func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, error) {
@@ -59,7 +61,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 		Execute:             batching.executeReads,
 		Metrics:             normalized.Metrics,
 	}
-	batching.reads = newRequestBatcher(readOptions)
+	batching.reads = newStoreRequestBatchers(normalized.StoreNames, readOptions)
 
 	writeOptions := requestBatcherOptions[*sink.WriteRequest, *sink.WriteResponse]{
 		Method:              "Write",
@@ -71,7 +73,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 		Execute:             batching.executeWrites,
 		Metrics:             normalized.Metrics,
 	}
-	batching.writes = newRequestBatcher(writeOptions)
+	batching.writes = newStoreRequestBatchers(normalized.StoreNames, writeOptions)
 
 	deleteOptions := requestBatcherOptions[*sink.DeleteRequest, *sink.DeleteResponse]{
 		Method:              "Delete",
@@ -83,11 +85,28 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 		Execute:             batching.executeDeletes,
 		Metrics:             normalized.Metrics,
 	}
-	batching.deletes = newRequestBatcher(deleteOptions)
+	batching.deletes = newStoreRequestBatchers(normalized.StoreNames, deleteOptions)
 	return batching, nil
 }
 
+func newStoreRequestBatchers[Request any, Response any](
+	stores []string,
+	opts requestBatcherOptions[Request, Response],
+) map[string]*requestBatcher[Request, Response] {
+	batchers := make(map[string]*requestBatcher[Request, Response], len(stores))
+	for _, store := range stores {
+		batchers[store] = newRequestBatcher(opts)
+	}
+	return batchers
+}
+
 func normalizeBatchingOptions(server *Server, opts BatchingOptions) (BatchingOptions, error) {
+	storeNames, err := normalizeBatchingStoreNames(opts.StoreNames)
+	if err != nil {
+		var empty BatchingOptions
+		return empty, err
+	}
+	opts.StoreNames = storeNames
 	if opts.MaxWait < 0 || opts.MaxOperations < 0 || opts.MaxBytes < 0 ||
 		opts.MaxQueuedOperations < 0 || opts.MaxQueuedBytes < 0 {
 		var empty BatchingOptions
@@ -123,13 +142,49 @@ func normalizeBatchingOptions(server *Server, opts BatchingOptions) (BatchingOpt
 	return opts, nil
 }
 
+func normalizeBatchingStoreNames(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("create synchronous batching server: at least one store name is required")
+	}
+	normalized := make([]string, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	for _, value := range raw {
+		store := strings.TrimSpace(value)
+		if store == "" {
+			return nil, errors.New("create synchronous batching server: store names cannot be empty")
+		}
+		if _, exists := seen[store]; exists {
+			return nil, fmt.Errorf("create synchronous batching server: duplicate store name %q", store)
+		}
+		seen[store] = struct{}{}
+		normalized = append(normalized, store)
+	}
+	return normalized, nil
+}
+
 func (s *BatchingServer) Close() {
-	s.reads.stop()
-	s.writes.stop()
-	s.deletes.stop()
-	s.reads.wait()
-	s.writes.wait()
-	s.deletes.wait()
+	stopStoreRequestBatchers(s.reads)
+	stopStoreRequestBatchers(s.writes)
+	stopStoreRequestBatchers(s.deletes)
+	waitStoreRequestBatchers(s.reads)
+	waitStoreRequestBatchers(s.writes)
+	waitStoreRequestBatchers(s.deletes)
+}
+
+func stopStoreRequestBatchers[Request any, Response any](
+	batchers map[string]*requestBatcher[Request, Response],
+) {
+	for _, batcher := range batchers {
+		batcher.stop()
+	}
+}
+
+func waitStoreRequestBatchers[Request any, Response any](
+	batchers map[string]*requestBatcher[Request, Response],
+) {
+	for _, batcher := range batchers {
+		batcher.wait()
+	}
 }
 
 func (s *BatchingServer) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadResponse, error) {
@@ -139,7 +194,12 @@ func (s *BatchingServer) Read(ctx context.Context, req *sink.ReadRequest) (*sink
 	if err := s.server.validateOperationCount(len(req.GetOperations())); err != nil {
 		return nil, err
 	}
-	return s.reads.Submit(ctx, req, len(req.GetOperations()), req.SizeVT())
+	store, singleStore := requestStore(req.GetOperations())
+	batcher, configured := s.reads[store]
+	if !singleStore || !configured {
+		return s.server.Read(ctx, req)
+	}
+	return batcher.Submit(ctx, req, len(req.GetOperations()), req.SizeVT())
 }
 
 func (s *BatchingServer) Write(ctx context.Context, req *sink.WriteRequest) (*sink.WriteResponse, error) {
@@ -155,12 +215,17 @@ func (s *BatchingServer) Write(ctx context.Context, req *sink.WriteRequest) (*si
 	if req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED {
 		return s.server.Write(ctx, req)
 	}
+	store, singleStore := requestStore(req.GetOperations())
+	batcher, configured := s.writes[store]
+	if !singleStore || !configured {
+		return s.server.Write(ctx, req)
+	}
 	programs, err := parseLuaPrograms(req.GetLuaPrograms())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "write request Lua programs: %v", err)
 	}
 	normalized := normalizeSynchronousWriteRequest(req, programs)
-	return s.writes.Submit(ctx, normalized, len(normalized.GetOperations()), req.SizeVT())
+	return batcher.Submit(ctx, normalized, len(normalized.GetOperations()), req.SizeVT())
 }
 
 func normalizeSynchronousWriteRequest(req *sink.WriteRequest, programs luaPrograms) *sink.WriteRequest {
@@ -218,7 +283,38 @@ func (s *BatchingServer) Delete(ctx context.Context, req *sink.DeleteRequest) (*
 	if req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED {
 		return s.server.Delete(ctx, req)
 	}
-	return s.deletes.Submit(ctx, req, len(req.GetOperations()), req.SizeVT())
+	store, singleStore := requestStore(req.GetOperations())
+	batcher, configured := s.deletes[store]
+	if !singleStore || !configured {
+		return s.server.Delete(ctx, req)
+	}
+	return batcher.Submit(ctx, req, len(req.GetOperations()), req.SizeVT())
+}
+
+type addressedOperation interface {
+	GetAddress() *sink.RecordAddress
+}
+
+func requestStore[Operation addressedOperation](operations []Operation) (string, bool) {
+	store := ""
+	for _, operation := range operations {
+		var same bool
+		store, same = addRequestStore(store, operation.GetAddress())
+		if !same {
+			return "", false
+		}
+	}
+	return store, store != ""
+}
+
+func addRequestStore(current string, address *sink.RecordAddress) (string, bool) {
+	if address == nil || address.GetStore() == "" {
+		return "", false
+	}
+	if current != "" && current != address.GetStore() {
+		return "", false
+	}
+	return address.GetStore(), true
 }
 
 func (s *BatchingServer) executeReads(
