@@ -60,6 +60,13 @@ storages:
 service:
   max_operations: 1000
   max_merge_attempts: 3
+  batching:
+    enabled: true
+    max_wait_milliseconds: 2
+    max_operations: 1000
+    max_bytes: 16777216
+    max_queued_operations: 10000
+    max_queued_bytes: 134217728
   lua:
     timeout_milliseconds: 100
     max_source_bytes: 65536
@@ -109,6 +116,35 @@ can route operations in one batch to different storage instances and returns
 results in the original operation order. An address whose `store` is not
 configured receives a per-operation failure.
 
+## Synchronous request batching
+
+In `server` and `all` modes, Sink coalesces concurrent one-operation RPCs into
+bounded, process-local batches by default. When batching is enabled, every
+`Read` uses this path. `Write` and `Delete` use it for `WAIT_UNTIL_APPLIED` and
+`WAIT_UNTIL_VISIBLE`; `RETURN_AFTER_ACCEPTED` bypasses it because Kafka already
+batches asynchronous mutations. Read, write, and delete have independent
+queues, so a slow write batch does not block reads or deletes.
+
+The first queued request starts `service.batching.max_wait_milliseconds`.
+Collection stops when that timer expires or adding another request would cross
+the operation or encoded-byte target. A single valid RPC larger than a batch
+target still runs alone. If a batch contains both synchronous mutation modes,
+the entire storage request waits until visible, preserving the stronger caller
+contract. Lua program declarations remain scoped to their original write RPC.
+
+Queue operation and byte limits bound memory during a storage slowdown. A new
+request that would cross either limit fails with gRPC `RESOURCE_EXHAUSTED` and
+is not applied. Requests canceled before dispatch are omitted. Once a batch is
+dispatched, other live callers in that batch continue even if one caller
+cancels. Graceful shutdown first drains active gRPC calls, then stops the batch
+dispatchers.
+
+Batching happens only among requests reaching the same Sink process. More pods
+increase aggregate queue and storage concurrency, but they do not share a
+batcher. Explicit client-side batches still remove gRPC framing, scheduling,
+and serialization overhead and are therefore more efficient when the caller
+already has several records available.
+
 ## Prometheus metrics
 
 Set `prometheus.address` to open a separate HTTP listener. Prometheus metrics
@@ -129,6 +165,14 @@ Sink metrics:
 | `sink_grpc_server_requests_total` | counter | `method`, `code` | Completed Sink gRPC requests by method and canonical gRPC status code. |
 | `sink_grpc_server_request_duration_seconds` | histogram | `method` | End-to-end Sink gRPC request latency. |
 | `sink_grpc_server_operation_results_total` | counter | `method`, `status` | Per-operation results returned inside batch responses. |
+| `sink_batcher_batches_total` | counter | `method`, `reason` | Synchronous batches dispatched by flush reason. |
+| `sink_batcher_operations` | histogram | `method` | Operations represented by each dispatched batch. |
+| `sink_batcher_bytes` | histogram | `method` | Original encoded request bytes represented by each dispatched batch. |
+| `sink_batcher_queue_duration_seconds` | histogram | `method` | Time the oldest request waited before its batch started. |
+| `sink_batcher_execution_duration_seconds` | histogram | `method` | Core service execution time for a dispatched batch. |
+| `sink_batcher_queued_operations` | gauge | `method` | Operations currently waiting for dispatch. |
+| `sink_batcher_queued_bytes` | gauge | `method` | Encoded request bytes currently waiting for dispatch. |
+| `sink_batcher_rejected_total` | counter | `method`, `reason` | Requests rejected before dispatch, including queue exhaustion. |
 | `sink_kafka_publisher_records_total` | counter | `status` | Mutation records accepted or rejected by Kafka. |
 | `sink_kafka_publisher_duration_seconds` | histogram | none | Synchronous Kafka publish batch latency. |
 | `sink_kafka_worker_mutations_total` | counter | `status` | Mutations applied or failed by workers. |
@@ -182,6 +226,12 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].search.api_key` | string | No | empty | Any API key accepted by the search service | API key used instead of basic authentication. |
 | `service.max_operations` | positive integer | No | `1000` | Integer greater than `0` | Maximum operation count accepted in one Read, Write, or Delete batch request. |
 | `service.max_merge_attempts` | positive integer | No | `3` | Integer greater than `0` | Maximum attempts for a merge after revision conflicts. |
+| `service.batching.enabled` | boolean | No | `true` | `true`, `false` | Enables process-local batching for reads and synchronous mutations in `server` and `all` modes. |
+| `service.batching.max_wait_milliseconds` | positive integer | No | `2` | Integer greater than `0` | Maximum collection delay measured from the first request in a batch. |
+| `service.batching.max_operations` | positive integer | No | `service.max_operations` | Integer from `1` through `service.max_operations` | Operation target for one automatically formed batch. |
+| `service.batching.max_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Encoded-byte target for one automatically formed batch; one larger valid RPC still runs alone. |
+| `service.batching.max_queued_operations` | positive integer | No | max(`10000`, `service.max_operations`) | Integer at least `service.max_operations` and `service.batching.max_operations` | Maximum operations waiting across RPCs in each method queue. |
+| `service.batching.max_queued_bytes` | positive integer | No | max(`134217728`, `grpc.max_receive_message_bytes`) | Integer at least `grpc.max_receive_message_bytes` and `service.batching.max_bytes` | Maximum encoded request bytes waiting in each method queue. |
 | `service.lua.timeout_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Maximum wall-clock duration of one Lua execution. |
 | `service.lua.max_source_bytes` | positive integer | No | `65536` | Integer greater than `0` | Maximum Lua source size per merge operation. |
 | `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum encoded JSON merge result size. |

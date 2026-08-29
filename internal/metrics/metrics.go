@@ -22,11 +22,28 @@ type Metrics struct {
 	requests               *prometheus.CounterVec
 	requestDuration        *prometheus.HistogramVec
 	operationResults       *prometheus.CounterVec
+	batcherBatches         *prometheus.CounterVec
+	batcherOperations      *prometheus.HistogramVec
+	batcherBytes           *prometheus.HistogramVec
+	batcherQueueDuration   *prometheus.HistogramVec
+	batcherExecution       *prometheus.HistogramVec
+	batcherQueuedOps       *prometheus.GaugeVec
+	batcherQueuedBytes     *prometheus.GaugeVec
+	batcherRejected        *prometheus.CounterVec
 	kafkaPublished         *prometheus.CounterVec
 	kafkaPublishDuration   prometheus.Histogram
 	kafkaWorkerMutations   *prometheus.CounterVec
 	kafkaWorkerRetries     prometheus.Counter
 	kafkaWorkerDeadLetters prometheus.Counter
+}
+
+type BatchObservation struct {
+	Method            string
+	Reason            string
+	Operations        int
+	Bytes             int
+	QueueDuration     time.Duration
+	ExecutionDuration time.Duration
 }
 
 func New(version string) (*Metrics, error) {
@@ -52,6 +69,66 @@ func New(version string) (*Metrics, error) {
 		Help:      "Total number of per-operation results returned by Sink gRPC requests.",
 	}
 	operationResults := prometheus.NewCounterVec(resultOptions, []string{"method", "status"})
+	batchOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "batches_total",
+		Help:      "Total number of synchronous batches by flush reason.",
+	}
+	batcherBatches := prometheus.NewCounterVec(batchOptions, []string{"method", "reason"})
+	batchOperationOptions := prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "operations",
+		Help:      "Number of operations in each synchronous batch.",
+		Buckets:   prometheus.ExponentialBuckets(1, 2, 11),
+	}
+	batcherOperations := prometheus.NewHistogramVec(batchOperationOptions, []string{"method"})
+	batchByteOptions := prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "bytes",
+		Help:      "Encoded request bytes represented by each synchronous batch.",
+		Buckets:   prometheus.ExponentialBuckets(1024, 4, 9),
+	}
+	batcherBytes := prometheus.NewHistogramVec(batchByteOptions, []string{"method"})
+	batchQueueDurationOptions := prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "queue_duration_seconds",
+		Help:      "Oldest request queue duration before a synchronous batch starts.",
+		Buckets:   prometheus.ExponentialBuckets(0.00025, 2, 12),
+	}
+	batcherQueueDuration := prometheus.NewHistogramVec(batchQueueDurationOptions, []string{"method"})
+	batchExecutionOptions := prometheus.HistogramOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "execution_duration_seconds",
+		Help:      "Execution duration of synchronous batches.",
+		Buckets:   prometheus.DefBuckets,
+	}
+	batcherExecution := prometheus.NewHistogramVec(batchExecutionOptions, []string{"method"})
+	queuedOperationOptions := prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "queued_operations",
+		Help:      "Current number of synchronous operations waiting for execution.",
+	}
+	batcherQueuedOps := prometheus.NewGaugeVec(queuedOperationOptions, []string{"method"})
+	queuedByteOptions := prometheus.GaugeOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "queued_bytes",
+		Help:      "Current encoded request bytes waiting for synchronous execution.",
+	}
+	batcherQueuedBytes := prometheus.NewGaugeVec(queuedByteOptions, []string{"method"})
+	rejectedOptions := prometheus.CounterOpts{
+		Namespace: namespace,
+		Subsystem: "batcher",
+		Name:      "rejected_total",
+		Help:      "Total number of synchronous requests rejected before batching.",
+	}
+	batcherRejected := prometheus.NewCounterVec(rejectedOptions, []string{"method", "reason"})
 	publishedOptions := prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: "kafka_publisher",
@@ -105,6 +182,14 @@ func New(version string) (*Metrics, error) {
 		requests,
 		requestDuration,
 		operationResults,
+		batcherBatches,
+		batcherOperations,
+		batcherBytes,
+		batcherQueueDuration,
+		batcherExecution,
+		batcherQueuedOps,
+		batcherQueuedBytes,
+		batcherRejected,
 		kafkaPublished,
 		kafkaPublishDuration,
 		kafkaWorkerMutations,
@@ -121,6 +206,14 @@ func New(version string) (*Metrics, error) {
 		requests:               requests,
 		requestDuration:        requestDuration,
 		operationResults:       operationResults,
+		batcherBatches:         batcherBatches,
+		batcherOperations:      batcherOperations,
+		batcherBytes:           batcherBytes,
+		batcherQueueDuration:   batcherQueueDuration,
+		batcherExecution:       batcherExecution,
+		batcherQueuedOps:       batcherQueuedOps,
+		batcherQueuedBytes:     batcherQueuedBytes,
+		batcherRejected:        batcherRejected,
 		kafkaPublished:         kafkaPublished,
 		kafkaPublishDuration:   kafkaPublishDuration,
 		kafkaWorkerMutations:   kafkaWorkerMutations,
@@ -128,6 +221,32 @@ func New(version string) (*Metrics, error) {
 		kafkaWorkerDeadLetters: kafkaWorkerDeadLetters,
 	}
 	return metrics, nil
+}
+
+func (m *Metrics) AdjustBatchQueue(method string, operations int, bytes int) {
+	if m == nil {
+		return
+	}
+	m.batcherQueuedOps.WithLabelValues(method).Add(float64(operations))
+	m.batcherQueuedBytes.WithLabelValues(method).Add(float64(bytes))
+}
+
+func (m *Metrics) ObserveBatch(observation BatchObservation) {
+	if m == nil {
+		return
+	}
+	m.batcherBatches.WithLabelValues(observation.Method, observation.Reason).Inc()
+	m.batcherOperations.WithLabelValues(observation.Method).Observe(float64(observation.Operations))
+	m.batcherBytes.WithLabelValues(observation.Method).Observe(float64(observation.Bytes))
+	m.batcherQueueDuration.WithLabelValues(observation.Method).Observe(observation.QueueDuration.Seconds())
+	m.batcherExecution.WithLabelValues(observation.Method).Observe(observation.ExecutionDuration.Seconds())
+}
+
+func (m *Metrics) ObserveBatchRejected(method string, reason string) {
+	if m == nil {
+		return
+	}
+	m.batcherRejected.WithLabelValues(method, reason).Inc()
 }
 
 func (m *Metrics) ObserveKafkaPublish(duration time.Duration, accepted int, failed int) {

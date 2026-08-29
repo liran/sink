@@ -33,6 +33,11 @@ storages:
 	if loaded.maxOperations != 1000 || loaded.maxMergeAttempts != 3 || loaded.shutdownTimeout != 15*time.Second {
 		t.Fatalf("loadConfig() service defaults = %#v", loaded)
 	}
+	if !loaded.batchingEnabled || loaded.batchingMaxWait != 2*time.Millisecond ||
+		loaded.batchingMaxOperations != 1000 || loaded.batchingMaxBytes != 16<<20 ||
+		loaded.batchingMaxQueuedOps != 10_000 || loaded.batchingMaxQueuedBytes != 128<<20 {
+		t.Fatalf("loadConfig() batching defaults = %#v", loaded)
+	}
 	if loaded.luaOptions.Timeout != 100*time.Millisecond || loaded.luaOptions.MaxSourceBytes != 64<<10 ||
 		loaded.luaOptions.MaxResultBytes != 16<<20 || loaded.luaOptions.MaxCachedPrograms != 256 ||
 		loaded.luaOptions.MaxInstructions != 1_000_000 {
@@ -43,6 +48,78 @@ storages:
 	}
 	if loaded.kafkaMaxPollRecords != 500 || loaded.kafkaMaxRetryAttempts != 10 || loaded.kafkaRetryBackoff != 100*time.Millisecond || loaded.kafkaMaxRetryBackoff != 10*time.Second || len(loaded.kafkaBrokers) != 0 || loaded.kafkaTopic != "" {
 		t.Fatalf("loadConfig() Kafka configuration = %#v", loaded)
+	}
+}
+
+func TestLoadConfigBatchingSettings(t *testing.T) {
+	path := writeConfig(t, `
+grpc:
+  max_receive_message_bytes: 1048576
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+service:
+  max_operations: 2000
+  batching:
+    enabled: false
+    max_wait_milliseconds: 5
+    max_operations: 500
+    max_bytes: 524288
+    max_queued_operations: 2500
+    max_queued_bytes: 2097152
+`)
+	loaded, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	if loaded.batchingEnabled || loaded.batchingMaxWait != 5*time.Millisecond ||
+		loaded.batchingMaxOperations != 500 || loaded.batchingMaxBytes != 524288 ||
+		loaded.batchingMaxQueuedOps != 2500 || loaded.batchingMaxQueuedBytes != 2097152 {
+		t.Fatalf("loadConfig() batching settings = %#v", loaded)
+	}
+}
+
+func TestLoadConfigRejectsUnsafeBatchingLimits(t *testing.T) {
+	tests := []struct {
+		name      string
+		batching  string
+		wantError string
+	}{
+		{
+			name:      "batch exceeds service operation limit",
+			batching:  "max_operations: 1001",
+			wantError: "service.batching.max_operations cannot exceed service.max_operations",
+		},
+		{
+			name:      "queue cannot hold one request",
+			batching:  "max_queued_operations: 999",
+			wantError: "service.batching.max_queued_operations must cover one server request and one batch",
+		},
+		{
+			name:      "byte queue cannot hold one gRPC message",
+			batching:  "max_queued_bytes: 1048576",
+			wantError: "service.batching.max_queued_bytes must cover one gRPC request and one batch",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contents := `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+service:
+  batching:
+    ` + test.batching + "\n"
+			path := writeConfig(t, contents)
+			_, err := loadConfig(path)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("loadConfig() error = %v", err)
+			}
+		})
 	}
 }
 

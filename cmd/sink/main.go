@@ -93,6 +93,7 @@ type application struct {
 	storage         storagecontract.Storage
 	publisher       *queuekafka.Publisher
 	worker          *queuekafka.Worker
+	batchingServer  *service.BatchingServer
 	grpcServer      *grpc.Server
 	health          *health.Server
 	listener        net.Listener
@@ -153,7 +154,24 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		return nil, err
 	}
 	if loaded.mode == modeServer || loaded.mode == modeAll {
-		if err := app.configureGRPC(sinkServer, observed); err != nil {
+		var grpcService sink.SinkServer = sinkServer
+		if loaded.batchingEnabled {
+			batchingOptions := service.BatchingOptions{
+				MaxWait:             loaded.batchingMaxWait,
+				MaxOperations:       loaded.batchingMaxOperations,
+				MaxBytes:            loaded.batchingMaxBytes,
+				MaxQueuedOperations: loaded.batchingMaxQueuedOps,
+				MaxQueuedBytes:      loaded.batchingMaxQueuedBytes,
+				Metrics:             observed,
+			}
+			app.batchingServer, err = service.NewBatchingServer(sinkServer, batchingOptions)
+			if err != nil {
+				app.close()
+				return nil, err
+			}
+			grpcService = app.batchingServer
+		}
+		if err := app.configureGRPC(grpcService, observed); err != nil {
 			app.close()
 			return nil, err
 		}
@@ -284,7 +302,7 @@ func openSearchStorage(ctx context.Context, configured backendConfig) (openedBac
 	return opened, nil
 }
 
-func (a *application) configureGRPC(server *service.Server, observed *sinkmetrics.Metrics) error {
+func (a *application) configureGRPC(server sink.SinkServer, observed *sinkmetrics.Metrics) error {
 	listener, err := net.Listen("tcp", a.config.grpcAddress)
 	if err != nil {
 		return fmt.Errorf("listen for gRPC: %w", err)
@@ -411,6 +429,9 @@ func (a *application) close() {
 	}
 	if a.listener != nil {
 		_ = a.listener.Close()
+	}
+	if a.batchingServer != nil {
+		a.batchingServer.Close()
 	}
 	if a.metricsServer != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), a.config.shutdownTimeout)

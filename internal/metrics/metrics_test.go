@@ -77,6 +77,18 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 	observed.ObserveKafkaWorker("failed", 1)
 	observed.ObserveKafkaRetry(3)
 	observed.ObserveKafkaDeadLetter(1)
+	observed.AdjustBatchQueue("Read", 7, 4096)
+	observed.AdjustBatchQueue("Read", -7, -4096)
+	batchObservation := sinkmetrics.BatchObservation{
+		Method:            "Read",
+		Reason:            "max_wait",
+		Operations:        7,
+		Bytes:             4096,
+		QueueDuration:     time.Millisecond,
+		ExecutionDuration: 2 * time.Millisecond,
+	}
+	observed.ObserveBatch(batchObservation)
+	observed.ObserveBatchRejected("Read", "queue_full")
 
 	body := scrape(t, observed)
 	wanted := []string{
@@ -101,6 +113,14 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 		`sink_kafka_worker_mutations_total{status="failed"} 1`,
 		`sink_kafka_worker_retries_total 3`,
 		`sink_kafka_worker_dead_letters_total 1`,
+		`sink_batcher_batches_total{method="Read",reason="max_wait"} 1`,
+		`sink_batcher_operations_count{method="Read"} 1`,
+		`sink_batcher_bytes_count{method="Read"} 1`,
+		`sink_batcher_queue_duration_seconds_count{method="Read"} 1`,
+		`sink_batcher_execution_duration_seconds_count{method="Read"} 1`,
+		`sink_batcher_queued_operations{method="Read"} 0`,
+		`sink_batcher_queued_bytes{method="Read"} 0`,
+		`sink_batcher_rejected_total{method="Read",reason="queue_full"} 1`,
 	}
 	for _, value := range wanted {
 		if !strings.Contains(body, value) {

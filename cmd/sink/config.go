@@ -31,24 +31,30 @@ const (
 )
 
 type config struct {
-	mode                  runMode
-	grpcAddress           string
-	grpcMaxReceiveBytes   int
-	grpcMaxSendBytes      int
-	prometheusAddress     string
-	storages              []backendConfig
-	maxOperations         int
-	maxMergeAttempts      int
-	luaOptions            merge.LuaOptions
-	kafkaBrokers          []string
-	kafkaTopic            string
-	kafkaGroupID          string
-	kafkaMaxPollRecords   int
-	kafkaDeadLetterTopic  string
-	kafkaMaxRetryAttempts int
-	kafkaRetryBackoff     time.Duration
-	kafkaMaxRetryBackoff  time.Duration
-	shutdownTimeout       time.Duration
+	mode                   runMode
+	grpcAddress            string
+	grpcMaxReceiveBytes    int
+	grpcMaxSendBytes       int
+	prometheusAddress      string
+	storages               []backendConfig
+	maxOperations          int
+	maxMergeAttempts       int
+	batchingEnabled        bool
+	batchingMaxWait        time.Duration
+	batchingMaxOperations  int
+	batchingMaxBytes       int
+	batchingMaxQueuedOps   int
+	batchingMaxQueuedBytes int
+	luaOptions             merge.LuaOptions
+	kafkaBrokers           []string
+	kafkaTopic             string
+	kafkaGroupID           string
+	kafkaMaxPollRecords    int
+	kafkaDeadLetterTopic   string
+	kafkaMaxRetryAttempts  int
+	kafkaRetryBackoff      time.Duration
+	kafkaMaxRetryBackoff   time.Duration
+	shutdownTimeout        time.Duration
 }
 
 type backendConfig struct {
@@ -107,9 +113,19 @@ type searchConfigFile struct {
 }
 
 type serviceConfigFile struct {
-	MaxOperations    *int          `yaml:"max_operations"`
-	MaxMergeAttempts *int          `yaml:"max_merge_attempts"`
-	Lua              luaConfigFile `yaml:"lua"`
+	MaxOperations    *int               `yaml:"max_operations"`
+	MaxMergeAttempts *int               `yaml:"max_merge_attempts"`
+	Batching         batchingConfigFile `yaml:"batching"`
+	Lua              luaConfigFile      `yaml:"lua"`
+}
+
+type batchingConfigFile struct {
+	Enabled             *bool `yaml:"enabled"`
+	MaxWaitMilliseconds *int  `yaml:"max_wait_milliseconds"`
+	MaxOperations       *int  `yaml:"max_operations"`
+	MaxBytes            *int  `yaml:"max_bytes"`
+	MaxQueuedOperations *int  `yaml:"max_queued_operations"`
+	MaxQueuedBytes      *int  `yaml:"max_queued_bytes"`
 }
 
 type luaConfigFile struct {
@@ -177,6 +193,33 @@ func loadConfig(path string) (config, error) {
 	}
 	loaded.maxMergeAttempts, err = positiveIntOrDefault("service.max_merge_attempts", file.Service.MaxMergeAttempts, 3)
 	if err != nil {
+		return loaded, err
+	}
+	loaded.batchingEnabled = boolOrDefault(file.Service.Batching.Enabled, true)
+	batchWaitMilliseconds, err := positiveIntOrDefault("service.batching.max_wait_milliseconds", file.Service.Batching.MaxWaitMilliseconds, 2)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.batchingMaxWait = time.Duration(batchWaitMilliseconds) * time.Millisecond
+	loaded.batchingMaxOperations, err = positiveIntOrDefault("service.batching.max_operations", file.Service.Batching.MaxOperations, loaded.maxOperations)
+	if err != nil {
+		return loaded, err
+	}
+	loaded.batchingMaxBytes, err = positiveIntOrDefault("service.batching.max_bytes", file.Service.Batching.MaxBytes, 16<<20)
+	if err != nil {
+		return loaded, err
+	}
+	defaultQueuedOperations := max(10_000, loaded.maxOperations)
+	loaded.batchingMaxQueuedOps, err = positiveIntOrDefault("service.batching.max_queued_operations", file.Service.Batching.MaxQueuedOperations, defaultQueuedOperations)
+	if err != nil {
+		return loaded, err
+	}
+	defaultQueuedBytes := max(128<<20, loaded.grpcMaxReceiveBytes)
+	loaded.batchingMaxQueuedBytes, err = positiveIntOrDefault("service.batching.max_queued_bytes", file.Service.Batching.MaxQueuedBytes, defaultQueuedBytes)
+	if err != nil {
+		return loaded, err
+	}
+	if err := validateBatchingConfig(loaded); err != nil {
 		return loaded, err
 	}
 	luaTimeoutMilliseconds, err := positiveIntOrDefault("service.lua.timeout_milliseconds", file.Service.Lua.TimeoutMilliseconds, 100)
@@ -317,6 +360,26 @@ func valueOrDefault(value string, fallback string) string {
 		return fallback
 	}
 	return trimmed
+}
+
+func boolOrDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
+}
+
+func validateBatchingConfig(loaded config) error {
+	if loaded.batchingMaxOperations > loaded.maxOperations {
+		return errors.New("service.batching.max_operations cannot exceed service.max_operations")
+	}
+	if loaded.batchingMaxQueuedOps < loaded.maxOperations || loaded.batchingMaxQueuedOps < loaded.batchingMaxOperations {
+		return errors.New("service.batching.max_queued_operations must cover one server request and one batch")
+	}
+	if loaded.batchingMaxQueuedBytes < loaded.grpcMaxReceiveBytes || loaded.batchingMaxQueuedBytes < loaded.batchingMaxBytes {
+		return errors.New("service.batching.max_queued_bytes must cover one gRPC request and one batch")
+	}
+	return nil
 }
 
 func positiveIntOrDefault(name string, value *int, fallback int) (int, error) {
