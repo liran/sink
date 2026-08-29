@@ -28,6 +28,7 @@ type Handler interface {
 
 type WorkerOptions struct {
 	Brokers          []string
+	Store            string
 	Topic            string
 	GroupID          string
 	DeadLetterTopic  string
@@ -43,6 +44,7 @@ type WorkerOptions struct {
 type Worker struct {
 	client           *kgo.Client
 	handler          Handler
+	store            string
 	deadLetterTopic  string
 	maxPollRecords   int
 	maxRetryAttempts int
@@ -55,8 +57,8 @@ func NewWorker(opts WorkerOptions) (*Worker, error) {
 	if len(opts.Brokers) == 0 {
 		return nil, errors.New("create Kafka worker: brokers are required")
 	}
-	if opts.Topic == "" || opts.GroupID == "" || opts.DeadLetterTopic == "" {
-		return nil, errors.New("create Kafka worker: topic, group ID, and dead-letter topic are required")
+	if opts.Store == "" || opts.Topic == "" || opts.GroupID == "" || opts.DeadLetterTopic == "" {
+		return nil, errors.New("create Kafka worker: store, topic, group ID, and dead-letter topic are required")
 	}
 	if opts.Handler == nil {
 		return nil, errors.New("create Kafka worker: handler is required")
@@ -102,6 +104,7 @@ func NewWorker(opts WorkerOptions) (*Worker, error) {
 	worker := &Worker{
 		client:           client,
 		handler:          opts.Handler,
+		store:            opts.Store,
 		deadLetterTopic:  opts.DeadLetterTopic,
 		maxPollRecords:   maxPollRecords,
 		maxRetryAttempts: maxRetryAttempts,
@@ -170,6 +173,15 @@ func (w *Worker) handleFetches(ctx context.Context, fetches kgo.Fetches) error {
 		mutation, err := queue.UnmarshalMutation(record.Value)
 		if err != nil {
 			finalErrors[index] = fmt.Errorf("decode Kafka mutation at %s/%d/%d: %w", record.Topic, record.Partition, record.Offset, err)
+			continue
+		}
+		store, err := queue.MutationStore(mutation)
+		if err != nil {
+			finalErrors[index] = fmt.Errorf("route Kafka mutation at %s/%d/%d: %w", record.Topic, record.Partition, record.Offset, err)
+			continue
+		}
+		if store != w.store {
+			finalErrors[index] = fmt.Errorf("kafka mutation at %s/%d/%d targets store %q, worker owns store %q", record.Topic, record.Partition, record.Offset, store, w.store)
 			continue
 		}
 		mutations = append(mutations, mutation)

@@ -15,8 +15,9 @@ Configuration is loaded once during startup. Unknown fields, malformed YAML,
 multiple YAML documents, duplicate storage names, invalid positive-integer
 values, and incompatible option combinations prevent the process from
 starting. Sink connects to and pings every configured storage before becoming
-ready; failure of any storage prevents startup. Restart Sink after changing the
-file.
+ready. In `server` and `all` modes it also creates and pings one Kafka publisher
+for every Kafka-enabled store. Failure of any required dependency prevents
+startup. Restart Sink after changing the file.
 
 ## Multiple storage instances
 
@@ -43,6 +44,17 @@ storages:
       metadata_field: __sink
       max_concurrent_writes: 64
       max_concurrent_groups: 16
+    kafka:
+      brokers:
+        - catalog-kafka-1:9092
+        - catalog-kafka-2:9092
+      topic: catalog-mutations
+      group_id: catalog-sink-workers
+      dead_letter_topic: catalog-mutations.dlq
+      max_poll_records: 500
+      max_retry_attempts: 10
+      retry_backoff_milliseconds: 100
+      max_retry_backoff_milliseconds: 10000
 
   - name: mongo-archive
     driver: mongodb
@@ -56,6 +68,11 @@ storages:
         - https://search-1:9200
         - https://search-2:9200
       api_key: replace-with-api-key
+    kafka:
+      brokers:
+        - search-kafka:9092
+      topic: search-mutations
+      group_id: search-sink-workers
 
 service:
   max_operations: 1000
@@ -74,14 +91,16 @@ service:
     max_cached_programs: 256
     max_instructions: 1000000
 
-kafka:
-  max_poll_records: 500
-  max_retry_attempts: 10
-  retry_backoff_milliseconds: 100
-  max_retry_backoff_milliseconds: 10000
-
 shutdown_timeout_seconds: 15
 ```
+
+Kafka is optional per store. In this example `mongo-main` and `search-main`
+have independent asynchronous paths and may use unrelated Kafka clusters.
+`mongo-archive` has no `kafka` object, so synchronous requests still work while
+`RETURN_AFTER_ACCEPTED` operations targeting that store return a retryable
+per-operation `UNAVAILABLE` failure. A mixed asynchronous batch can therefore
+accept operations for configured stores and reject only unconfigured stores
+without losing the original result order.
 
 The repository's [`config.example.yaml`](../config.example.yaml) is a smaller,
 ready-to-edit configuration containing one MongoDB instance.
@@ -247,23 +266,24 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum encoded JSON merge result size. |
 | `service.lua.max_cached_programs` | positive integer | No | `256` | Integer greater than `0` | Maximum compiled Lua programs retained in the process-local LRU cache. |
 | `service.lua.max_instructions` | positive integer | No | `1000000` | Integer greater than `0` | Maximum VM instruction checkpoints per execution. |
-| `kafka.brokers` | list of strings | Conditionally | `[]` | Zero or more Kafka bootstrap addresses | Configure together with `kafka.topic` to enable durable asynchronous acceptance. Required in `worker` and `all` modes. |
-| `kafka.topic` | string | Conditionally | empty | Any valid Kafka topic name | Topic used for durable mutation publication and consumption. Required with brokers. |
-| `kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Required in `worker` and `all` modes. |
-| `kafka.max_poll_records` | positive integer | No | `500` | Integer greater than `0` | Maximum number of mutations handled in one consumer fetch batch. |
-| `kafka.dead_letter_topic` | string | No | `<kafka.topic>.dlq` | Non-empty Kafka topic | Destination for malformed, permanent, and retry-exhausted worker records. Used in `worker` and `all` modes. |
-| `kafka.max_retry_attempts` | positive integer | No | `10` | Integer greater than `0` | Maximum total handler attempts before a mutation is dead-lettered. |
-| `kafka.retry_backoff_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Initial worker retry backoff before jitter. |
-| `kafka.max_retry_backoff_milliseconds` | positive integer | No | `10000` | Integer at least the initial backoff | Maximum worker retry backoff before jitter. |
+| `storages[].kafka` | object | No | absent | A complete store-specific Kafka configuration | Enables durable asynchronous mutations only for this store. Omit it for a synchronous-only store. |
+| `storages[].kafka.brokers` | list of strings | Conditionally | none | One or more Kafka bootstrap addresses | Required when the store has a `kafka` configuration. Each store may use a different Kafka cluster. |
+| `storages[].kafka.topic` | string | Conditionally | none | Any valid Kafka topic name | Required with brokers. The server publishes only mutations whose `address.store` selects this store. |
+| `storages[].kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Required for every Kafka-enabled store in `worker` and `all` modes; optional and unused in `server` mode. |
+| `storages[].kafka.max_poll_records` | positive integer | No | `500` | Integer greater than `0` | Maximum number of this store's mutations handled in one consumer fetch batch. |
+| `storages[].kafka.dead_letter_topic` | string | No | `<storages[].kafka.topic>.dlq` | Non-empty Kafka topic different from the source topic | Destination for malformed, cross-store, permanent, and retry-exhausted records for this store. |
+| `storages[].kafka.max_retry_attempts` | positive integer | No | `10` | Integer greater than `0` | Maximum total handler attempts before this store's mutation is dead-lettered. |
+| `storages[].kafka.retry_backoff_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Initial worker retry backoff before jitter for this store. |
+| `storages[].kafka.max_retry_backoff_milliseconds` | positive integer | No | `10000` | Integer at least this store's initial backoff | Maximum worker retry backoff before jitter for this store. |
 | `shutdown_timeout_seconds` | positive integer | No | `15` | Integer greater than `0` | Maximum graceful-shutdown time for gRPC and MongoDB disconnect operations. |
 
 ### Mode values
 
 | Value | Behavior |
 | --- | --- |
-| `server` | Opens the gRPC listener and processes API requests. It publishes asynchronous mutations when Kafka brokers and a topic are configured. |
-| `worker` | Consumes and applies Kafka mutations without opening the gRPC listener. Kafka brokers, topic, and group ID are required. |
-| `all` | Runs the `server` and `worker` roles in one process. Kafka brokers, topic, and group ID are required. |
+| `server` | Opens the gRPC listener and processes API requests. Each Kafka-enabled store gets its own publisher; stores without Kafka remain synchronous-only. |
+| `worker` | Creates one consumer for every Kafka-enabled store and applies mutations without opening the gRPC listener. At least one store must configure Kafka. |
+| `all` | Runs the `server` role plus one consumer for every Kafka-enabled store in one process. At least one store must configure Kafka. |
 
 ### Storage driver values
 
@@ -275,17 +295,23 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 
 ## Kafka mode combinations
 
-- A `server` without Kafka handles synchronous operations only.
-- A `server` with `kafka.brokers` and `kafka.topic` can publish durable
-  asynchronous mutations; it does not require `kafka.group_id`.
-- A `worker` requires brokers, topic, and group ID and does not open the gRPC
-  listen address.
-- `all` requires brokers, topic, and group ID and runs both publishing and
-  consuming in one process.
+- A `server` can mix Kafka-enabled and synchronous-only stores. An asynchronous
+  operation for a synchronous-only store returns a retryable per-operation
+  `UNAVAILABLE` failure; synchronous operations are unaffected.
+- Every Kafka-enabled store owns its brokers, topic, group, dead-letter topic,
+  poll limit, and retry policy. Different stores may use unrelated clusters.
+- A `server` does not require `storages[].kafka.group_id` because it only
+  publishes. `worker` and `all` require a group ID for every Kafka-enabled
+  store and require at least one such store.
+- Topics, consumer groups, and dead-letter topics must be unique between stores
+  that use the same normalized broker list. The same names may be reused on
+  different Kafka clusters.
 
-Worker deployments must create the dead-letter topic before startup. A source
-record is committed only after it applies successfully or its original key and
-value are durably copied to that topic with source topic, partition, offset, and
+Worker deployments must create every configured dead-letter topic before
+startup. Each consumer rejects a record whose embedded `address.store` does not
+match the store that owns its source topic. A source record is committed only
+after it applies successfully or its original key and value are durably copied
+to that store's dead-letter topic with source topic, partition, offset, and
 error headers.
 
 ## Lua merge programs

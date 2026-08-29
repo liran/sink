@@ -67,6 +67,27 @@ func UnmarshalMutation(envelope []byte) (Mutation, error) {
 }
 
 func MutationKey(mutation Mutation) ([]byte, error) {
+	address, err := mutationAddress(mutation)
+	if err != nil {
+		return nil, err
+	}
+	marshalOptions := proto.MarshalOptions{Deterministic: true}
+	encoded, err := marshalOptions.Marshal(address)
+	if err != nil {
+		return nil, fmt.Errorf("marshal queue mutation address: %w", err)
+	}
+	return encoded, nil
+}
+
+func MutationStore(mutation Mutation) (string, error) {
+	address, err := mutationAddress(mutation)
+	if err != nil {
+		return "", err
+	}
+	return address.GetStore(), nil
+}
+
+func mutationAddress(mutation Mutation) (*sink.RecordAddress, error) {
 	_, message, err := mutationMessage(mutation)
 	if err != nil {
 		return nil, err
@@ -82,12 +103,7 @@ func MutationKey(mutation Mutation) ([]byte, error) {
 		address.GetKey() == nil || address.GetKey().GetKind() == nil {
 		return nil, errors.New("queue mutation record address is required")
 	}
-	marshalOptions := proto.MarshalOptions{Deterministic: true}
-	encoded, err := marshalOptions.Marshal(address)
-	if err != nil {
-		return nil, fmt.Errorf("marshal queue mutation address: %w", err)
-	}
-	return encoded, nil
+	return address, nil
 }
 
 func mutationMessage(mutation Mutation) (byte, proto.Message, error) {

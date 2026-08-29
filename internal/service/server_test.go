@@ -372,6 +372,41 @@ func TestAsyncWritePublishesOriginalMergeIntent(t *testing.T) {
 	}
 }
 
+func TestAsyncWriteReturnsPerStoreKafkaAvailability(t *testing.T) {
+	ctx := context.Background()
+	store := memory.New()
+	primaryPublisher := &recordingPublisher{}
+	publishers := map[string]queue.Publisher{"primary": primaryPublisher}
+	router, err := queue.NewRoutingPublisher(publishers)
+	if err != nil {
+		t.Fatalf("NewRoutingPublisher() error = %v", err)
+	}
+	server := newTestServer(t, store, router)
+	primary := putWriteOperation("primary-async", "accepted")
+	synchronousOnly := putWriteOperation("sync-only-async", "unavailable")
+	synchronousOnly.Address.Store = "sync-only"
+	request := &sink.WriteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED,
+		Operations:     []*sink.WriteOperation{primary, synchronousOnly},
+	}
+	response, err := server.Write(ctx, request)
+	if err != nil {
+		t.Fatalf("Write(async) error = %v", err)
+	}
+	if response.GetResults()[0].GetStatus() != sink.WriteStatus_WRITE_STATUS_ACCEPTED {
+		t.Fatalf("configured store result = %+v", response.GetResults()[0])
+	}
+	unavailable := response.GetResults()[1]
+	if unavailable.GetStatus() != sink.WriteStatus_WRITE_STATUS_FAILED ||
+		unavailable.GetFailure().GetCode() != sink.FailureCode_FAILURE_CODE_UNAVAILABLE ||
+		!unavailable.GetFailure().GetRetryable() {
+		t.Fatalf("synchronous-only store result = %+v", unavailable)
+	}
+	if primaryPublisher.mutationCount() != 1 {
+		t.Fatalf("published mutations = %d, want 1", primaryPublisher.mutationCount())
+	}
+}
+
 func TestLuaMergeReturnsSpecificFailureCodes(t *testing.T) {
 	tests := []struct {
 		name       string

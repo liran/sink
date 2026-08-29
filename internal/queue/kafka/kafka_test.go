@@ -83,6 +83,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	}
 	workerOptions := kafka.WorkerOptions{
 		Brokers:         cluster.ListenAddrs(),
+		Store:           "primary",
 		Topic:           topic,
 		GroupID:         "sink-test-worker",
 		DeadLetterTopic: deadLetterTopic,
@@ -166,7 +167,26 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 		t.Fatalf("kgo.NewClient(DLQ) error = %v", err)
 	}
 	t.Cleanup(dlqClient.Close)
-	waitForDeadLetter(t, dlqClient)
+	waitForDeadLetterValue(t, dlqClient, malformed.Value)
+
+	crossStoreAddress := kafkaAddress("wrong-store")
+	crossStoreAddress.Store = "archive"
+	crossStoreDocument := &sink.Document{Json: []byte(`{"value":3}`)}
+	crossStorePut := &sink.PutOperation{Document: crossStoreDocument, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
+	crossStoreOperation := &sink.WriteOperation{
+		Address: crossStoreAddress,
+		Action:  &sink.WriteOperation_Put{Put: crossStorePut},
+	}
+	crossStoreMutation := queue.Mutation{Write: crossStoreOperation}
+	crossStoreValue, err := queue.MarshalMutation(crossStoreMutation)
+	if err != nil {
+		t.Fatalf("queue.MarshalMutation(cross-store) error = %v", err)
+	}
+	crossStoreRecord := &kgo.Record{Topic: topic, Key: []byte("cross-store"), Value: crossStoreValue}
+	if err := rawClient.ProduceSync(t.Context(), crossStoreRecord).FirstErr(); err != nil {
+		t.Fatalf("ProduceSync(cross-store) error = %v", err)
+	}
+	waitForDeadLetterValue(t, dlqClient, crossStoreValue)
 
 	deleteOperation := &sink.DeleteOperation{Address: address}
 	deleteRequest := &sink.DeleteRequest{
@@ -250,6 +270,7 @@ func TestKafkaWorkerReplaysUncommittedMutationsAfterRestart(t *testing.T) {
 	blocked := &blockingHandler{started: make(chan struct{})}
 	firstOptions := kafka.WorkerOptions{
 		Brokers:          cluster.ListenAddrs(),
+		Store:            "primary",
 		Topic:            topic,
 		GroupID:          "sink-restart-worker",
 		DeadLetterTopic:  deadLetterTopic,
@@ -292,6 +313,7 @@ func TestKafkaWorkerReplaysUncommittedMutationsAfterRestart(t *testing.T) {
 	}
 	secondOptions := kafka.WorkerOptions{
 		Brokers:          cluster.ListenAddrs(),
+		Store:            "primary",
 		Topic:            topic,
 		GroupID:          "sink-restart-worker",
 		DeadLetterTopic:  deadLetterTopic,
@@ -380,7 +402,7 @@ func waitForDocumentAt(t *testing.T, store *memory.Store, key string, want strin
 	}
 }
 
-func waitForDeadLetter(t *testing.T, client *kgo.Client) {
+func waitForDeadLetterValue(t *testing.T, client *kgo.Client, want []byte) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -391,7 +413,7 @@ func waitForDeadLetter(t *testing.T, client *kgo.Client) {
 		}
 		records := fetches.Records()
 		if len(records) > 0 {
-			if string(records[0].Value) != "not-a-sink-envelope" {
+			if string(records[0].Value) != string(want) {
 				t.Fatalf("dead-letter value = %q", records[0].Value)
 			}
 			return
