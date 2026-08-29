@@ -79,7 +79,11 @@ func convertDocument(document *sink.Document) (storage.Document, error) {
 		return emptyDocument, errors.New("document must contain a valid JSON object")
 	}
 	converted := storage.Document{
-		JSON: bytes.Clone(encoded),
+		JSON:          bytes.Clone(encoded),
+		DateTimePaths: append([]string(nil), document.GetDateTimePaths()...),
+	}
+	if _, err := storage.DecodeDateTimeValues(converted); err != nil {
+		return emptyDocument, fmt.Errorf("document date-time metadata: %w", err)
 	}
 	return converted, nil
 }
@@ -88,7 +92,10 @@ func applyReadResult(result *sink.ReadResult, stored storage.ReadResult) {
 	switch stored.Status {
 	case storage.ReadStatusFound:
 		result.Status = sink.ReadStatus_READ_STATUS_FOUND
-		document := &sink.Document{Json: bytes.Clone(stored.Document.JSON)}
+		document := &sink.Document{
+			Json:          bytes.Clone(stored.Document.JSON),
+			DateTimePaths: append([]string(nil), stored.Document.DateTimePaths...),
+		}
 		result.Document = document
 		result.Revision = &sink.RevisionToken{Data: bytes.Clone(stored.Revision.Data)}
 	case storage.ReadStatusNotFound:

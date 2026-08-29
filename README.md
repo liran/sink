@@ -51,6 +51,10 @@ behavior.
 The public protocol carries JSON objects only. Clients serialize ordinary
 application values before sending them, and reads and Lua merges remain JSON
 through the service. Storage-specific conversion is private to each adapter.
+Typed date-time values remain RFC3339 JSON strings and carry JSON Pointer
+metadata alongside the object. Lua and search storage continue to see strings;
+the MongoDB adapter uses only the marked paths for BSON datetime conversion, so
+an ordinary string that happens to look like a timestamp remains a BSON string.
 
 The MongoDB adapter converts JSON to BSON internally, preserves the top-level
 document shape, and lazily adds one configurable Sink metadata field when a

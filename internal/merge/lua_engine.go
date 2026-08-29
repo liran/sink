@@ -14,7 +14,6 @@ import (
 	"github.com/iceisfun/golua/parser"
 	"github.com/iceisfun/golua/stdlib"
 	"github.com/iceisfun/golua/vm"
-	"github.com/liran/sink/internal/storage"
 )
 
 const (
@@ -181,7 +180,7 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 		return empty, fmt.Errorf("%w: %v", ErrInvalidIncoming, err)
 	}
 
-	var current map[string]any
+	var current decodedJSONObject
 	if req.Current != nil {
 		current, err = decodeJSONObject(*req.Current)
 		if err != nil {
@@ -193,6 +192,8 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	defer cancel()
 	luaVM, bridge := m.engine.newVM(executionContext)
 	defer luaVM.Close(context.Background())
+	bridge.addDateTimeDocument(incoming)
+	bridge.addDateTimeDocument(current)
 
 	results, err := luaVM.Run(m.program)
 	if err != nil {
@@ -203,18 +204,20 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	}
 
 	currentValue := vm.Nil
-	if current != nil {
-		currentValue, err = bridge.goToLua(current)
+	if current.value != nil {
+		currentValue, err = bridge.goToLua(current.value)
 		if err != nil {
 			return empty, fmt.Errorf("%w: convert current document: %v", ErrInvalidCurrent, err)
 		}
 	}
-	incomingValue, err := bridge.goToLua(incoming)
+	incomingValue, err := bridge.goToLua(incoming.value)
 	if err != nil {
 		return empty, fmt.Errorf("%w: convert incoming document: %v", ErrInvalidIncoming, err)
 	}
+	observedAt := req.ObservedAt.UTC().Format(time.RFC3339Nano)
+	bridge.dateTimeValues[observedAt] = struct{}{}
 	contextTable := vm.NewEmptyTable()
-	contextTable.SetString("observed_at", vm.NewString(req.ObservedAt.UTC().Format(time.RFC3339Nano)))
+	contextTable.SetString("observed_at", vm.NewString(observedAt))
 	arguments := []vm.Value{currentValue, incomingValue, vm.NewTable(contextTable)}
 	merged, err := luaVM.ProtectedCall(results[0], arguments)
 	if err != nil {
@@ -223,14 +226,13 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	if len(merged) != 1 {
 		return empty, fmt.Errorf("%w: function returned %d values; expected one", ErrInvalidResult, len(merged))
 	}
-	encoded, err := bridge.encodeJSONObject(merged[0])
+	document, err := bridge.encodeJSONObject(merged[0])
 	if err != nil {
 		return empty, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
-	if len(encoded) > m.engine.options.MaxResultBytes {
-		return empty, fmt.Errorf("%w: result is %d bytes; maximum is %d", ErrExecutionExhausted, len(encoded), m.engine.options.MaxResultBytes)
+	if len(document.JSON) > m.engine.options.MaxResultBytes {
+		return empty, fmt.Errorf("%w: result is %d bytes; maximum is %d", ErrExecutionExhausted, len(document.JSON), m.engine.options.MaxResultBytes)
 	}
-	document := storage.Document{JSON: encoded}
 	result := Result{Document: document}
 	return result, nil
 }

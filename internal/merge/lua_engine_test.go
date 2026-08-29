@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,6 +17,42 @@ import (
 	"github.com/liran/sink/internal/merge"
 	"github.com/liran/sink/internal/storage"
 )
+
+func TestLuaMergePreservesDateTimeMetadata(t *testing.T) {
+	source := []byte(`
+return function(current, incoming, context)
+    return {
+        created_at = incoming.created_at,
+        observed_at = context.observed_at,
+        literal = incoming.literal,
+    }
+end`)
+	options := merge.LuaOptions{}
+	merger := compileTestProgram(t, source, options)
+	incoming := storage.Document{
+		JSON:          []byte(`{"created_at":"2026-08-29T04:34:56.789Z","literal":"2026-08-29T04:34:56.789Z"}`),
+		DateTimePaths: []string{"/created_at"},
+	}
+	observedAt := time.Date(2026, time.August, 31, 1, 2, 3, 456000000, time.UTC)
+	request := merge.Request{Incoming: incoming, ObservedAt: observedAt}
+	result, err := merger.Merge(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	wantPaths := []string{"/created_at", "/observed_at"}
+	if !slices.Equal(result.Document.DateTimePaths, wantPaths) {
+		t.Fatalf("merged date-time paths = %v, want %v", result.Document.DateTimePaths, wantPaths)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal(result.Document.JSON, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if decoded["created_at"] != "2026-08-29T04:34:56.789Z" ||
+		decoded["observed_at"] != observedAt.Format(time.RFC3339Nano) ||
+		decoded["literal"] != "2026-08-29T04:34:56.789Z" {
+		t.Fatalf("merged document = %v", decoded)
+	}
+}
 
 func TestLuaMergePreservesJSONTypesAndInt64(t *testing.T) {
 	source := []byte(`

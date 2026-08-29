@@ -378,6 +378,29 @@ func TestWriteRejectsInvalidLuaProgramDeclarations(t *testing.T) {
 	})
 }
 
+func TestWriteRejectsInvalidDateTimeMetadata(t *testing.T) {
+	store := memory.New()
+	server := newTestServer(t, store, nil)
+	operation := putWriteOperation("invalid-date-time", "value")
+	operation.GetPut().Document = &sink.Document{
+		Json:          []byte(`{"created_at":"not-a-date-time"}`),
+		DateTimePaths: []string{"/created_at"},
+	}
+	request := &sink.WriteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
+		Operations:     []*sink.WriteOperation{operation},
+	}
+	response, err := server.Write(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	result := response.GetResults()[0]
+	if result.GetStatus() != sink.WriteStatus_WRITE_STATUS_FAILED ||
+		result.GetFailure().GetCode() != sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT {
+		t.Fatalf("Write() result = %+v", result)
+	}
+}
+
 func TestDeleteIsHardAndMissingDeleteSucceeds(t *testing.T) {
 	ctx := context.Background()
 	store := memory.New()

@@ -5,6 +5,7 @@ package mongodb_test
 import (
 	"context"
 	"os"
+	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -24,6 +25,49 @@ type integrationFixture struct {
 	store      *mongodb.Store
 	database   string
 	collection *mongo.Collection
+}
+
+func TestMongoDBDateTimeRoundTrip(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := t.Context()
+	address := fixture.address("date-time")
+	document := storage.Document{
+		JSON:          []byte(`{"created_at":"2026-08-29T04:34:56.789Z","literal":"2026-08-29T04:34:56.789Z"}`),
+		DateTimePaths: []string{"/created_at"},
+	}
+	operation := storage.WriteOperation{Address: address, Document: document}
+	request := storage.WriteRequest{Operations: []storage.WriteOperation{operation}}
+	written, err := fixture.store.Write(ctx, request)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if written.Results[0].Status != storage.WriteStatusApplied {
+		t.Fatalf("Write() result = %#v", written.Results[0])
+	}
+
+	var raw bson.Raw
+	filter := bson.D{{Key: "_id", Value: "date-time"}}
+	if err := fixture.collection.FindOne(ctx, filter).Decode(&raw); err != nil {
+		t.Fatalf("FindOne() error = %v", err)
+	}
+	if raw.Lookup("created_at").Type != bson.TypeDateTime {
+		t.Fatalf("created_at BSON type = %s", raw.Lookup("created_at").Type)
+	}
+	if raw.Lookup("literal").Type != bson.TypeString {
+		t.Fatalf("literal BSON type = %s", raw.Lookup("literal").Type)
+	}
+
+	readOperation := storage.ReadOperation{Address: address}
+	readRequest := storage.ReadRequest{Operations: []storage.ReadOperation{readOperation}}
+	read, err := fixture.store.Read(ctx, readRequest)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	result := read.Results[0]
+	wantPaths := []string{"/created_at"}
+	if result.Status != storage.ReadStatusFound || !slices.Equal(result.Document.DateTimePaths, wantPaths) {
+		t.Fatalf("Read() result = %#v", result)
+	}
 }
 
 func newIntegrationFixture(t *testing.T) *integrationFixture {
