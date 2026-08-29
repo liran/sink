@@ -33,20 +33,45 @@ func (s *healthStorage) Delete(_ context.Context, req storage.DeleteRequest) (st
 	return response, nil
 }
 
-func TestUpdateHealthTracksStorageRecovery(t *testing.T) {
-	store := &healthStorage{pingErr: errors.New("storage unavailable")}
-	app := &application{storage: store, health: health.NewServer()}
-	app.updateHealth(t.Context())
-	assertHealthStatus(t, app.health, healthpb.HealthCheckResponse_NOT_SERVING)
+func TestUpdateHealthIsolatesStorageFailure(t *testing.T) {
+	failedStore := &healthStorage{pingErr: errors.New("storage unavailable")}
+	healthyStore := &healthStorage{}
+	failedCheck := configuredHealthCheck{service: storageHealthService("failed"), pinger: failedStore}
+	healthyCheck := configuredHealthCheck{service: storageHealthService("healthy"), pinger: healthyStore}
+	healthChecks := []configuredHealthCheck{failedCheck, healthyCheck}
+	app := &application{health: health.NewServer(), healthChecks: healthChecks}
+	app.health.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	app.health.SetServingStatus(failedCheck.service, healthpb.HealthCheckResponse_SERVING)
+	app.health.SetServingStatus(healthyCheck.service, healthpb.HealthCheckResponse_SERVING)
 
-	store.pingErr = nil
 	app.updateHealth(t.Context())
-	assertHealthStatus(t, app.health, healthpb.HealthCheckResponse_SERVING)
+	assertHealthStatus(t, app.health, "", healthpb.HealthCheckResponse_SERVING)
+	assertHealthStatus(t, app.health, failedCheck.service, healthpb.HealthCheckResponse_NOT_SERVING)
+	assertHealthStatus(t, app.health, healthyCheck.service, healthpb.HealthCheckResponse_SERVING)
+
+	failedStore.pingErr = nil
+	app.updateHealth(t.Context())
+	assertHealthStatus(t, app.health, "", healthpb.HealthCheckResponse_SERVING)
+	assertHealthStatus(t, app.health, failedCheck.service, healthpb.HealthCheckResponse_SERVING)
+	assertHealthStatus(t, app.health, healthyCheck.service, healthpb.HealthCheckResponse_SERVING)
 }
 
-func assertHealthStatus(t *testing.T, server *health.Server, wanted healthpb.HealthCheckResponse_ServingStatus) {
+func TestCloseMarksEveryHealthServiceNotServing(t *testing.T) {
+	store := &healthStorage{}
+	healthCheck := configuredHealthCheck{service: kafkaHealthService("primary"), pinger: store}
+	app := &application{health: health.NewServer(), healthChecks: []configuredHealthCheck{healthCheck}}
+	app.health.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	app.health.SetServingStatus(healthCheck.service, healthpb.HealthCheckResponse_SERVING)
+
+	app.close()
+
+	assertHealthStatus(t, app.health, "", healthpb.HealthCheckResponse_NOT_SERVING)
+	assertHealthStatus(t, app.health, healthCheck.service, healthpb.HealthCheckResponse_NOT_SERVING)
+}
+
+func assertHealthStatus(t *testing.T, server *health.Server, service string, wanted healthpb.HealthCheckResponse_ServingStatus) {
 	t.Helper()
-	request := &healthpb.HealthCheckRequest{}
+	request := &healthpb.HealthCheckRequest{Service: service}
 	response, err := server.Check(t.Context(), request)
 	if err != nil {
 		t.Fatalf("Check() error = %v", err)

@@ -94,6 +94,7 @@ type application struct {
 	storage         storagecontract.Storage
 	publisher       queue.Publisher
 	kafkaPublishers []*queuekafka.Publisher
+	healthChecks    []configuredHealthCheck
 	workers         []configuredWorker
 	batchingServer  *service.BatchingServer
 	grpcServer      *grpc.Server
@@ -108,12 +109,39 @@ type configuredWorker struct {
 	worker *queuekafka.Worker
 }
 
+type healthPinger interface {
+	Ping(context.Context) error
+}
+
+type configuredHealthCheck struct {
+	service string
+	pinger  healthPinger
+}
+
+type configuredHealthResult struct {
+	service string
+	status  healthpb.HealthCheckResponse_ServingStatus
+}
+
+func storageHealthService(store string) string {
+	return "sink.storage." + store
+}
+
+func kafkaHealthService(store string) string {
+	return "sink.kafka." + store
+}
+
 func newApplication(ctx context.Context, loaded config) (*application, error) {
 	opened, err := openConfiguredStorage(ctx, loaded)
 	if err != nil {
 		return nil, err
 	}
-	app := &application{config: loaded, mongoClients: opened.mongoClients, storage: opened.value}
+	app := &application{
+		config:       loaded,
+		mongoClients: opened.mongoClients,
+		storage:      opened.value,
+		healthChecks: opened.healthChecks,
+	}
 	var observed *sinkmetrics.Metrics
 	if loaded.prometheusAddress != "" {
 		observed, err = sinkmetrics.New(version)
@@ -147,6 +175,11 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 				app.close()
 				return nil, fmt.Errorf("ping Kafka for store %q: %w", configured.name, pingErr)
 			}
+			healthCheck := configuredHealthCheck{
+				service: kafkaHealthService(configured.name),
+				pinger:  publisher,
+			}
+			app.healthChecks = append(app.healthChecks, healthCheck)
 			storePublishers[configured.name] = publisher
 		}
 		if len(storePublishers) > 0 {
@@ -242,6 +275,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 type openedStorage struct {
 	value        storagecontract.Storage
 	mongoClients map[string]*mongo.Client
+	healthChecks []configuredHealthCheck
 }
 
 func openConfiguredStorage(ctx context.Context, loaded config) (openedStorage, error) {
@@ -255,6 +289,11 @@ func openConfiguredStorage(ctx context.Context, loaded config) (openedStorage, e
 			return opened, fmt.Errorf("open storage %q: %w", configured.name, err)
 		}
 		backends[configured.name] = backend.value
+		healthCheck := configuredHealthCheck{
+			service: storageHealthService(configured.name),
+			pinger:  backend.value,
+		}
+		opened.healthChecks = append(opened.healthChecks, healthCheck)
 		if backend.mongoClient != nil {
 			opened.mongoClients[configured.name] = backend.mongoClient
 		}
@@ -354,6 +393,9 @@ func (a *application) configureGRPC(server sink.SinkServer, observed *sinkmetric
 	sink.RegisterSinkServer(grpcServer, server)
 	healthServer := health.NewServer()
 	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	for _, configured := range a.healthChecks {
+		healthServer.SetServingStatus(configured.service, healthpb.HealthCheckResponse_SERVING)
+	}
 	healthpb.RegisterHealthServer(grpcServer, healthServer)
 	a.listener = listener
 	a.grpcServer = grpcServer
@@ -429,26 +471,28 @@ func (a *application) runHealthChecks(ctx context.Context) {
 }
 
 func (a *application) updateHealth(parent context.Context) {
-	ctx, cancel := context.WithTimeout(parent, healthCheckTimeout)
-	defer cancel()
-	status := healthpb.HealthCheckResponse_SERVING
-	if err := a.storage.Ping(ctx); err != nil {
-		status = healthpb.HealthCheckResponse_NOT_SERVING
+	results := make(chan configuredHealthResult, len(a.healthChecks))
+	for _, configured := range a.healthChecks {
+		go func() {
+			ctx, cancel := context.WithTimeout(parent, healthCheckTimeout)
+			defer cancel()
+			status := healthpb.HealthCheckResponse_SERVING
+			if err := configured.pinger.Ping(ctx); err != nil {
+				status = healthpb.HealthCheckResponse_NOT_SERVING
+			}
+			result := configuredHealthResult{service: configured.service, status: status}
+			results <- result
+		}()
 	}
-	for _, publisher := range a.kafkaPublishers {
-		if status != healthpb.HealthCheckResponse_SERVING {
-			break
-		}
-		if err := publisher.Ping(ctx); err != nil {
-			status = healthpb.HealthCheckResponse_NOT_SERVING
-		}
+	for range a.healthChecks {
+		result := <-results
+		a.health.SetServingStatus(result.service, result.status)
 	}
-	a.health.SetServingStatus("", status)
 }
 
 func (a *application) close() {
 	if a.health != nil {
-		a.health.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+		a.health.Shutdown()
 	}
 	if a.grpcServer != nil {
 		stopped := make(chan struct{})
