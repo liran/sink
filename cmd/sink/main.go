@@ -147,6 +147,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		Publisher:        app.publisher,
 		MaxOperations:    loaded.maxOperations,
 		MaxMergeAttempts: loaded.maxMergeAttempts,
+		Metrics:          observed,
 	}
 	sinkServer, err := service.New(serverOptions)
 	if err != nil {

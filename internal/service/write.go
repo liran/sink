@@ -248,9 +248,11 @@ func (s *Server) executeMerges(
 		if err != nil {
 			return err
 		}
+		s.metrics.ObserveMergeConflict(len(next))
 		pending = next
 	}
 
+	s.metrics.ObserveMergeExhausted(len(pending))
 	for _, operation := range pending {
 		result := results[operation.index]
 		result.Status = sink.WriteStatus_WRITE_STATUS_PRECONDITION_FAILED
