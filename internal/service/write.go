@@ -42,6 +42,10 @@ type mergeCandidate struct {
 	operation storage.WriteOperation
 }
 
+type writeExecutionOptions struct {
+	WaitUntilVisible bool
+}
+
 func (s *Server) parseWrite(index int, operation *sink.WriteOperation, programs luaPrograms) (parsedWrite, error) {
 	parsed := parsedWrite{}
 	if operation == nil {
@@ -176,6 +180,7 @@ func (s *Server) executeWriteWave(
 	ctx context.Context,
 	wave []parsedWrite,
 	results []*sink.WriteResult,
+	opts writeExecutionOptions,
 ) error {
 	puts := make([]parsedWrite, 0, len(wave))
 	merges := make([]parsedWrite, 0, len(wave))
@@ -186,16 +191,18 @@ func (s *Server) executeWriteWave(
 		}
 		merges = append(merges, operation)
 	}
-	if err := s.executePuts(ctx, puts, results); err != nil {
+	err := s.executePuts(ctx, puts, results, opts)
+	if err != nil {
 		return err
 	}
-	return s.executeMerges(ctx, merges, results)
+	return s.executeMerges(ctx, merges, results, opts)
 }
 
 func (s *Server) executePuts(
 	ctx context.Context,
 	operations []parsedWrite,
 	results []*sink.WriteResult,
+	opts writeExecutionOptions,
 ) error {
 	if len(operations) == 0 {
 		return nil
@@ -209,7 +216,10 @@ func (s *Server) executePuts(
 		}
 		storageOperations = append(storageOperations, storageOperation)
 	}
-	request := storage.WriteRequest{Operations: storageOperations}
+	request := storage.WriteRequest{
+		Operations:       storageOperations,
+		WaitUntilVisible: opts.WaitUntilVisible,
+	}
 	response, err := s.storage.Write(ctx, request)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "write records: %v", err)
@@ -227,13 +237,14 @@ func (s *Server) executeMerges(
 	ctx context.Context,
 	operations []parsedWrite,
 	results []*sink.WriteResult,
+	opts writeExecutionOptions,
 ) error {
 	pending := operations
 	for range s.maxMergeAttempts {
 		if len(pending) == 0 {
 			return nil
 		}
-		next, err := s.executeMergeAttempt(ctx, pending, results)
+		next, err := s.executeMergeAttempt(ctx, pending, results, opts)
 		if err != nil {
 			return err
 		}
@@ -253,6 +264,7 @@ func (s *Server) executeMergeAttempt(
 	ctx context.Context,
 	operations []parsedWrite,
 	results []*sink.WriteResult,
+	opts writeExecutionOptions,
 ) ([]parsedWrite, error) {
 	readOperations := make([]storage.ReadOperation, 0, len(operations))
 	for _, operation := range operations {
@@ -284,7 +296,10 @@ func (s *Server) executeMergeAttempt(
 	for _, candidate := range candidates {
 		writeOperations = append(writeOperations, candidate.operation)
 	}
-	writeRequest := storage.WriteRequest{Operations: writeOperations}
+	writeRequest := storage.WriteRequest{
+		Operations:       writeOperations,
+		WaitUntilVisible: opts.WaitUntilVisible,
+	}
 	writeResponse, err := s.storage.Write(ctx, writeRequest)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "commit merged records: %v", err)
@@ -351,7 +366,7 @@ func (s *Server) prepareMergeCandidate(
 		setWriteFailure(result, code, err, false)
 		return candidate, false
 	}
-	if merged.Document.ContentType == "" || len(merged.Document.Data) == 0 {
+	if len(merged.Document.JSON) == 0 {
 		err := errors.New("lua merge program returned an invalid document")
 		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
 		return candidate, false

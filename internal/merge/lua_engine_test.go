@@ -41,8 +41,8 @@ end`)
 		t.Fatalf("Merge() error = %v", err)
 	}
 	want := `{"created_array":[],"created_object":{},"empty_array":[],"empty_object":{},"id":9223372036854775807,"keep":true,"null_value":null,"observed_at":"2026-08-29T10:11:12.000000123Z"}`
-	if string(result.Document.Data) != want {
-		t.Fatalf("Merge() document = %s, want %s", result.Document.Data, want)
+	if string(result.Document.JSON) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
 	}
 }
 
@@ -67,7 +67,7 @@ func TestLuaMergeRunsProductRule(t *testing.T) {
 		Available        bool     `json:"available"`
 		LastFoundAt      string   `json:"last_found_at"`
 	}
-	if err := json.Unmarshal(result.Document.Data, &product); err != nil {
+	if err := json.Unmarshal(result.Document.JSON, &product); err != nil {
 		t.Fatalf("decode merged product: %v", err)
 	}
 	if product.UID != "new" || product.Brand != "NEW BRAND" || !product.Available || product.LastFoundAt != "2026-08-29T12:00:00Z" {
@@ -130,8 +130,8 @@ end`)
 		if err != nil {
 			t.Fatalf("Merge() error = %v", err)
 		}
-		if string(result.Document.Data) != `{"counter":1}` {
-			t.Fatalf("Merge() document = %s", result.Document.Data)
+		if string(result.Document.JSON) != `{"counter":1}` {
+			t.Fatalf("Merge() document = %s", result.Document.JSON)
 		}
 	}
 }
@@ -152,8 +152,8 @@ end`)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
 	}
-	if string(result.Document.Data) != `{"keys":["a","m","z"]}` {
-		t.Fatalf("Merge() document = %s", result.Document.Data)
+	if string(result.Document.JSON) != `{"keys":["a","m","z"]}` {
+		t.Fatalf("Merge() document = %s", result.Document.JSON)
 	}
 }
 
@@ -174,8 +174,8 @@ func TestLuaMergeSupportsConcurrentCalls(t *testing.T) {
 				t.Errorf("Merge() error = %v", err)
 				return
 			}
-			if string(result.Document.Data) != `{"value":1}` {
-				t.Errorf("Merge() document = %s", result.Document.Data)
+			if string(result.Document.JSON) != `{"value":1}` {
+				t.Errorf("Merge() document = %s", result.Document.JSON)
 			}
 		}()
 	}
@@ -204,8 +204,8 @@ end`)
 		t.Fatalf("Merge() error = %v", err)
 	}
 	want := `{"global":false,"io":false,"load":false,"os":false,"package":false,"random":false,"require":false,"time":false}`
-	if string(result.Document.Data) != want {
-		t.Fatalf("Merge() document = %s, want %s", result.Document.Data, want)
+	if string(result.Document.JSON) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
 	}
 }
 
@@ -277,7 +277,7 @@ func TestLuaMergeClassifiesDocumentAndScriptErrors(t *testing.T) {
 		source := []byte(`return function(current, incoming, context) return incoming end`)
 		options := merge.LuaOptions{}
 		merger := compileTestProgram(t, source, options)
-		request := merge.Request{Incoming: storage.Document{ContentType: "text/plain", Data: []byte("bad")}}
+		request := merge.Request{Incoming: storage.Document{JSON: []byte("bad")}}
 		_, err := merger.Merge(context.Background(), request)
 		if !errors.Is(err, merge.ErrInvalidIncoming) {
 			t.Fatalf("Merge() error = %v", err)
@@ -338,6 +338,6 @@ func productMergeSource(t testing.TB) []byte {
 }
 
 func jsonDocument(value string) storage.Document {
-	document := storage.Document{ContentType: "application/json", Data: []byte(value)}
+	document := storage.Document{JSON: []byte(value)}
 	return document
 }

@@ -41,12 +41,10 @@ message OpaqueValue {
   bytes data = 2;
 }
 
-// Document contains a lossless, encoded user document. Sink passes documents
-// through unchanged for ordinary reads and puts. Lua merges currently inspect
-// application/json objects only.
+// Document contains a JSON-encoded user object. Storage-specific encodings are
+// private implementation details of storage adapters.
 message Document {
-  string content_type = 1;
-  bytes data = 2;
+  bytes json = 1;
 }
 
 // RevisionToken is interpreted only by the selected storage adapter.
@@ -64,6 +62,10 @@ enum CompletionMode {
   // Return after a durable asynchronous queue has accepted each operation.
   // Acceptance does not mean that the storage adapter has applied it.
   COMPLETION_MODE_RETURN_AFTER_ACCEPTED = 2;
+
+  // Wait until the storage adapter has applied each operation and made the
+  // result visible to subsequent reads. Search adapters use refresh=wait_for.
+  COMPLETION_MODE_WAIT_UNTIL_VISIBLE = 3;
 }
 
 message ReadRequest {

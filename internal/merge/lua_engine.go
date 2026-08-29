@@ -25,7 +25,6 @@ const (
 	defaultMaxInstructions   = 1_000_000
 	defaultMaxCallDepth      = 256
 	defaultMaxStackSlots     = 65_536
-	jsonContentType          = "application/json"
 	luaProgramFilename       = "merge.lua"
 )
 
@@ -231,7 +230,7 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	if len(encoded) > m.engine.options.MaxResultBytes {
 		return empty, fmt.Errorf("%w: result is %d bytes; maximum is %d", ErrExecutionExhausted, len(encoded), m.engine.options.MaxResultBytes)
 	}
-	document := storage.Document{ContentType: jsonContentType, Data: encoded}
+	document := storage.Document{JSON: encoded}
 	result := Result{Document: document}
 	return result, nil
 }

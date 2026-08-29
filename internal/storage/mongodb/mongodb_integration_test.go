@@ -273,10 +273,10 @@ func (f *integrationFixture) address(key string) storage.Address {
 
 func bsonStorageDocument(t *testing.T, value bson.D) storage.Document {
 	t.Helper()
-	encoded, err := bson.Marshal(value)
+	encoded, err := bson.MarshalExtJSON(value, false, false)
 	if err != nil {
-		t.Fatalf("bson.Marshal() error = %v", err)
+		t.Fatalf("bson.MarshalExtJSON() error = %v", err)
 	}
-	document := storage.Document{ContentType: mongodb.ContentTypeBSON, Data: encoded}
+	document := storage.Document{JSON: encoded}
 	return document
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -10,15 +11,13 @@ import (
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
-	"go.mongodb.org/mongo-driver/v2/bson"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
 const (
-	contentTypeBSON = "application/bson"
-	defaultAddress  = "sink:8080"
+	defaultAddress = "sink:8080"
 )
 
 type exampleRecord struct {
@@ -27,10 +26,10 @@ type exampleRecord struct {
 }
 
 type demoDocument struct {
-	ID     string   `bson:"_id,omitempty"`
-	Name   string   `bson:"name"`
-	Stage  string   `bson:"stage"`
-	Labels []string `bson:"labels"`
+	ID     string   `json:"_id,omitempty"`
+	Name   string   `json:"name"`
+	Stage  string   `json:"stage"`
+	Labels []string `json:"labels"`
 }
 
 func main() {
@@ -117,7 +116,7 @@ func runScenario(ctx context.Context, client sink.SinkClient) error {
 	if err := readAndVerify(ctx, client, synchronous); err != nil {
 		return err
 	}
-	fmt.Println("PASS batch read returned both BSON documents")
+	fmt.Println("PASS batch read returned both JSON documents")
 
 	asynchronous := exampleRecord{
 		key: "async-gamma",
@@ -311,23 +310,20 @@ func recordAddress(key string) *sink.RecordAddress {
 }
 
 func encodeDocument(document demoDocument) (*sink.Document, error) {
-	data, err := bson.Marshal(document)
+	data, err := json.Marshal(document)
 	if err != nil {
-		return nil, fmt.Errorf("encode BSON document: %w", err)
+		return nil, fmt.Errorf("encode JSON document: %w", err)
 	}
-	encoded := &sink.Document{
-		ContentType: contentTypeBSON,
-		Data:        data,
-	}
+	encoded := &sink.Document{Json: data}
 	return encoded, nil
 }
 
 func verifyDocument(document *sink.Document, expected exampleRecord) error {
-	if document == nil || document.GetContentType() != contentTypeBSON {
+	if document == nil {
 		return fmt.Errorf("record %q returned an invalid document", expected.key)
 	}
 	var actual demoDocument
-	if err := bson.Unmarshal(document.GetData(), &actual); err != nil {
+	if err := json.Unmarshal(document.GetJson(), &actual); err != nil {
 		return fmt.Errorf("decode record %q: %w", expected.key, err)
 	}
 	if actual.ID != expected.key {

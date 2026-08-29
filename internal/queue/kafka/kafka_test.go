@@ -86,7 +86,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	}()
 
 	address := kafkaAddress("record-1")
-	document := &sink.Document{ContentType: "application/json", Data: []byte(`{"value":1}`)}
+	document := &sink.Document{Json: []byte(`{"value":1}`)}
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 	writeRequest := &sink.WriteRequest{
@@ -106,7 +106,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	digest := sha256.Sum256(mergeSource)
 	programReference := &sink.LuaProgram{Sha256: digest[:]}
 	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
-	incoming := &sink.Document{ContentType: "application/json", Data: []byte(`{"value":1}`)}
+	incoming := &sink.Document{Json: []byte(`{"value":1}`)}
 	merge := &sink.MergeOperation{
 		IncomingDocument:    incoming,
 		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
@@ -188,12 +188,12 @@ func waitForDocumentData(t *testing.T, store *memory.Store, want string) {
 		if err != nil {
 			t.Fatalf("Store.Read() error = %v", err)
 		}
-		if response.Results[0].Status == storage.ReadStatusFound && string(response.Results[0].Document.Data) == want {
+		if response.Results[0].Status == storage.ReadStatusFound && string(response.Results[0].Document.JSON) == want {
 			return
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("Store.Read() document = %s, want %s", response.Results[0].Document.Data, want)
+			t.Fatalf("Store.Read() document = %s, want %s", response.Results[0].Document.JSON, want)
 		case <-ticker.C:
 		}
 	}

@@ -19,9 +19,12 @@ A one-element request is the single-record form. Atomicity is per record; a
 multi-record request is not a transaction. Operations for the same record are
 executed in request order, while different records may execute concurrently.
 
-`Write` and `Delete` support two completion modes:
+`Write` and `Delete` support three completion modes:
 
 - `WAIT_UNTIL_APPLIED` returns after the storage adapter completes the work.
+- `WAIT_UNTIL_VISIBLE` additionally waits until subsequent search reads can
+  observe the mutation. Elasticsearch and OpenSearch use `refresh=wait_for`;
+  MongoDB writes are already visible when acknowledged.
 - `RETURN_AFTER_ACCEPTED` returns after a durable asynchronous queue accepts
   the work. Queue redelivery can execute an operation more than once.
 
@@ -43,26 +46,26 @@ A crash after storage applies a mutation but before Kafka commits its offset can
 therefore execute that mutation again; this is the documented at-least-once
 behavior.
 
-## Legacy documents
+## Documents
 
-Documents use a content type and opaque bytes so existing BSON can pass through
-without schema conversion. Lua merge operations inspect JSON objects; ordinary
-reads and puts remain opaque. The MongoDB adapter preserves the existing top-level
-document shape and lazily adds one configurable Sink metadata field when a
+The public protocol carries JSON objects only. Clients serialize ordinary
+application values before sending them, and reads and Lua merges remain JSON
+through the service. Storage-specific conversion is private to each adapter.
+
+The MongoDB adapter converts JSON to BSON internally, preserves the top-level
+document shape, and lazily adds one configurable Sink metadata field when a
 record is first mutated through Sink. A legacy record without that field is
 updated with a conditional “metadata still absent” filter, so its first RMW is
-atomic as well.
+atomic as well. Logical string, int64, byte, and `mongodb/object-id` keys map to
+MongoDB `_id` values. The record address's namespace and dataset map directly
+to the MongoDB database and collection. Batch reads use one `$in` query per
+collection. Unconditional puts and creates use unordered bulk writes;
+revision-conditional writes run concurrently as individual `ReplaceOne`
+operations because older MongoDB bulk responses do not identify which
+individual CAS filters matched.
 
-The MongoDB adapter accepts `application/bson`. Logical string, int64, byte,
-and `mongodb/object-id` keys map to MongoDB `_id` values. The record address's
-namespace and dataset map directly to the MongoDB database and collection.
-Batch reads use one `$in` query per collection. Unconditional puts and creates
-use unordered bulk writes; revision-conditional writes run concurrently as
-individual `ReplaceOne` operations because older MongoDB bulk responses do not
-identify which individual CAS filters matched.
-
-The Elasticsearch and OpenSearch adapter accepts `application/json` objects
-and stores the user document unchanged in `_source`. Existing string IDs remain
+The Elasticsearch and OpenSearch adapter stores the JSON user document
+unchanged in `_source`. Existing string IDs remain
 unchanged; other logical key types receive a deterministic, reserved encoding.
 It uses `_seq_no` and `_primary_term` as an opaque revision token, global
 `_mget` for batch reads, and `_bulk` for puts and hard deletes. Sink does not

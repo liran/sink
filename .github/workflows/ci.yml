@@ -21,11 +21,23 @@ jobs:
       - name: Check out server
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Resolve Go client ref
+        id: client-ref
+        env:
+          CANDIDATE_REF: ${{ github.head_ref }}
+        run: |
+          ref=main
+          if [[ -n "${CANDIDATE_REF}" ]] && git ls-remote --exit-code --heads https://github.com/liran/sink-go.git "refs/heads/${CANDIDATE_REF}" >/dev/null 2>&1; then
+            ref="${CANDIDATE_REF}"
+          fi
+          echo "ref=${ref}" >> "${GITHUB_OUTPUT}"
+
       - name: Check out Go client
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: liran/sink-go
           path: sink-go
+          ref: ${{ steps.client-ref.outputs.ref }}
 
       - name: Verify protobuf compatibility
         run: |

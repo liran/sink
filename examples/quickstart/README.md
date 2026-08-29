@@ -17,7 +17,7 @@ The command builds the local Sink image, starts the dependencies, creates the
 Kafka mutation topic, and runs these checks:
 
 1. Wait for the Sink gRPC health service.
-2. Batch-write and batch-read two BSON documents synchronously.
+2. Batch-write and batch-read two JSON documents synchronously.
 3. Submit one asynchronous write and wait for the Kafka worker to apply it.
 4. Hard-delete all three records and confirm they are absent.
 

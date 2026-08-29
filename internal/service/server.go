@@ -160,8 +160,12 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 	}
 
 	waves := buildWriteWaves(operations)
+	executionOptions := writeExecutionOptions{
+		WaitUntilVisible: req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE,
+	}
 	for _, wave := range waves {
-		if err := s.executeWriteWave(ctx, wave, response.Results); err != nil {
+		err := s.executeWriteWave(ctx, wave, response.Results, executionOptions)
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -243,7 +247,10 @@ func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.Del
 		return response, nil
 	}
 
-	storageRequest := storage.DeleteRequest{Operations: storageOperations}
+	storageRequest := storage.DeleteRequest{
+		Operations:       storageOperations,
+		WaitUntilVisible: req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE,
+	}
 	storageResponse, err := s.storage.Delete(ctx, storageRequest)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "delete records: %v", err)
@@ -268,5 +275,6 @@ func (s *Server) validateOperationCount(count int) error {
 
 func validCompletionMode(mode sink.CompletionMode) bool {
 	return mode == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED ||
-		mode == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED
+		mode == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED ||
+		mode == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -73,15 +74,12 @@ func convertDocument(document *sink.Document) (storage.Document, error) {
 	if document == nil {
 		return emptyDocument, errors.New("document is required")
 	}
-	if document.GetContentType() == "" {
-		return emptyDocument, errors.New("document content type is required")
-	}
-	if len(document.GetData()) == 0 {
-		return emptyDocument, errors.New("document data is required")
+	encoded := bytes.TrimSpace(document.GetJson())
+	if len(encoded) < 2 || encoded[0] != '{' || encoded[len(encoded)-1] != '}' || !json.Valid(encoded) {
+		return emptyDocument, errors.New("document must contain a valid JSON object")
 	}
 	converted := storage.Document{
-		ContentType: document.GetContentType(),
-		Data:        bytes.Clone(document.GetData()),
+		JSON: bytes.Clone(encoded),
 	}
 	return converted, nil
 }
@@ -90,10 +88,8 @@ func applyReadResult(result *sink.ReadResult, stored storage.ReadResult) {
 	switch stored.Status {
 	case storage.ReadStatusFound:
 		result.Status = sink.ReadStatus_READ_STATUS_FOUND
-		result.Document = &sink.Document{
-			ContentType: stored.Document.ContentType,
-			Data:        bytes.Clone(stored.Document.Data),
-		}
+		document := &sink.Document{Json: bytes.Clone(stored.Document.JSON)}
+		result.Document = document
 		result.Revision = &sink.RevisionToken{Data: bytes.Clone(stored.Revision.Data)}
 	case storage.ReadStatusNotFound:
 		result.Status = sink.ReadStatus_READ_STATUS_NOT_FOUND

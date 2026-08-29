@@ -234,7 +234,7 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read(ordered) error = %v", err)
 	}
-	assertJSONEqual(t, orderedRead.Results[0].Document.Data, []byte(`{"step":2}`))
+	assertJSONEqual(t, orderedRead.Results[0].Document.JSON, []byte(`{"step":2}`))
 
 	legacyBody := []byte(`{"name":"legacy","tags":["old"]}`)
 	legacyPath := "/" + fixture.index + "/_doc/legacy?refresh=true"
@@ -251,7 +251,7 @@ func TestSearchStorageLifecycleAndLegacyDocuments(t *testing.T) {
 	if legacyRead.Results[0].Status != storage.ReadStatusFound || len(legacyRead.Results[0].Revision.Data) != 16 {
 		t.Fatalf("Read(legacy) result = %#v", legacyRead.Results[0])
 	}
-	assertJSONEqual(t, legacyRead.Results[0].Document.Data, legacyBody)
+	assertJSONEqual(t, legacyRead.Results[0].Document.JSON, legacyBody)
 
 	deleteOperations := []storage.DeleteOperation{
 		{Address: first},
@@ -376,7 +376,7 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 		t.Fatalf("Read(final counter) error = %v", err)
 	}
 	var final counterDocument
-	if err := json.Unmarshal(read.Results[0].Document.Data, &final); err != nil {
+	if err := json.Unmarshal(read.Results[0].Document.JSON, &final); err != nil {
 		t.Fatalf("json.Unmarshal(final counter) error = %v", err)
 	}
 	if final.Counter != mutations {
@@ -412,12 +412,12 @@ func (f *integrationFixture) sinkAddress(key string) *sink.RecordAddress {
 }
 
 func jsonStorageDocument(raw string) storage.Document {
-	document := storage.Document{ContentType: search.ContentTypeJSON, Data: []byte(raw)}
+	document := storage.Document{JSON: []byte(raw)}
 	return document
 }
 
 func sinkDocument(raw string) *sink.Document {
-	document := &sink.Document{ContentType: search.ContentTypeJSON, Data: []byte(raw)}
+	document := &sink.Document{Json: []byte(raw)}
 	return document
 }
 

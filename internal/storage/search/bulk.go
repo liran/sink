@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 type bulkItem struct {
@@ -19,12 +20,22 @@ type bulkResponse struct {
 	Items  []map[string]bulkItem `json:"items"`
 }
 
-func (s *Store) performBulk(ctx context.Context, payload []byte, expectedItems int) ([]bulkItem, error) {
+func (s *Store) performBulk(
+	ctx context.Context,
+	payload []byte,
+	expectedItems int,
+	waitUntilVisible bool,
+) ([]bulkItem, error) {
+	query := make(url.Values)
+	if waitUntilVisible {
+		query.Set("refresh", "wait_for")
+	}
 	opts := requestOptions{
 		method:      http.MethodPost,
 		path:        "/_bulk",
 		contentType: "application/x-ndjson",
 		payload:     payload,
+		query:       query,
 	}
 	response, err := s.perform(ctx, opts)
 	if err != nil {

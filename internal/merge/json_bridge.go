@@ -64,10 +64,7 @@ func protectedMetatable(label string) *vm.Table {
 }
 
 func decodeJSONObject(document storage.Document) (map[string]any, error) {
-	if document.ContentType != jsonContentType {
-		return nil, fmt.Errorf("content type must be %q", jsonContentType)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(document.Data))
+	decoder := json.NewDecoder(bytes.NewReader(document.JSON))
 	decoder.UseNumber()
 	var decoded any
 	if err := decoder.Decode(&decoded); err != nil {

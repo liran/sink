@@ -147,7 +147,10 @@ func (r *Router) Write(ctx context.Context, req WriteRequest) (WriteResponse, er
 	for name, group := range groups {
 		go func() {
 			defer writes.Done()
-			request := WriteRequest{Operations: group.operations}
+			request := WriteRequest{
+				Operations:       group.operations,
+				WaitUntilVisible: req.WaitUntilVisible,
+			}
 			routed, err := group.backend.Write(ctx, request)
 			if err != nil {
 				backendErr := BackendError(fmt.Errorf("write storage %q: %w", name, err))
@@ -209,7 +212,10 @@ func (r *Router) Delete(ctx context.Context, req DeleteRequest) (DeleteResponse,
 	for name, group := range groups {
 		go func() {
 			defer deletes.Done()
-			request := DeleteRequest{Operations: group.operations}
+			request := DeleteRequest{
+				Operations:       group.operations,
+				WaitUntilVisible: req.WaitUntilVisible,
+			}
 			routed, err := group.backend.Delete(ctx, request)
 			if err != nil {
 				backendErr := BackendError(fmt.Errorf("delete storage %q: %w", name, err))

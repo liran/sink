@@ -20,6 +20,7 @@ type requestOptions struct {
 	path        string
 	contentType string
 	payload     []byte
+	query       url.Values
 	retrySafe   bool
 }
 
@@ -60,6 +61,7 @@ func (s *Store) perform(ctx context.Context, opts requestOptions) (apiResponse, 
 	var lastErr error
 	for range attempts {
 		state, endpoint := s.endpoint(opts.path)
+		endpoint.RawQuery = opts.query.Encode()
 		response, err := s.performOnce(ctx, opts, endpoint)
 		if err != nil {
 			state.retryAfter.Store(time.Now().Add(defaultEndpointCooldown).UnixNano())

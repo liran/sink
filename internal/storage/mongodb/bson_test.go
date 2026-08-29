@@ -3,6 +3,7 @@ package mongodb
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -12,15 +13,7 @@ import (
 
 func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}
-	inputValue := bson.D{
-		{Key: "name", Value: "legacy"},
-		{Key: "tags", Value: bson.A{"a", "b"}},
-	}
-	input, err := bson.Marshal(inputValue)
-	if err != nil {
-		t.Fatalf("bson.Marshal() error = %v", err)
-	}
-	document := storage.Document{ContentType: ContentTypeBSON, Data: input}
+	document := storage.Document{JSON: []byte(`{"name":"legacy","tags":["a","b"]}`)}
 	revision := storage.Revision{Data: []byte("revision-1")}
 	replacement, err := store.replacement(document, "record-1", revision)
 	if err != nil {
@@ -46,11 +39,14 @@ func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
 	if !bytes.Equal(decodedRevision.Data, revision.Data) {
 		t.Fatalf("decoded revision = %x", decodedRevision.Data)
 	}
-	userRaw := bson.Raw(decoded.Data)
-	if got := userRaw.Lookup("name").StringValue(); got != "legacy" {
-		t.Fatalf("decoded name = %q", got)
+	var user map[string]any
+	if err := json.Unmarshal(decoded.JSON, &user); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	if !userRaw.Lookup(defaultMetadataField).IsZero() {
+	if got := user["name"]; got != "legacy" {
+		t.Fatalf("decoded name = %#v", got)
+	}
+	if _, exists := user[defaultMetadataField]; exists {
 		t.Fatal("decoded user document contains Sink metadata")
 	}
 }
@@ -69,8 +65,8 @@ func TestUserDocumentAcceptsLegacyDocumentWithoutRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userDocument() error = %v", err)
 	}
-	if document.ContentType != ContentTypeBSON {
-		t.Fatalf("content type = %q", document.ContentType)
+	if !json.Valid(document.JSON) {
+		t.Fatalf("document JSON = %q", document.JSON)
 	}
 	if len(revision.Data) != 0 {
 		t.Fatalf("legacy revision = %x, want empty", revision.Data)
@@ -81,23 +77,13 @@ func TestReplacementRejectsReservedFieldAndMismatchedID(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}
 	revision := storage.Revision{Data: []byte("revision")}
 
-	reservedValue := bson.D{{Key: defaultMetadataField, Value: bson.D{}}}
-	reserved, err := bson.Marshal(reservedValue)
-	if err != nil {
-		t.Fatalf("bson.Marshal(reserved) error = %v", err)
-	}
-	reservedDocument := storage.Document{ContentType: ContentTypeBSON, Data: reserved}
-	_, err = store.replacement(reservedDocument, "record-1", revision)
+	reservedDocument := storage.Document{JSON: []byte(`{"__sink":{}}`)}
+	_, err := store.replacement(reservedDocument, "record-1", revision)
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("replacement(reserved) error = %v", err)
 	}
 
-	mismatchedValue := bson.D{{Key: "_id", Value: "other"}}
-	mismatched, err := bson.Marshal(mismatchedValue)
-	if err != nil {
-		t.Fatalf("bson.Marshal(mismatched) error = %v", err)
-	}
-	mismatchedDocument := storage.Document{ContentType: ContentTypeBSON, Data: mismatched}
+	mismatchedDocument := storage.Document{JSON: []byte(`{"_id":"other"}`)}
 	_, err = store.replacement(mismatchedDocument, "record-1", revision)
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("replacement(mismatched) error = %v", err)
@@ -106,14 +92,9 @@ func TestReplacementRejectsReservedFieldAndMismatchedID(t *testing.T) {
 
 func TestReplacementAcceptsEquivalentInt32ID(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}
-	inputValue := bson.D{{Key: "_id", Value: int32(42)}}
-	input, err := bson.Marshal(inputValue)
-	if err != nil {
-		t.Fatalf("bson.Marshal() error = %v", err)
-	}
-	document := storage.Document{ContentType: ContentTypeBSON, Data: input}
+	document := storage.Document{JSON: []byte(`{"_id":{"$numberInt":"42"}}`)}
 	revision := storage.Revision{Data: []byte("revision")}
-	_, err = store.replacement(document, int64(42), revision)
+	_, err := store.replacement(document, int64(42), revision)
 	if err != nil {
 		t.Fatalf("replacement() error = %v", err)
 	}

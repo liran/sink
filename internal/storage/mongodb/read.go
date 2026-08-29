@@ -153,8 +153,7 @@ func setReadError(result *storage.ReadResult, err error) {
 
 func cloneDocument(document storage.Document) storage.Document {
 	cloned := storage.Document{
-		ContentType: document.ContentType,
-		Data:        bytes.Clone(document.Data),
+		JSON: bytes.Clone(document.JSON),
 	}
 	return cloned
 }

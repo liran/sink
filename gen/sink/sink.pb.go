@@ -31,6 +31,9 @@ const (
 	// Return after a durable asynchronous queue has accepted each operation.
 	// Acceptance does not mean that the storage adapter has applied it.
 	CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED CompletionMode = 2
+	// Wait until the storage adapter has applied each operation and made the
+	// result visible to subsequent reads. Search adapters use refresh=wait_for.
+	CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE CompletionMode = 3
 )
 
 // Enum value maps for CompletionMode.
@@ -39,11 +42,13 @@ var (
 		0: "COMPLETION_MODE_UNSPECIFIED",
 		1: "COMPLETION_MODE_WAIT_UNTIL_APPLIED",
 		2: "COMPLETION_MODE_RETURN_AFTER_ACCEPTED",
+		3: "COMPLETION_MODE_WAIT_UNTIL_VISIBLE",
 	}
 	CompletionMode_value = map[string]int32{
 		"COMPLETION_MODE_UNSPECIFIED":           0,
 		"COMPLETION_MODE_WAIT_UNTIL_APPLIED":    1,
 		"COMPLETION_MODE_RETURN_AFTER_ACCEPTED": 2,
+		"COMPLETION_MODE_WAIT_UNTIL_VISIBLE":    3,
 	}
 )
 
@@ -643,13 +648,11 @@ func (x *OpaqueValue) GetData() []byte {
 	return nil
 }
 
-// Document contains a lossless, encoded user document. Sink passes documents
-// through unchanged for ordinary reads and puts. Lua merges currently inspect
-// application/json objects only.
+// Document contains a JSON-encoded user object. Storage-specific encodings are
+// private implementation details of storage adapters.
 type Document struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ContentType   string                 `protobuf:"bytes,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
-	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Json          []byte                 `protobuf:"bytes,1,opt,name=json,proto3" json:"json,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -684,16 +687,9 @@ func (*Document) Descriptor() ([]byte, []int) {
 	return file_sink_sink_proto_rawDescGZIP(), []int{3}
 }
 
-func (x *Document) GetContentType() string {
+func (x *Document) GetJson() []byte {
 	if x != nil {
-		return x.ContentType
-	}
-	return ""
-}
-
-func (x *Document) GetData() []byte {
-	if x != nil {
-		return x.Data
+		return x.Json
 	}
 	return nil
 }
@@ -1674,10 +1670,9 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x04kind\"5\n" +
 	"\vOpaqueValue\x12\x12\n" +
 	"\x04type\x18\x01 \x01(\tR\x04type\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"A\n" +
-	"\bDocument\x12!\n" +
-	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x12\n" +
-	"\x04data\x18\x02 \x01(\fR\x04data\"#\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\"\x1e\n" +
+	"\bDocument\x12\x12\n" +
+	"\x04json\x18\x01 \x01(\fR\x04json\"#\n" +
 	"\rRevisionToken\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"E\n" +
 	"\vReadRequest\x126\n" +
@@ -1741,11 +1736,12 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\aFailure\x12(\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x14.sink.v1.FailureCodeR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryable*\x84\x01\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryable*\xac\x01\n" +
 	"\x0eCompletionMode\x12\x1f\n" +
 	"\x1bCOMPLETION_MODE_UNSPECIFIED\x10\x00\x12&\n" +
 	"\"COMPLETION_MODE_WAIT_UNTIL_APPLIED\x10\x01\x12)\n" +
-	"%COMPLETION_MODE_RETURN_AFTER_ACCEPTED\x10\x02*s\n" +
+	"%COMPLETION_MODE_RETURN_AFTER_ACCEPTED\x10\x02\x12&\n" +
+	"\"COMPLETION_MODE_WAIT_UNTIL_VISIBLE\x10\x03*s\n" +
 	"\n" +
 	"ReadStatus\x12\x1b\n" +
 	"\x17READ_STATUS_UNSPECIFIED\x10\x00\x12\x15\n" +

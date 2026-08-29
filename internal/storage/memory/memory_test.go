@@ -104,9 +104,6 @@ func testAddress() storage.Address {
 }
 
 func testDocument(value string) storage.Document {
-	document := storage.Document{
-		ContentType: "text/plain",
-		Data:        []byte(value),
-	}
+	document := storage.Document{JSON: []byte(value)}
 	return document
 }
