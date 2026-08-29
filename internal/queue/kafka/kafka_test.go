@@ -3,11 +3,13 @@ package kafka_test
 import (
 	"context"
 	"crypto/sha256"
+	"sync"
 	"testing"
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
+	"github.com/liran/sink/internal/queue"
 	"github.com/liran/sink/internal/queue/kafka"
 	"github.com/liran/sink/internal/service"
 	"github.com/liran/sink/internal/storage"
@@ -16,6 +18,23 @@ import (
 	"github.com/twmb/franz-go/pkg/kfake"
 	"github.com/twmb/franz-go/pkg/kgo"
 )
+
+type blockingHandler struct {
+	started chan struct{}
+	once    sync.Once
+}
+
+func (h *blockingHandler) HandleBatch(ctx context.Context, mutations []queue.Mutation) []error {
+	h.once.Do(func() {
+		close(h.started)
+	})
+	<-ctx.Done()
+	results := make([]error, len(mutations))
+	for index := range results {
+		results[index] = ctx.Err()
+	}
+	return results
+}
 
 func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	const topic = "sink-mutations"
@@ -174,7 +193,169 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	}
 }
 
+func TestKafkaWorkerReplaysUncommittedMutationsAfterRestart(t *testing.T) {
+	const topic = "sink-restart-mutations"
+	const deadLetterTopic = "sink-restart-mutations.dlq"
+	numBrokers := kfake.NumBrokers(1)
+	seedTopics := kfake.SeedTopics(3, topic, deadLetterTopic)
+	cluster, err := kfake.NewCluster(numBrokers, seedTopics)
+	if err != nil {
+		t.Fatalf("kfake.NewCluster() error = %v", err)
+	}
+	t.Cleanup(cluster.Close)
+
+	publisherOptions := kafka.PublisherOptions{
+		Brokers: cluster.ListenAddrs(),
+		Topic:   topic,
+	}
+	publisher, err := kafka.NewPublisher(publisherOptions)
+	if err != nil {
+		t.Fatalf("kafka.NewPublisher() error = %v", err)
+	}
+	t.Cleanup(publisher.Close)
+
+	store := memory.New()
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("merge.NewLuaEngine() error = %v", err)
+	}
+	serverOptions := service.Options{
+		Storage:   store,
+		Lua:       luaEngine,
+		Publisher: publisher,
+	}
+	server, err := service.New(serverOptions)
+	if err != nil {
+		t.Fatalf("service.New() error = %v", err)
+	}
+
+	address := kafkaAddress("restart-record")
+	operations, programs := restartTestOperations(address, 20)
+	request := &sink.WriteRequest{
+		CompletionMode: sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED,
+		Operations:     operations,
+		LuaPrograms:    programs,
+	}
+	response, err := server.Write(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Write(backlog) error = %v", err)
+	}
+	for index, result := range response.GetResults() {
+		if result.GetStatus() != sink.WriteStatus_WRITE_STATUS_ACCEPTED {
+			t.Fatalf("Write(backlog) result[%d] = %+v", index, result)
+		}
+	}
+
+	blocked := &blockingHandler{started: make(chan struct{})}
+	firstOptions := kafka.WorkerOptions{
+		Brokers:          cluster.ListenAddrs(),
+		Topic:            topic,
+		GroupID:          "sink-restart-worker",
+		DeadLetterTopic:  deadLetterTopic,
+		Handler:          blocked,
+		RetryBackoff:     time.Millisecond,
+		MaxRetryBackoff:  time.Millisecond,
+		MaxRetryAttempts: 2,
+	}
+	firstWorker, err := kafka.NewWorker(firstOptions)
+	if err != nil {
+		t.Fatalf("kafka.NewWorker(first) error = %v", err)
+	}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- firstWorker.Run(firstContext)
+	}()
+	select {
+	case <-blocked.started:
+	case <-time.After(10 * time.Second):
+		cancelFirst()
+		firstWorker.Close()
+		t.Fatal("first worker did not fetch the backlog")
+	}
+	cancelFirst()
+	select {
+	case runErr := <-firstDone:
+		if runErr != nil {
+			t.Fatalf("first Worker.Run() error = %v", runErr)
+		}
+	case <-time.After(10 * time.Second):
+		firstWorker.Close()
+		t.Fatal("first worker did not stop")
+	}
+	firstWorker.Close()
+
+	processor, err := worker.NewProcessor(server)
+	if err != nil {
+		t.Fatalf("worker.NewProcessor() error = %v", err)
+	}
+	secondOptions := kafka.WorkerOptions{
+		Brokers:          cluster.ListenAddrs(),
+		Topic:            topic,
+		GroupID:          "sink-restart-worker",
+		DeadLetterTopic:  deadLetterTopic,
+		Handler:          processor,
+		RetryBackoff:     time.Millisecond,
+		MaxRetryBackoff:  5 * time.Millisecond,
+		MaxRetryAttempts: 3,
+	}
+	secondWorker, err := kafka.NewWorker(secondOptions)
+	if err != nil {
+		t.Fatalf("kafka.NewWorker(second) error = %v", err)
+	}
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() {
+		secondDone <- secondWorker.Run(secondContext)
+	}()
+	want := `{"value":20}`
+	waitForDocumentAt(t, store, "restart-record", want)
+	cancelSecond()
+	select {
+	case runErr := <-secondDone:
+		if runErr != nil {
+			t.Fatalf("second Worker.Run() error = %v", runErr)
+		}
+	case <-time.After(10 * time.Second):
+		secondWorker.Close()
+		t.Fatal("second worker did not stop")
+	}
+	secondWorker.Close()
+}
+
+func restartTestOperations(address *sink.RecordAddress, increments int) ([]*sink.WriteOperation, []*sink.LuaProgram) {
+	document := &sink.Document{Json: []byte(`{"value":0}`)}
+	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
+	putAction := &sink.WriteOperation_Put{Put: put}
+	putOperation := &sink.WriteOperation{Address: address, Action: putAction}
+	operations := []*sink.WriteOperation{putOperation}
+
+	mergeSource := []byte(`return function(current, incoming, context) current.value = current.value + incoming.value return current end`)
+	digest := sha256.Sum256(mergeSource)
+	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
+	for range increments {
+		incoming := &sink.Document{Json: []byte(`{"value":1}`)}
+		programReference := &sink.LuaProgram{Sha256: digest[:]}
+		mergeOperation := &sink.MergeOperation{
+			IncomingDocument:    incoming,
+			LuaProgram:          programReference,
+			MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
+		}
+		mergeAction := &sink.WriteOperation_Merge{Merge: mergeOperation}
+		operation := &sink.WriteOperation{Address: address, Action: mergeAction}
+		operations = append(operations, operation)
+	}
+	programs := []*sink.LuaProgram{program}
+	return operations, programs
+}
+
 func waitForDocumentData(t *testing.T, store *memory.Store, want string) {
+	t.Helper()
+	waitForDocumentAt(t, store, "record-1", want)
+}
+
+func waitForDocumentAt(t *testing.T, store *memory.Store, key string, want string) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -182,7 +363,7 @@ func waitForDocumentData(t *testing.T, store *memory.Store, want string) {
 	defer ticker.Stop()
 	for {
 		request := storage.ReadRequest{
-			Operations: []storage.ReadOperation{{Address: kafkaStorageAddress("record-1")}},
+			Operations: []storage.ReadOperation{{Address: kafkaStorageAddress(key)}},
 		}
 		response, err := store.Read(ctx, request)
 		if err != nil {
