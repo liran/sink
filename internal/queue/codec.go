@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	sink "github.com/liran/sink/gen/sink"
-	"google.golang.org/protobuf/proto"
 )
 
 var envelopeMagic = [4]byte{'S', 'N', 'K', 'Q'}
@@ -17,12 +16,16 @@ const (
 	mutationDelete  byte = 2
 )
 
+type marshalVTMessage interface {
+	MarshalVT() ([]byte, error)
+}
+
 func MarshalMutation(mutation Mutation) ([]byte, error) {
 	kind, message, err := mutationMessage(mutation)
 	if err != nil {
 		return nil, err
 	}
-	payload, err := proto.Marshal(message)
+	payload, err := message.MarshalVT()
 	if err != nil {
 		return nil, fmt.Errorf("marshal queue mutation: %w", err)
 	}
@@ -49,14 +52,14 @@ func UnmarshalMutation(envelope []byte) (Mutation, error) {
 	switch kind {
 	case mutationWrite:
 		operation := &sink.WriteOperation{}
-		if err := proto.Unmarshal(payload, operation); err != nil {
+		if err := operation.UnmarshalVT(payload); err != nil {
 			return empty, fmt.Errorf("unmarshal queued write: %w", err)
 		}
 		mutation := Mutation{Write: operation}
 		return mutation, nil
 	case mutationDelete:
 		operation := &sink.DeleteOperation{}
-		if err := proto.Unmarshal(payload, operation); err != nil {
+		if err := operation.UnmarshalVT(payload); err != nil {
 			return empty, fmt.Errorf("unmarshal queued delete: %w", err)
 		}
 		mutation := Mutation{Delete: operation}
@@ -71,8 +74,7 @@ func MutationKey(mutation Mutation) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	marshalOptions := proto.MarshalOptions{Deterministic: true}
-	encoded, err := marshalOptions.Marshal(address)
+	encoded, err := address.MarshalVT()
 	if err != nil {
 		return nil, fmt.Errorf("marshal queue mutation address: %w", err)
 	}
@@ -106,7 +108,7 @@ func mutationAddress(mutation Mutation) (*sink.RecordAddress, error) {
 	return address, nil
 }
 
-func mutationMessage(mutation Mutation) (byte, proto.Message, error) {
+func mutationMessage(mutation Mutation) (byte, marshalVTMessage, error) {
 	if mutation.Write != nil && mutation.Delete != nil {
 		return 0, nil, errors.New("queue mutation contains both write and delete operations")
 	}

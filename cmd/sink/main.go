@@ -18,6 +18,7 @@ import (
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
 	sinkmetrics "github.com/liran/sink/internal/metrics"
+	"github.com/liran/sink/internal/protocol"
 	"github.com/liran/sink/internal/queue"
 	queuekafka "github.com/liran/sink/internal/queue/kafka"
 	"github.com/liran/sink/internal/service"
@@ -400,9 +401,11 @@ func (a *application) configureGRPC(server sink.SinkServer, observed *sinkmetric
 	if err != nil {
 		return fmt.Errorf("listen for gRPC: %w", err)
 	}
-	serverOptions := make([]grpc.ServerOption, 0, 3)
+	serverOptions := make([]grpc.ServerOption, 0, 4)
 	serverOptions = append(serverOptions, grpc.MaxRecvMsgSize(a.config.grpcMaxReceiveBytes))
 	serverOptions = append(serverOptions, grpc.MaxSendMsgSize(a.config.grpcMaxSendBytes))
+	vtCodec := protocol.NewVTProtoCodec()
+	serverOptions = append(serverOptions, grpc.ForceServerCodecV2(vtCodec))
 	if observed != nil {
 		interceptor := observed.UnaryServerInterceptor()
 		serverOptions = append(serverOptions, grpc.UnaryInterceptor(interceptor))
