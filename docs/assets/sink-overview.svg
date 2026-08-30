@@ -1,0 +1,219 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="820" viewBox="0 0 1500 820" role="img" aria-labelledby="title description">
+  <title id="title">Sink enterprise request-routing architecture</title>
+  <desc id="description">API services, crawler workers, and data pipelines call one gRPC record API. Sink routes, bounds, and orders each operation, then uses either synchronous application or Kafka-backed asynchronous delivery. The storage router sends each operation to exactly one configured MongoDB, Elasticsearch, or OpenSearch store selected by address.store.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#d8e0e6" stroke-width="1" opacity="0.48"/>
+    </pattern>
+    <style>
+      text { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .section { fill: #415466; font-size: 15px; font-weight: 700; letter-spacing: 1.6px; }
+      .module-title { fill: #132a3a; font-size: 19px; font-weight: 700; }
+      .module-copy { fill: #526575; font-size: 15px; }
+      .micro { fill: #5f7180; font-size: 13px; }
+      .core-title { fill: #ffffff; font-size: 31px; font-weight: 700; letter-spacing: 0.8px; }
+      .core-subtitle { fill: #c8d5de; font-size: 15px; }
+      .step-title { fill: #ffffff; font-size: 16px; font-weight: 700; letter-spacing: 0.5px; }
+      .step-copy { fill: #c8d5de; font-size: 13px; }
+      .lane-title { fill: #ffffff; font-size: 17px; font-weight: 700; letter-spacing: 1.1px; }
+      .lane-copy { fill: #2f4352; font-size: 14px; }
+      .code { fill: #314b5d; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+      .route-title { fill: #ffffff; font-size: 14px; font-weight: 700; letter-spacing: 0.8px; }
+      .route-copy { fill: #405565; font-size: 12px; }
+      .store-title { fill: #173044; font-size: 16px; font-weight: 700; letter-spacing: 0.7px; }
+      .store-copy { fill: #4c6170; font-size: 13px; }
+      .footer { fill: #e8eef2; font-size: 14px; font-weight: 700; letter-spacing: 0.9px; }
+    </style>
+  </defs>
+
+  <rect width="1500" height="820" rx="12" fill="#f3f6f8"/>
+  <rect width="1500" height="820" rx="12" fill="url(#grid)"/>
+  <path d="M12 0H1488A12 12 0 0 1 1500 12V18H0V12A12 12 0 0 1 12 0Z" fill="#132a3a"/>
+
+  <text class="section" x="35" y="62">CALLERS</text>
+  <text class="section" x="285" y="62">RECORD API</text>
+  <text class="section" x="430" y="62">SINK CORE</text>
+  <text class="section" x="845" y="62">DELIVERY</text>
+  <text class="section" x="1115" y="62">ROUTING</text>
+  <text class="section" x="1300" y="62">BACKENDS</text>
+
+  <g>
+    <rect x="35" y="130" width="210" height="90" rx="6" fill="#ffffff" stroke="#aebbc5" stroke-width="1.5"/>
+    <rect x="35" y="130" width="6" height="90" fill="#325d7d"/>
+    <rect x="56" y="151" width="24" height="24" fill="#e6edf2" stroke="#748b9c"/>
+    <path d="M62 163h12M68 157v12" stroke="#325d7d" stroke-width="2"/>
+    <text class="module-title" x="91" y="165">API services</text>
+    <text class="module-copy" x="56" y="196">interactive requests</text>
+
+    <rect x="35" y="300" width="210" height="90" rx="6" fill="#ffffff" stroke="#aebbc5" stroke-width="1.5"/>
+    <rect x="35" y="300" width="6" height="90" fill="#325d7d"/>
+    <rect x="56" y="321" width="24" height="24" fill="#e6edf2" stroke="#748b9c"/>
+    <path d="M61 339l5-6 4 4 6-9" fill="none" stroke="#325d7d" stroke-width="2"/>
+    <text class="module-title" x="91" y="335">Crawler workers</text>
+    <text class="module-copy" x="56" y="366">high concurrency</text>
+
+    <rect x="35" y="470" width="210" height="90" rx="6" fill="#ffffff" stroke="#aebbc5" stroke-width="1.5"/>
+    <rect x="35" y="470" width="6" height="90" fill="#325d7d"/>
+    <rect x="56" y="491" width="24" height="24" fill="#e6edf2" stroke="#748b9c"/>
+    <path d="M61 498h14M61 503h14M61 508h10" stroke="#325d7d" stroke-width="2"/>
+    <text class="module-title" x="91" y="505">Data pipelines</text>
+    <text class="module-copy" x="56" y="536">batch ingestion</text>
+  </g>
+
+  <g>
+    <rect x="285" y="105" width="105" height="455" rx="4" fill="#e8edf1" stroke="#7d8f9c" stroke-width="1.5"/>
+    <rect x="285" y="105" width="105" height="50" rx="4" fill="#223b4d"/>
+    <rect x="285" y="149" width="105" height="6" fill="#223b4d"/>
+    <text x="337.5" y="137" text-anchor="middle" fill="#ffffff" font-size="18" font-weight="700">gRPC</text>
+    <text x="337.5" y="200" text-anchor="middle" fill="#243b4d" font-size="16" font-weight="700">RECORD</text>
+    <text x="337.5" y="222" text-anchor="middle" fill="#243b4d" font-size="16" font-weight="700">API</text>
+    <path d="M305 244H370" stroke="#aebbc5"/>
+    <text x="337.5" y="282" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">READ</text>
+    <text x="337.5" y="342" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">WRITE</text>
+    <text x="337.5" y="402" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">DELETE</text>
+    <path d="M305 435H370" stroke="#aebbc5"/>
+    <text x="337.5" y="480" text-anchor="middle" fill="#526575" font-size="14">JSON objects</text>
+    <text x="337.5" y="510" text-anchor="middle" fill="#526575" font-size="14">batch-native</text>
+  </g>
+
+  <g>
+    <rect x="430" y="90" width="330" height="510" rx="6" fill="#132a3a" stroke="#0c1d29" stroke-width="2"/>
+    <text class="core-title" x="465" y="137">SINK CORE</text>
+    <text class="core-subtitle" x="465" y="163">storage-independent record execution</text>
+    <path d="M465 180H725" stroke="#526b7c"/>
+
+    <rect x="465" y="195" width="260" height="82" rx="3" fill="#1e3b4f" stroke="#587184"/>
+    <rect x="465" y="195" width="6" height="82" fill="#6f96ae"/>
+    <text class="step-title" x="488" y="226">01  ADDRESS ROUTING</text>
+    <text class="step-copy" x="488" y="251">address.store → configured backend</text>
+
+    <rect x="465" y="302" width="260" height="82" rx="3" fill="#1e3b4f" stroke="#587184"/>
+    <rect x="465" y="302" width="6" height="82" fill="#6f96ae"/>
+    <text class="step-title" x="488" y="333">02  BOUNDED EXECUTION</text>
+    <text class="step-copy" x="488" y="358">batching • concurrency • backpressure</text>
+
+    <rect x="465" y="409" width="260" height="82" rx="3" fill="#1e3b4f" stroke="#587184"/>
+    <rect x="465" y="409" width="6" height="82" fill="#6f96ae"/>
+    <text class="step-title" x="488" y="440">03  RECORD SEMANTICS</text>
+    <text class="step-copy" x="488" y="465">same-record order • atomic Lua RMW</text>
+
+    <rect x="465" y="520" width="260" height="42" rx="3" fill="#0e2230" stroke="#526b7c"/>
+    <text x="595" y="546" text-anchor="middle" fill="#e7eef2" font-size="13" font-weight="700" letter-spacing="0.6px">COMPLETION MODE PER REQUEST</text>
+    <text x="595" y="583" text-anchor="middle" fill="#9fb2bf" font-size="12" letter-spacing="0.5px">HEALTH • METRICS • FAILURE ISOLATION</text>
+  </g>
+
+  <g>
+    <polygon points="800,516 818,534 800,552 782,534" fill="#ffffff" stroke="#5e7180" stroke-width="2"/>
+    <path d="M794 534l5 5 9-12" fill="none" stroke="#2d5f7c" stroke-width="2.5"/>
+  </g>
+
+  <g>
+    <rect x="845" y="135" width="225" height="190" rx="6" fill="#ffffff" stroke="#7f9cb1" stroke-width="1.5"/>
+    <rect x="845" y="135" width="225" height="46" rx="6" fill="#245b82"/>
+    <rect x="845" y="175" width="225" height="6" fill="#245b82"/>
+    <text class="lane-title" x="865" y="165">SYNCHRONOUS</text>
+    <text class="module-title" x="865" y="213">Apply to selected store</text>
+    <text class="code" x="865" y="247">WAIT_UNTIL_APPLIED</text>
+    <text class="code" x="865" y="271">WAIT_UNTIL_VISIBLE</text>
+    <path d="M865 287H1050" stroke="#c1ccd4"/>
+    <text class="lane-copy" x="865" y="307">RPC returns after apply</text>
+    <text class="lane-copy" x="865" y="324">or search visibility</text>
+
+    <rect x="845" y="405" width="225" height="230" rx="6" fill="#ffffff" stroke="#6e9894" stroke-width="1.5"/>
+    <rect x="845" y="405" width="225" height="46" rx="6" fill="#0f6a63"/>
+    <rect x="845" y="445" width="225" height="6" fill="#0f6a63"/>
+    <text class="lane-title" x="865" y="435">ASYNCHRONOUS</text>
+    <text class="module-title" x="865" y="482">Kafka</text>
+    <text class="lane-copy" x="865" y="505">durable acceptance</text>
+    <text x="865" y="529" fill="#0f6a63" font-size="13" font-weight="700">RPC RETURNS HERE</text>
+    <path d="M865 547H1050" stroke="#c1ccd4"/>
+    <text class="module-title" x="865" y="583">Worker</text>
+    <text class="lane-copy" x="865" y="607">applies the mutation later</text>
+  </g>
+
+  <g>
+    <rect x="1115" y="270" width="115" height="230" rx="4" fill="#ffffff" stroke="#738795" stroke-width="1.5"/>
+    <rect x="1115" y="270" width="115" height="58" rx="4" fill="#223b4d"/>
+    <rect x="1115" y="322" width="115" height="6" fill="#223b4d"/>
+    <text class="route-title" x="1172.5" y="295" text-anchor="middle">STORAGE</text>
+    <text class="route-title" x="1172.5" y="315" text-anchor="middle">ROUTER</text>
+    <text class="code" x="1172.5" y="363" text-anchor="middle">address.store</text>
+    <text x="1172.5" y="414" text-anchor="middle" fill="#223b4d" font-size="40" font-weight="700">1</text>
+    <text x="1172.5" y="438" text-anchor="middle" fill="#223b4d" font-size="14" font-weight="700" letter-spacing="1px">MATCH</text>
+    <text class="route-copy" x="1172.5" y="468" text-anchor="middle">per operation</text>
+  </g>
+
+  <g>
+    <rect x="1300" y="100" width="165" height="125" rx="4" fill="#ffffff" stroke="#9daab4" stroke-width="1.5"/>
+    <rect x="1300" y="100" width="165" height="45" rx="4" fill="#e2e8ec"/>
+    <rect x="1300" y="139" width="165" height="6" fill="#e2e8ec"/>
+    <text class="store-title" x="1382.5" y="129" text-anchor="middle">MONGODB</text>
+    <text class="store-copy" x="1382.5" y="174" text-anchor="middle">store: mongo-main</text>
+    <text class="store-copy" x="1382.5" y="199" text-anchor="middle">database / collection</text>
+
+    <rect x="1300" y="300" width="165" height="125" rx="4" fill="#ffffff" stroke="#9daab4" stroke-width="1.5"/>
+    <rect x="1300" y="300" width="165" height="45" rx="4" fill="#e2e8ec"/>
+    <rect x="1300" y="339" width="165" height="6" fill="#e2e8ec"/>
+    <text class="store-title" x="1382.5" y="329" text-anchor="middle">ELASTICSEARCH</text>
+    <text class="store-copy" x="1382.5" y="374" text-anchor="middle">store: search-main</text>
+    <text class="store-copy" x="1382.5" y="399" text-anchor="middle">existing index / alias</text>
+
+    <rect x="1300" y="500" width="165" height="125" rx="4" fill="#ffffff" stroke="#9daab4" stroke-width="1.5"/>
+    <rect x="1300" y="500" width="165" height="45" rx="4" fill="#e2e8ec"/>
+    <rect x="1300" y="539" width="165" height="6" fill="#e2e8ec"/>
+    <text class="store-title" x="1382.5" y="529" text-anchor="middle">OPENSEARCH</text>
+    <text class="store-copy" x="1382.5" y="574" text-anchor="middle">store: search-archive</text>
+    <text class="store-copy" x="1382.5" y="599" text-anchor="middle">existing index / alias</text>
+  </g>
+
+  <g fill="none" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M245 175H273" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M245 345H273" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M245 515H273" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M390 333H418" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M760 534H770" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M800 516V230H833" stroke="#245b82" stroke-width="3"/>
+    <path d="M818 534H833" stroke="#0f6a63" stroke-width="3"/>
+    <path d="M1070 230H1090V340H1103" stroke="#245b82" stroke-width="3"/>
+    <path d="M1070 585H1090V445H1103" stroke="#0f6a63" stroke-width="3"/>
+    <path d="M1230 385H1265V162.5M1265 385V562.5" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M1265 162.5H1288M1265 362.5H1288M1265 562.5H1288" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M595 277V290M595 384V397" stroke="#9fb3c0" stroke-width="2"/>
+    <path d="M957.5 529V548" stroke="#0f6a63" stroke-width="2.5"/>
+  </g>
+
+  <g aria-hidden="true">
+    <rect x="241" y="171" width="8" height="8" fill="#3e5a6c"/>
+    <rect x="241" y="341" width="8" height="8" fill="#3e5a6c"/>
+    <rect x="241" y="511" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="285,175 273,168 273,182" fill="#3e5a6c"/>
+    <polygon points="285,345 273,338 273,352" fill="#3e5a6c"/>
+    <polygon points="285,515 273,508 273,522" fill="#3e5a6c"/>
+
+    <rect x="386" y="329" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="430,333 418,326 418,340" fill="#3e5a6c"/>
+
+    <rect x="756" y="530" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="782,534 770,527 770,541" fill="#3e5a6c"/>
+
+    <polygon points="845,230 833,223 833,237" fill="#245b82"/>
+    <polygon points="845,534 833,527 833,541" fill="#0f6a63"/>
+
+    <rect x="1066" y="226" width="8" height="8" fill="#245b82"/>
+    <rect x="1066" y="581" width="8" height="8" fill="#0f6a63"/>
+    <polygon points="1115,340 1103,333 1103,347" fill="#245b82"/>
+    <polygon points="1115,445 1103,438 1103,452" fill="#0f6a63"/>
+
+    <rect x="1226" y="381" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="1300,162.5 1288,155.5 1288,169.5" fill="#3e5a6c"/>
+    <polygon points="1300,362.5 1288,355.5 1288,369.5" fill="#3e5a6c"/>
+    <polygon points="1300,562.5 1288,555.5 1288,569.5" fill="#3e5a6c"/>
+
+    <polygon points="595,302 588,290 602,290" fill="#9fb3c0"/>
+    <polygon points="595,409 588,397 602,397" fill="#9fb3c0"/>
+    <polygon points="957.5,560 950.5,548 964.5,548" fill="#0f6a63"/>
+  </g>
+
+  <rect x="35" y="752" width="1430" height="44" rx="3" fill="#132a3a"/>
+  <text class="footer" x="750" y="779" text-anchor="middle">ONE RECORD CONTRACT   |   TWO DELIVERY MODES   |   ONE MATCHING STORE PER OPERATION</text>
+</svg>

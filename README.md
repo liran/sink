@@ -1,193 +1,136 @@
 # Sink
 
-Sink is a database-independent logical layer for record reads, writes, and
-read-modify-write operations. It supports MongoDB, Elasticsearch, and
-OpenSearch storage. One server can connect to multiple storage instances, and
-the public record address selects an instance by its configured store name.
+Sink is a database-independent gRPC service for reading, writing, merging, and
+deleting JSON records. Applications use one record API while Sink handles
+routing, batching, concurrency, synchronous or durable asynchronous delivery,
+and storage-specific behavior for MongoDB, Elasticsearch, and OpenSearch.
 
-## API model
+![Sink routes each record operation through a synchronous or Kafka-backed path to one matching store](docs/assets/sink-overview.svg)
 
-The gRPC service exposes three batch-native methods. The stock server accepts
-encoded requests and responses up to 64 MiB by default; both limits are
-configurable.
+## Why use Sink?
 
-- `Read` reads one or more records.
-- `Write` accepts either a complete-document `put` or a Lua-driven `merge`.
-- `Delete` permanently deletes one or more records.
+Applications that write to several databases often repeat the same
+non-business work: storage drivers, batching, backpressure, retry rules,
+read-modify-write conflicts, queue consumers, health checks, and metrics. That
+logic becomes especially expensive in crawlers and ingestion systems with many
+concurrent workers.
 
-A one-element request is the single-record form. Atomicity is per record; a
-multi-record request is not a transaction. Operations for the same record are
-executed in request order, while different records may execute concurrently.
+Sink centralizes those concerns:
 
-The server automatically coalesces concurrent one-element `Read` calls and
-synchronous `Write` and `Delete` calls into bounded, process-local batches for
-each configured store. A slow or busy store cannot block another store's batch
-queue. This lets many crawler threads use simple single-record RPCs while
-storage adapters still receive batch work. The short collection window, batch
-limits, and per-store queue limits are configurable. `RETURN_AFTER_ACCEPTED`
-mutations bypass this layer because each store's Kafka publisher already
-batches its asynchronous path. Explicit multi-store requests go directly to
-the concurrent storage and queue routers. Explicit client batches remain
-useful because they avoid per-RPC transport overhead, and aggregation does not
-cross stores or Sink pods.
+| Problem | What Sink provides |
+| --- | --- |
+| Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON records |
+| Many small calls overload storage | Automatic bounded batching, concurrency limits, and backpressure per store |
+| Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
+| Concurrent updates lose data | Atomic per-record Lua merges with storage revision checks |
+| A service needs more than one cluster or engine | Named stores selected by the record address, even within one batch |
+| Failures are hard to operate | Per-dependency health, bounded-cardinality metrics, bounded worker retries, and dead letters |
 
-`Write` and `Delete` support three completion modes:
+Sink is a good fit when several workers or services need consistent record
+semantics across shared storage. It is deliberately not an ORM, a schema or
+index manager, or a cross-record transaction coordinator.
 
-- `WAIT_UNTIL_APPLIED` returns after the storage adapter completes the work.
-- `WAIT_UNTIL_VISIBLE` additionally waits until subsequent search reads can
-  observe the mutation. Elasticsearch and OpenSearch use `refresh=wait_for`;
-  MongoDB writes are already visible when acknowledged.
-- `RETURN_AFTER_ACCEPTED` returns after a durable asynchronous queue accepts
-  the work. Queue redelivery can execute an operation more than once.
+## How it works
 
-The asynchronous path stores the original merge intent, including its Lua
-source. A worker reads the latest record, runs the program, and submits the
-resulting change using a storage revision precondition. This makes each RMW
-attempt atomic without exposing database-specific CAS primitives through the
-API.
+Every record has a logical address:
 
-Kafka is configured independently inside each store. Stores can use separate
-clusters, topics, consumer groups, retry policies, and dead-letter topics. A
-store without Kafka remains fully synchronous and returns a retryable
-per-operation failure for `RETURN_AFTER_ACCEPTED`. Kafka records use a
-deterministic encoded record address as their key, so all mutations for one
-record stay in one partition and retain submission order. The selected store
-publisher waits for Kafka acknowledgement before reporting `ACCEPTED`.
-The worker disables auto-commit, applies fetched mutations in dependency waves
-through the synchronous batch service path, and commits offsets only after the
-fetched records finish. Retryable failures use bounded exponential backoff with
-jitter. Malformed records, permanent failures, and exhausted retries are copied
-to the configured dead-letter topic before their source offsets are committed.
-A crash after storage applies a mutation but before Kafka commits its offset can
-therefore execute that mutation again; this is the documented at-least-once
-behavior.
-
-## Documents
-
-The public protocol carries JSON objects only. Clients serialize ordinary
-application values before sending them, and reads and Lua merges remain JSON
-through the service. Storage-specific conversion is private to each adapter.
-Typed date-time values remain RFC3339 JSON strings and carry JSON Pointer
-metadata alongside the object. Lua and search storage continue to see strings;
-the MongoDB adapter uses only the marked paths for BSON datetime conversion, so
-an ordinary string that happens to look like a timestamp remains a BSON string.
-
-The MongoDB adapter converts JSON to BSON internally, preserves the top-level
-document shape, and lazily adds one configurable Sink metadata field when a
-record is first mutated through Sink. A legacy record without that field is
-updated with a conditional “metadata still absent” filter, so its first RMW is
-atomic as well. Logical string, int64, byte, and `mongodb/object-id` keys map to
-MongoDB `_id` values. The record address's namespace and dataset map directly
-to the MongoDB database and collection. Batch reads use one `$in` query per
-collection. Unconditional puts and creates use unordered bulk writes;
-revision-conditional writes run concurrently as individual `ReplaceOne`
-operations because older MongoDB bulk responses do not identify which
-individual CAS filters matched.
-
-The Elasticsearch and OpenSearch adapter stores the JSON user document
-unchanged in `_source`. Existing string IDs remain
-unchanged; other logical key types receive a deterministic, reserved encoding.
-It uses `_seq_no` and `_primary_term` as an opaque revision token, global
-`_mget` for batch reads, and `_bulk` for puts and hard deletes. Sink does not
-create or manage indexes, mappings, or aliases. The record address's namespace
-remains a logical business namespace, while its dataset is the complete,
-existing index or alias name.
-
-## Packages
-
-- `internal/service` implements validation, same-record ordering, batched puts,
-  and CAS retry for Lua merges.
-- `internal/storage` routes each operation by `address.store`, executes
-  independent storage instances concurrently, and preserves result order.
-- `internal/storage/mongodb` implements MongoDB storage.
-- `internal/storage/search` implements the shared Elasticsearch and OpenSearch
-  REST storage adapter.
-- `internal/queue/kafka` implements durable mutation publication and manual
-  offset consumption.
-- `internal/queue` routes asynchronous mutations to the publisher selected by
-  `address.store` while preserving batch result order.
-- `internal/worker` applies queued operations through the synchronous Sink
-  service, keeping one execution path for sync and async writes.
-- `internal/storage/memory` is the deterministic test and local-development
-  adapter.
-
-## Development
-
-Generate protobuf code and run validation:
-
-```shell
-make proto
-make test
-make lint
-make test-integration
+```text
+store = primary
+namespace = catalog
+dataset = products
+key = product-42
 ```
 
-`make test-integration` starts ephemeral MongoDB ReplicaSet, Elasticsearch, and
-OpenSearch containers, runs storage lifecycle and concurrent-RMW tests against
-each backend, and stops the containers. `make test-search-integration` runs
-only the Elasticsearch and OpenSearch suites. The Kafka path is tested with
-franz-go's in-process Kafka broker in the normal test suite.
+`store` selects a configured backend. For MongoDB, `namespace` and `dataset`
+are the database and collection. For Elasticsearch and OpenSearch, `dataset`
+is the complete existing index or alias name. The application never sends a
+database connection string or storage-specific query through the API.
 
-## Docker Compose quickstart
+All requests are batch-native, but a one-record request is the normal
+single-record form. Sink can combine concurrent small requests into bounded
+storage batches, preserves the order of operations for the same record, and
+runs independent records and stores concurrently.
 
-Start a complete local stack and run the end-to-end example with one command:
+Mutations choose when success is returned:
+
+| Completion mode | Success means |
+| --- | --- |
+| `WAIT_UNTIL_APPLIED` | The backend acknowledged the mutation |
+| `WAIT_UNTIL_VISIBLE` | A following search read can observe the mutation |
+| `RETURN_AFTER_ACCEPTED` | The configured Kafka queue durably accepted it |
+
+See [Architecture and behavior](docs/architecture.md) for the full request
+flow, ordering, batching, merge, and failure semantics.
+
+## Try it locally
+
+The quickstart requires Docker with Compose. From the repository root, run:
 
 ```shell
 make quickstart
 ```
 
-The quickstart builds Sink locally, starts a single-node MongoDB ReplicaSet and
-Apache Kafka in KRaft mode, creates the asynchronous mutation topic, then tests
-batch synchronous writes and reads, asynchronous delivery, hard deletes, and
-the Prometheus endpoint. The stack remains running for further testing at
-`127.0.0.1:8080`, with metrics at `http://127.0.0.1:9090/metrics`; use
-`make quickstart-down` to stop it.
+This builds Sink, starts MongoDB and Kafka, runs synchronous and asynchronous
+record operations, checks Prometheus metrics, and leaves the stack available
+at `127.0.0.1:8080`.
 
-The default standard gRPC health service reports process readiness and remains
-`SERVING` when one configured store has a runtime dependency failure. Periodic
-dependency health is available separately as `sink.storage.<store>` and
-`sink.kafka.<store>`, so one store cannot remove healthy stores from service.
+```shell
+make quickstart-down
+```
 
-See [`examples/quickstart`](examples/quickstart) for the exposed dependency
-ports, direct Docker Compose commands, and reset instructions.
+The [quickstart guide](examples/quickstart/README.md) lists the exposed ports,
+direct Compose commands, and reset instructions.
 
-## Container
+## Connect an application
 
-Published releases build multi-platform images for `linux/amd64` and
-`linux/arm64` and push them to `ghcr.io/liran/sink`. Run the synchronous gRPC
-service with a YAML configuration file:
+Go applications can use the typed, concurrency-safe
+[`sink-go`](https://github.com/liran/sink-go) client:
+
+```shell
+go get github.com/liran/sink-go
+```
+
+Its [quick-start example](https://github.com/liran/sink-go#quick-start) shows
+how to connect, create an address, and write a Go value. Other languages can
+generate a standard gRPC client from [`proto/sink/sink.proto`](proto/sink/sink.proto).
+
+For a real deployment, copy [`config.example.yaml`](config.example.yaml), edit
+the backend connection, and start the container with the file mounted:
 
 ```shell
 cp config.example.yaml config.yaml
-# Edit config.yaml for the target MongoDB deployment.
+# Edit config.yaml for the target backend.
 docker run --rm -p 8080:8080 -p 9090:9090 \
   --mount type=bind,source="$(pwd)/config.yaml",target=/etc/sink/config.yaml,readonly \
   ghcr.io/liran/sink:latest --config /etc/sink/config.yaml
 ```
 
-The configuration file is required and the server does not read runtime
-parameters from `SINK_*` environment variables. The image supports three modes
-through the top-level `mode` field:
+The server validates the complete configuration and connects to every required
+dependency before becoming ready.
 
-- `server` runs the gRPC API and is the default.
-- `worker` consumes durable Kafka mutations without opening a gRPC listener.
-- `all` runs both roles in one process for smaller deployments.
+## Important guarantees and boundaries
 
-See [`docs/configuration.md`](docs/configuration.md) for every field's type,
-function, required condition, default, validation rules, address routing, and
-multi-storage examples. A ready-to-edit MongoDB file is available at
-[`config.example.yaml`](config.example.yaml).
+- Atomicity is per record; a multi-record request is not a transaction.
+- Operations for one record retain request order. Independent records and
+  stores may execute concurrently.
+- Kafka delivery is at least once. A mutation can run again after a worker
+  crashes between applying it and committing its offset.
+- Sink does not create Elasticsearch or OpenSearch indexes, mappings, or
+  aliases.
+- Every configured store must be reachable at startup. In `server` and `all`
+  modes, each configured Kafka publisher is checked too. Runtime health is
+  reported separately so an unrelated healthy store can continue serving.
 
-Lua merge programs travel with each write request, so application rules can be
-versioned and deployed with client code without rebuilding Sink or storing
-customer profiles in the service. Identical programs are declared once per
-batch, while asynchronous queue records remain self-contained. Sink caches
-compiled programs by SHA-256 but creates a fresh VM for every execution to isolate mutable global state. Programs
-must return a function with the signature `function(current, incoming, context)`;
-both documents and the returned value are JSON objects. See
-[`docs/configuration.md`](docs/configuration.md#lua-merge-programs) for the
-sandbox, JSON bridge, and resource limits.
+## Documentation
 
-Publishing a GitHub Release triggers `.github/workflows/release-image.yml`.
-Semantic version tags such as `v0.1.0` publish `0.1.0`, `0.1`, `0`, and—when
-the release is not a prerelease—`latest` tags in GitHub Container Registry.
+- [Architecture and behavior](docs/architecture.md) — request flow, adapters,
+  batching, Lua merges, asynchronous delivery, and reliability boundaries
+- [Configuration reference](docs/configuration.md) — every field, default,
+  allowed value, validation rule, routing rule, and deployment mode
+- [Docker Compose quickstart](examples/quickstart/README.md) — local environment
+  and end-to-end example
+- [Development guide](docs/development.md) — repository layout, validation, and
+  release images
+- [Protocol definition](proto/sink/sink.proto) — authoritative gRPC contract
+
+Sink is released under the [MIT License](LICENSE).
