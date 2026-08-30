@@ -18,8 +18,16 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  qualify:
+    name: Public production qualification
+    uses: liran/sink-production-suite/.github/workflows/release-qualification.yml@1d2b5e514af7caaf53a4e061cf3a34a245e3f55b
+    with:
+      sink_ref: ${{ github.event.release.tag_name }}
+
   publish:
     name: Publish multi-platform image
+    needs:
+      - qualify
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
