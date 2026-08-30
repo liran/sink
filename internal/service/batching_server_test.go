@@ -11,6 +11,7 @@ import (
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
+	"github.com/liran/sink/internal/protocol"
 	"github.com/liran/sink/internal/queue"
 	"github.com/liran/sink/internal/service"
 	"github.com/liran/sink/internal/storage"
@@ -399,7 +400,9 @@ func TestBatchingServerAggregatesAcrossGRPCRPCs(t *testing.T) {
 	observed := &countingStorage{backend: backend}
 	server := newBatchingTestServer(t, observed, nil, requestCount)
 	listener := bufconn.Listen(1 << 20)
-	grpcServer := grpc.NewServer()
+	vtCodec := protocol.NewVTProtoCodec()
+	codecOption := grpc.ForceServerCodecV2(vtCodec)
+	grpcServer := grpc.NewServer(codecOption)
 	sink.RegisterSinkServer(grpcServer, server)
 	serveErrors := make(chan error, 1)
 	go func() {
