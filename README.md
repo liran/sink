@@ -150,6 +150,8 @@ dependency before becoming ready.
 
 - [Architecture and behavior](docs/architecture.md) — request flow, adapters,
   batching, Lua merges, asynchronous delivery, and reliability boundaries
+- [Lua merge developer guide](docs/lua-merge-guide.md) — script contract,
+  built-in `sink.v1` tools, examples, retry semantics, and testing guidance
 - [Configuration reference](docs/configuration.md) — every field, default,
   allowed value, validation rule, routing rule, and deployment mode
 - [Docker Compose quickstart](examples/quickstart/README.md) — local environment
