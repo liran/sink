@@ -5,7 +5,7 @@ the [main README](../README.md) for the problem Sink solves and a local
 quickstart. Deployment settings and their validation rules live in the
 [configuration reference](configuration.md).
 
-![Sink request and storage flow](assets/sink-overview.svg)
+![Sink routes each record operation through a synchronous or Kafka-backed path to one matching store](assets/sink-overview.svg)
 
 ## Request path
 

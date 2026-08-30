@@ -5,7 +5,7 @@ deleting JSON records. Applications use one record API while Sink handles
 routing, batching, concurrency, synchronous or durable asynchronous delivery,
 and storage-specific behavior for MongoDB, Elasticsearch, and OpenSearch.
 
-![Sink turns application record operations into bounded, observable storage work](docs/assets/sink-overview.svg)
+![Sink routes each record operation through a synchronous or Kafka-backed path to one matching store](docs/assets/sink-overview.svg)
 
 ## Why use Sink?
 
