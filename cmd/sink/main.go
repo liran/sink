@@ -154,10 +154,29 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 			return nil, err
 		}
 	}
+	for _, configured := range loaded.storages {
+		if !configured.kafka.enabled {
+			continue
+		}
+		topics := []string{configured.kafka.topic, configured.kafka.deadLetterTopic}
+		topicOptions := queuekafka.TopicOptions{
+			Brokers:           configured.kafka.brokers,
+			Topics:            topics,
+			CreateIfNotExists: configured.kafka.createTopicIfNotExists,
+			Partitions:        configured.kafka.topicPartitions,
+			ReplicationFactor: configured.kafka.topicReplicationFactor,
+			Retention:         configured.kafka.topicRetention,
+		}
+		topicErr := queuekafka.EnsureTopics(ctx, topicOptions)
+		if topicErr != nil {
+			app.close()
+			return nil, fmt.Errorf("configure Kafka topics for store %q: %w", configured.name, topicErr)
+		}
+	}
 	if loaded.mode == modeServer || loaded.mode == modeAll {
 		storePublishers := make(map[string]queue.Publisher)
 		for _, configured := range loaded.storages {
-			if !configured.kafka.configured {
+			if !configured.kafka.enabled {
 				continue
 			}
 			publisherOptions := queuekafka.PublisherOptions{
@@ -244,7 +263,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 			return nil, processorErr
 		}
 		for _, configured := range loaded.storages {
-			if !configured.kafka.configured {
+			if !configured.kafka.enabled {
 				continue
 			}
 			workerOptions := queuekafka.WorkerOptions{

@@ -57,46 +57,6 @@ services:
       retries: 20
       start_period: 15s
 
-  kafka-init:
-    image: apache/kafka:4.2.1
-    entrypoint:
-      - /opt/kafka/bin/kafka-topics.sh
-    command:
-      - --bootstrap-server
-      - kafka:19092
-      - --create
-      - --if-not-exists
-      - --topic
-      - sink-mutations
-      - --partitions
-      - "4"
-      - --replication-factor
-      - "1"
-    depends_on:
-      kafka:
-        condition: service_healthy
-    restart: "no"
-
-  kafka-dlq-init:
-    image: apache/kafka:4.2.1
-    entrypoint:
-      - /opt/kafka/bin/kafka-topics.sh
-    command:
-      - --bootstrap-server
-      - kafka:19092
-      - --create
-      - --if-not-exists
-      - --topic
-      - sink-mutations.dlq
-      - --partitions
-      - "4"
-      - --replication-factor
-      - "1"
-    depends_on:
-      kafka:
-        condition: service_healthy
-    restart: "no"
-
   sink:
     image: sink-quickstart:local
     build:
@@ -116,10 +76,8 @@ services:
     depends_on:
       mongo:
         condition: service_healthy
-      kafka-init:
-        condition: service_completed_successfully
-      kafka-dlq-init:
-        condition: service_completed_successfully
+      kafka:
+        condition: service_healthy
     restart: unless-stopped
 
   example:

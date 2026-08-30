@@ -46,8 +46,29 @@ storages:
 	if loaded.grpcMaxReceiveBytes != 64<<20 || loaded.grpcMaxSendBytes != 64<<20 {
 		t.Fatalf("loadConfig() gRPC limits = %#v", loaded)
 	}
-	if configured.kafka.configured {
+	if configured.kafka.enabled {
 		t.Fatalf("loadConfig() Kafka configuration = %#v", configured.kafka)
+	}
+}
+
+func TestLoadConfigDisablesKafkaByDefault(t *testing.T) {
+	path := writeConfig(t, `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+    kafka:
+      brokers: [kafka:9092]
+      topic: sink-mutations
+`)
+	loaded, err := loadConfig(path)
+	if err != nil {
+		t.Fatalf("loadConfig() error = %v", err)
+	}
+	configured := loaded.storages[0].kafka
+	if configured.enabled {
+		t.Fatalf("loadConfig() Kafka = %#v", configured)
 	}
 }
 
@@ -211,11 +232,16 @@ storages:
     mongodb:
       uri: mongodb://mongodb:27017
     kafka:
+      enabled: true
       brokers:
         - kafka-1:9092
         - kafka-2:9092
       topic: sink-mutations
       group_id: sink-workers
+      create_topic_if_not_exists: false
+      topic_partitions: 12
+      topic_replication_factor: 3
+      topic_retention_hours: 48
       max_poll_records: 250
       dead_letter_topic: sink-dead-letters
       max_retry_attempts: 4
@@ -243,6 +269,10 @@ shutdown_timeout_seconds: 30
 	if configured.kafka.deadLetterTopic != "sink-dead-letters" || configured.kafka.maxRetryAttempts != 4 || configured.kafka.retryBackoff != 20*time.Millisecond || configured.kafka.maxRetryBackoff != 200*time.Millisecond {
 		t.Fatalf("loadConfig() Kafka retry settings = %#v", configured.kafka)
 	}
+	if configured.kafka.createTopicIfNotExists || configured.kafka.topicPartitions != 12 ||
+		configured.kafka.topicReplicationFactor != 3 || configured.kafka.topicRetention != 48*time.Hour {
+		t.Fatalf("loadConfig() Kafka topic settings = %#v", configured.kafka)
+	}
 	if loaded.maxOperations != 2000 || loaded.maxMergeAttempts != 5 || loaded.shutdownTimeout != 30*time.Second {
 		t.Fatalf("loadConfig() service settings = %#v", loaded)
 	}
@@ -262,6 +292,7 @@ storages:
     mongodb:
       uri: mongodb://catalog:27017
     kafka:
+      enabled: true
       brokers: [catalog-kafka:9092]
       topic: mutations
       group_id: workers
@@ -270,6 +301,7 @@ storages:
     search:
       endpoints: [https://search:9200]
     kafka:
+      enabled: true
       brokers: [search-kafka:9092]
       topic: mutations
       group_id: workers
@@ -282,7 +314,7 @@ storages:
 		t.Fatalf("loadConfig() storages = %#v", loaded.storages)
 	}
 	for _, configured := range loaded.storages {
-		if !configured.kafka.configured || configured.kafka.topic != "mutations" || configured.kafka.groupID != "workers" {
+		if !configured.kafka.enabled || configured.kafka.topic != "mutations" || configured.kafka.groupID != "workers" {
 			t.Fatalf("loadConfig() storage Kafka = %#v", configured.kafka)
 		}
 	}
@@ -297,6 +329,7 @@ storages:
     mongodb:
       uri: mongodb://first:27017
     kafka:
+      enabled: true
       brokers: [kafka-1:9092, kafka-2:9092]
       topic: shared-mutations
       group_id: first-workers
@@ -305,6 +338,7 @@ storages:
     mongodb:
       uri: mongodb://second:27017
     kafka:
+      enabled: true
       brokers: [kafka-2:9092, kafka-1:9092]
       topic: shared-mutations
       group_id: second-workers
@@ -324,6 +358,7 @@ storages:
     mongodb:
       uri: mongodb://mongodb:27017
     kafka:
+      enabled: true
       brokers: [kafka:9092]
       topic: sink-mutations
 `)
@@ -430,6 +465,7 @@ storages:
     mongodb:
       uri: mongodb://mongodb:27017
     kafka:
+      enabled: true
       brokers: [kafka:9092]
 `)
 	_, err := loadConfig(path)
@@ -447,6 +483,7 @@ storages:
     mongodb:
       uri: mongodb://mongodb:27017
     kafka:
+      enabled: true
       brokers: [kafka:9092]
       topic: sink-mutations
 `)
@@ -483,7 +520,7 @@ storages:
       uri: mongodb://mongodb:27017
 `)
 	_, err := loadConfig(path)
-	if err == nil || !strings.Contains(err.Error(), "worker and all modes require Kafka settings") {
+	if err == nil || !strings.Contains(err.Error(), "worker and all modes require Kafka to be enabled") {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
 }
@@ -528,6 +565,7 @@ storages:
     mongodb:
       uri: mongodb://mongodb:27017
     kafka:
+      enabled: true
       brokers: [kafka:9092]
       topic: sink-mutations
       group_id: sink-workers
@@ -539,8 +577,54 @@ storages:
 	configured := loaded.storages[0].kafka
 	if configured.deadLetterTopic != "sink-mutations.dlq" || configured.maxPollRecords != 500 ||
 		configured.maxRetryAttempts != 10 || configured.retryBackoff != 100*time.Millisecond ||
-		configured.maxRetryBackoff != 10*time.Second {
+		configured.maxRetryBackoff != 10*time.Second || !configured.createTopicIfNotExists ||
+		configured.topicPartitions != 4 || configured.topicReplicationFactor != 2 ||
+		configured.topicRetention != 72*time.Hour {
 		t.Fatalf("Kafka defaults = %#v", configured)
+	}
+}
+
+func TestLoadConfigRejectsInvalidKafkaTopicSettings(t *testing.T) {
+	tests := []struct {
+		name      string
+		setting   string
+		wantError string
+	}{
+		{
+			name:      "zero partitions",
+			setting:   "topic_partitions: 0",
+			wantError: "storages[0].kafka.topic_partitions must be a positive integer",
+		},
+		{
+			name:      "zero replication factor",
+			setting:   "topic_replication_factor: 0",
+			wantError: "storages[0].kafka.topic_replication_factor must be a positive integer",
+		},
+		{
+			name:      "zero retention",
+			setting:   "topic_retention_hours: 0",
+			wantError: "storages[0].kafka.topic_retention_hours must be a positive integer",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			contents := `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+    kafka:
+      enabled: true
+      brokers: [kafka:9092]
+      topic: sink-mutations
+      ` + test.setting + "\n"
+			path := writeConfig(t, contents)
+			_, err := loadConfig(path)
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("loadConfig() error = %v", err)
+			}
+		})
 	}
 }
 

@@ -23,6 +23,15 @@ const (
 	modeAll    runMode = "all"
 )
 
+const (
+	defaultKafkaTopicPartitions        = 4
+	defaultKafkaTopicReplicationFactor = 2
+	defaultKafkaTopicRetention         = 72 * time.Hour
+	maxKafkaTopicPartitions            = int64(1<<31 - 1)
+	maxKafkaTopicReplicationFactor     = int64(1<<15 - 1)
+	maxKafkaTopicRetentionHours        = int64((1<<63 - 1) / time.Hour)
+)
+
 type storageDriver string
 
 const (
@@ -66,15 +75,19 @@ type backendConfig struct {
 }
 
 type backendKafkaConfig struct {
-	configured       bool
-	brokers          []string
-	topic            string
-	groupID          string
-	deadLetterTopic  string
-	maxPollRecords   int
-	maxRetryAttempts int
-	retryBackoff     time.Duration
-	maxRetryBackoff  time.Duration
+	enabled                bool
+	brokers                []string
+	topic                  string
+	groupID                string
+	deadLetterTopic        string
+	createTopicIfNotExists bool
+	topicPartitions        int
+	topicReplicationFactor int
+	topicRetention         time.Duration
+	maxPollRecords         int
+	maxRetryAttempts       int
+	retryBackoff           time.Duration
+	maxRetryBackoff        time.Duration
 }
 
 type configFile struct {
@@ -143,10 +156,15 @@ type luaConfigFile struct {
 }
 
 type kafkaConfigFile struct {
+	Enabled                     *bool    `yaml:"enabled"`
 	Brokers                     []string `yaml:"brokers"`
 	Topic                       string   `yaml:"topic"`
 	GroupID                     string   `yaml:"group_id"`
 	DeadLetterTopic             string   `yaml:"dead_letter_topic"`
+	CreateTopicIfNotExists      *bool    `yaml:"create_topic_if_not_exists"`
+	TopicPartitions             *int     `yaml:"topic_partitions"`
+	TopicReplicationFactor      *int     `yaml:"topic_replication_factor"`
+	TopicRetentionHours         *int     `yaml:"topic_retention_hours"`
 	MaxPollRecords              *int     `yaml:"max_poll_records"`
 	MaxRetryAttempts            *int     `yaml:"max_retry_attempts"`
 	RetryBackoffMilliseconds    *int     `yaml:"retry_backoff_milliseconds"`
@@ -264,20 +282,38 @@ func loadConfig(path string) (config, error) {
 
 func loadKafkaConfig(prefix string, file kafkaConfigFile) (backendKafkaConfig, error) {
 	var loaded backendKafkaConfig
+	loaded.enabled = boolOrDefault(file.Enabled, false)
 	loaded.brokers = nonEmptyValues(file.Brokers)
 	loaded.topic = strings.TrimSpace(file.Topic)
 	loaded.groupID = strings.TrimSpace(file.GroupID)
 	loaded.deadLetterTopic = strings.TrimSpace(file.DeadLetterTopic)
-	loaded.configured = len(file.Brokers) > 0 || loaded.topic != "" || loaded.groupID != "" || loaded.deadLetterTopic != "" ||
-		file.MaxPollRecords != nil || file.MaxRetryAttempts != nil || file.RetryBackoffMilliseconds != nil ||
-		file.MaxRetryBackoffMilliseconds != nil
-	if !loaded.configured {
-		return loaded, nil
-	}
+	loaded.createTopicIfNotExists = boolOrDefault(file.CreateTopicIfNotExists, true)
 	if loaded.topic != "" && loaded.deadLetterTopic == "" {
 		loaded.deadLetterTopic = loaded.topic + ".dlq"
 	}
 	var err error
+	loaded.topicPartitions, err = positiveIntOrDefault(prefix+".topic_partitions", file.TopicPartitions, defaultKafkaTopicPartitions)
+	if err != nil {
+		return loaded, err
+	}
+	if int64(loaded.topicPartitions) > maxKafkaTopicPartitions {
+		return loaded, fmt.Errorf("%s.topic_partitions must not exceed %d", prefix, maxKafkaTopicPartitions)
+	}
+	loaded.topicReplicationFactor, err = positiveIntOrDefault(prefix+".topic_replication_factor", file.TopicReplicationFactor, defaultKafkaTopicReplicationFactor)
+	if err != nil {
+		return loaded, err
+	}
+	if int64(loaded.topicReplicationFactor) > maxKafkaTopicReplicationFactor {
+		return loaded, fmt.Errorf("%s.topic_replication_factor must not exceed %d", prefix, maxKafkaTopicReplicationFactor)
+	}
+	topicRetentionHours, err := positiveIntOrDefault(prefix+".topic_retention_hours", file.TopicRetentionHours, int(defaultKafkaTopicRetention/time.Hour))
+	if err != nil {
+		return loaded, err
+	}
+	if int64(topicRetentionHours) > maxKafkaTopicRetentionHours {
+		return loaded, fmt.Errorf("%s.topic_retention_hours is too large", prefix)
+	}
+	loaded.topicRetention = time.Duration(topicRetentionHours) * time.Hour
 	loaded.maxPollRecords, err = positiveIntOrDefault(prefix+".max_poll_records", file.MaxPollRecords, 500)
 	if err != nil {
 		return loaded, err
@@ -432,13 +468,13 @@ type kafkaResourceKey struct {
 }
 
 func validateKafkaConfig(loaded config) error {
-	configuredStores := 0
+	enabledStores := 0
 	topics := make(map[kafkaResourceKey]string)
 	groups := make(map[kafkaResourceKey]string)
 	deadLetterTopics := make(map[kafkaResourceKey]string)
 	for index, configured := range loaded.storages {
 		prefix := fmt.Sprintf("storages[%d].kafka", index)
-		if !configured.kafka.configured {
+		if !configured.kafka.enabled {
 			continue
 		}
 		if len(configured.kafka.brokers) == 0 || configured.kafka.topic == "" {
@@ -468,10 +504,10 @@ func validateKafkaConfig(loaded config) error {
 			return fmt.Errorf("stores %q and %q configure duplicate Kafka dead-letter topic %q on the same cluster", otherStore, configured.name, configured.kafka.deadLetterTopic)
 		}
 		deadLetterTopics[deadLetterKey] = configured.name
-		configuredStores++
+		enabledStores++
 	}
-	if (loaded.mode == modeWorker || loaded.mode == modeAll) && configuredStores == 0 {
-		return errors.New("worker and all modes require Kafka settings on at least one store")
+	if (loaded.mode == modeWorker || loaded.mode == modeAll) && enabledStores == 0 {
+		return errors.New("worker and all modes require Kafka to be enabled on at least one store")
 	}
 	for topicKey, store := range topics {
 		if deadLetterStore, exists := deadLetterTopics[topicKey]; exists {

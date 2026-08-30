@@ -167,6 +167,12 @@ topics, consumer groups, retry policies, and dead-letter topics. The publisher
 uses a deterministic encoded record address as the Kafka key, keeping mutations
 for one record in a single partition and in submission order.
 
+Kafka is disabled by default. For an enabled store, startup reconciles the
+source and dead-letter Topics before creating its publisher or worker. Sink can
+create missing Topics, increase partition counts, reassign replicas, and set
+retention according to the Store configuration. It refuses to reduce a
+partition count because doing so requires destructive Topic recreation.
+
 Workers disable auto-commit and apply queued mutations through the same service
 path as synchronous writes. Retryable failures use bounded exponential backoff
 with jitter. Malformed records, permanent failures, and exhausted retries are
@@ -181,11 +187,12 @@ possibility.
 ## Health and observability
 
 Startup is strict: Sink opens and pings every configured store before becoming
-ready. In `server` and `all` modes, it also creates and pings a publisher for
-every Kafka-enabled store. Configuration or dependency errors fail startup
-instead of producing a partially initialized service. A standalone `worker`
-has no gRPC readiness endpoint; Kafka consumer connection errors are handled
-and reported by its polling loop.
+ready. It reconciles Topics for every Kafka-enabled store in all modes. In
+`server` and `all` modes, it also creates and pings a publisher for each enabled
+store. Configuration, Topic-policy, or dependency errors fail startup instead
+of producing a partially initialized service. A standalone `worker` has no
+gRPC readiness endpoint; Kafka consumer connection errors are handled and
+reported by its polling loop.
 
 At runtime in `server` and `all` modes, the standard gRPC health service reports
 process readiness. Each storage and configured Kafka publisher also has its own
