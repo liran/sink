@@ -138,6 +138,8 @@ dependency before becoming ready.
   stores may execute concurrently.
 - Kafka delivery is at least once. A mutation can run again after a worker
   crashes between applying it and committing its offset.
+- Kafka is disabled by default per store. When enabled, Sink owns creation and
+  reconciliation of that store's source and dead-letter Topics at startup.
 - Sink does not create Elasticsearch or OpenSearch indexes, mappings, or
   aliases.
 - Every configured store must be reachable at startup. In `server` and `all`
