@@ -1,228 +1,219 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="760" viewBox="0 0 1400 760" role="img" aria-labelledby="title description">
-  <title id="title">Sink request routing and delivery paths</title>
-  <desc id="description">Three kinds of applications converge on one gRPC entry point. Sink validates, routes, batches, and orders record operations. Synchronous operations apply immediately, while asynchronous operations pass through a per-store Kafka queue and worker. Both paths end at exactly one configured MongoDB, Elasticsearch, or OpenSearch store selected by address.store.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="820" viewBox="0 0 1500 820" role="img" aria-labelledby="title description">
+  <title id="title">Sink enterprise request-routing architecture</title>
+  <desc id="description">API services, crawler workers, and data pipelines call one gRPC record API. Sink routes, bounds, and orders each operation, then uses either synchronous application or Kafka-backed asynchronous delivery. The storage router sends each operation to exactly one configured MongoDB, Elasticsearch, or OpenSearch store selected by address.store.</desc>
   <defs>
-    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f8fafc"/>
-      <stop offset="1" stop-color="#eef2ff"/>
-    </linearGradient>
-    <linearGradient id="sink-gradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#2563eb"/>
-      <stop offset="1" stop-color="#4f46e5"/>
-    </linearGradient>
-    <linearGradient id="sync-gradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#eff6ff"/>
-      <stop offset="1" stop-color="#dbeafe"/>
-    </linearGradient>
-    <linearGradient id="async-gradient" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#f5f3ff"/>
-      <stop offset="1" stop-color="#ede9fe"/>
-    </linearGradient>
-    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.11"/>
-    </filter>
-    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto">
-      <path d="M0 0L10 5L0 10Z" fill="#2563eb"/>
-    </marker>
-    <marker id="arrow-violet" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto">
-      <path d="M0 0L10 5L0 10Z" fill="#7c3aed"/>
-    </marker>
-    <marker id="arrow-indigo" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="12" markerHeight="12" orient="auto">
-      <path d="M0 0L10 5L0 10Z" fill="#4f46e5"/>
-    </marker>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#d8e0e6" stroke-width="1" opacity="0.48"/>
+    </pattern>
     <style>
       text { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-      .section { fill: #475569; font-size: 16px; font-weight: 700; letter-spacing: 1.5px; }
-      .card-title { fill: #0f172a; font-size: 20px; font-weight: 700; }
-      .card-copy { fill: #475569; font-size: 15px; }
-      .small-label { fill: #475569; font-size: 13px; font-weight: 700; letter-spacing: 0.6px; }
-      .sink-title { fill: #ffffff; font-size: 34px; font-weight: 800; }
-      .sink-copy { fill: #dbeafe; font-size: 16px; }
-      .sink-step { fill: #ffffff; font-size: 16px; font-weight: 700; }
-      .sink-step-copy { fill: #dbeafe; font-size: 13px; }
-      .lane-title { font-size: 18px; font-weight: 800; letter-spacing: 0.8px; }
-      .lane-copy { fill: #334155; font-size: 14px; }
-      .store-title { fill: #0f172a; font-size: 18px; font-weight: 700; }
-      .store-copy { fill: #475569; font-size: 13px; }
-      .footer { fill: #1e3a8a; font-size: 16px; font-weight: 700; }
+      .section { fill: #415466; font-size: 15px; font-weight: 700; letter-spacing: 1.6px; }
+      .module-title { fill: #132a3a; font-size: 19px; font-weight: 700; }
+      .module-copy { fill: #526575; font-size: 15px; }
+      .micro { fill: #5f7180; font-size: 13px; }
+      .core-title { fill: #ffffff; font-size: 31px; font-weight: 700; letter-spacing: 0.8px; }
+      .core-subtitle { fill: #c8d5de; font-size: 15px; }
+      .step-title { fill: #ffffff; font-size: 16px; font-weight: 700; letter-spacing: 0.5px; }
+      .step-copy { fill: #c8d5de; font-size: 13px; }
+      .lane-title { fill: #ffffff; font-size: 17px; font-weight: 700; letter-spacing: 1.1px; }
+      .lane-copy { fill: #2f4352; font-size: 14px; }
+      .code { fill: #314b5d; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; }
+      .route-title { fill: #ffffff; font-size: 14px; font-weight: 700; letter-spacing: 0.8px; }
+      .route-copy { fill: #405565; font-size: 12px; }
+      .store-title { fill: #173044; font-size: 16px; font-weight: 700; letter-spacing: 0.7px; }
+      .store-copy { fill: #4c6170; font-size: 13px; }
+      .footer { fill: #e8eef2; font-size: 14px; font-weight: 700; letter-spacing: 0.9px; }
     </style>
   </defs>
 
-  <rect width="1400" height="760" rx="24" fill="url(#background)"/>
+  <rect width="1500" height="820" rx="12" fill="#f3f6f8"/>
+  <rect width="1500" height="820" rx="12" fill="url(#grid)"/>
+  <path d="M12 0H1488A12 12 0 0 1 1500 12V18H0V12A12 12 0 0 1 12 0Z" fill="#132a3a"/>
 
-  <text class="section" x="50" y="55">CALLERS</text>
-  <text class="section" x="333" y="55">ONE API</text>
-  <text class="section" x="450" y="55">SINK</text>
-  <text class="section" x="860" y="55">DELIVERY MODE</text>
-  <text class="section" x="1185" y="55">ONE MATCHING STORE</text>
+  <text class="section" x="35" y="62">CALLERS</text>
+  <text class="section" x="285" y="62">RECORD API</text>
+  <text class="section" x="430" y="62">SINK CORE</text>
+  <text class="section" x="845" y="62">DELIVERY</text>
+  <text class="section" x="1115" y="62">ROUTING</text>
+  <text class="section" x="1300" y="62">BACKENDS</text>
 
-  <g filter="url(#shadow)">
-    <rect x="50" y="115" width="260" height="88" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
-    <circle cx="88" cy="159" r="18" fill="#dbeafe"/>
-    <path d="M80 159h16M88 151v16" stroke="#2563eb" stroke-width="3" stroke-linecap="round"/>
-    <text class="card-title" x="120" y="153">API services</text>
-    <text class="card-copy" x="120" y="178">simple record calls</text>
+  <g>
+    <rect x="35" y="130" width="210" height="90" rx="6" fill="#ffffff" stroke="#aebbc5" stroke-width="1.5"/>
+    <rect x="35" y="130" width="6" height="90" fill="#325d7d"/>
+    <rect x="56" y="151" width="24" height="24" fill="#e6edf2" stroke="#748b9c"/>
+    <path d="M62 163h12M68 157v12" stroke="#325d7d" stroke-width="2"/>
+    <text class="module-title" x="91" y="165">API services</text>
+    <text class="module-copy" x="56" y="196">interactive requests</text>
 
-    <rect x="50" y="271" width="260" height="88" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
-    <circle cx="88" cy="315" r="18" fill="#dcfce7"/>
-    <path d="M79 319l7-7 5 5 7-9" fill="none" stroke="#16a34a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-    <text class="card-title" x="120" y="309">Crawler workers</text>
-    <text class="card-copy" x="120" y="334">high concurrency</text>
+    <rect x="35" y="300" width="210" height="90" rx="6" fill="#ffffff" stroke="#aebbc5" stroke-width="1.5"/>
+    <rect x="35" y="300" width="6" height="90" fill="#325d7d"/>
+    <rect x="56" y="321" width="24" height="24" fill="#e6edf2" stroke="#748b9c"/>
+    <path d="M61 339l5-6 4 4 6-9" fill="none" stroke="#325d7d" stroke-width="2"/>
+    <text class="module-title" x="91" y="335">Crawler workers</text>
+    <text class="module-copy" x="56" y="366">high concurrency</text>
 
-    <rect x="50" y="427" width="260" height="88" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
-    <circle cx="88" cy="471" r="18" fill="#fef3c7"/>
-    <path d="M78 471h20M81 465h14M84 459h8M84 477h8M81 483h14" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linecap="round"/>
-    <text class="card-title" x="120" y="465">Data pipelines</text>
-    <text class="card-copy" x="120" y="490">batch ingestion</text>
+    <rect x="35" y="470" width="210" height="90" rx="6" fill="#ffffff" stroke="#aebbc5" stroke-width="1.5"/>
+    <rect x="35" y="470" width="6" height="90" fill="#325d7d"/>
+    <rect x="56" y="491" width="24" height="24" fill="#e6edf2" stroke="#748b9c"/>
+    <path d="M61 498h14M61 503h14M61 508h10" stroke="#325d7d" stroke-width="2"/>
+    <text class="module-title" x="91" y="505">Data pipelines</text>
+    <text class="module-copy" x="56" y="536">batch ingestion</text>
   </g>
 
-  <circle cx="310" cy="159" r="5" fill="#2563eb"/>
-  <circle cx="310" cy="315" r="5" fill="#2563eb"/>
-  <circle cx="310" cy="471" r="5" fill="#2563eb"/>
-  <path d="M315 159C340 159 335 264 350 282" fill="none" stroke="#2563eb" stroke-width="3"/>
-  <path d="M315 315H342" fill="none" stroke="#2563eb" stroke-width="3"/>
-  <path d="M315 471C340 471 335 366 350 348" fill="none" stroke="#2563eb" stroke-width="3"/>
-
-  <g filter="url(#shadow)">
-    <circle cx="390" cy="315" r="42" fill="#ffffff" stroke="#93c5fd" stroke-width="2"/>
+  <g>
+    <rect x="285" y="105" width="105" height="455" rx="4" fill="#e8edf1" stroke="#7d8f9c" stroke-width="1.5"/>
+    <rect x="285" y="105" width="105" height="50" rx="4" fill="#223b4d"/>
+    <rect x="285" y="149" width="105" height="6" fill="#223b4d"/>
+    <text x="337.5" y="137" text-anchor="middle" fill="#ffffff" font-size="18" font-weight="700">gRPC</text>
+    <text x="337.5" y="200" text-anchor="middle" fill="#243b4d" font-size="16" font-weight="700">RECORD</text>
+    <text x="337.5" y="222" text-anchor="middle" fill="#243b4d" font-size="16" font-weight="700">API</text>
+    <path d="M305 244H370" stroke="#aebbc5"/>
+    <text x="337.5" y="282" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">READ</text>
+    <text x="337.5" y="342" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">WRITE</text>
+    <text x="337.5" y="402" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">DELETE</text>
+    <path d="M305 435H370" stroke="#aebbc5"/>
+    <text x="337.5" y="480" text-anchor="middle" fill="#526575" font-size="14">JSON objects</text>
+    <text x="337.5" y="510" text-anchor="middle" fill="#526575" font-size="14">batch-native</text>
   </g>
-  <path d="M376 302h28M376 310h28M376 318h28" stroke="#2563eb" stroke-width="2.5" stroke-linecap="round"/>
-  <text class="small-label" x="390" y="340" text-anchor="middle">gRPC</text>
-  <circle cx="356" cy="285" r="4" fill="#2563eb"/>
-  <circle cx="348" cy="315" r="4" fill="#2563eb"/>
-  <circle cx="356" cy="345" r="4" fill="#2563eb"/>
-  <circle cx="432" cy="315" r="5" fill="#2563eb"/>
 
-  <g filter="url(#shadow)">
-    <rect x="465" y="90" width="345" height="530" rx="24" fill="url(#sink-gradient)"/>
+  <g>
+    <rect x="430" y="90" width="330" height="510" rx="6" fill="#132a3a" stroke="#0c1d29" stroke-width="2"/>
+    <text class="core-title" x="465" y="137">SINK CORE</text>
+    <text class="core-subtitle" x="465" y="163">storage-independent record execution</text>
+    <path d="M465 180H725" stroke="#526b7c"/>
+
+    <rect x="465" y="195" width="260" height="82" rx="3" fill="#1e3b4f" stroke="#587184"/>
+    <rect x="465" y="195" width="6" height="82" fill="#6f96ae"/>
+    <text class="step-title" x="488" y="226">01  ADDRESS ROUTING</text>
+    <text class="step-copy" x="488" y="251">address.store → configured backend</text>
+
+    <rect x="465" y="302" width="260" height="82" rx="3" fill="#1e3b4f" stroke="#587184"/>
+    <rect x="465" y="302" width="6" height="82" fill="#6f96ae"/>
+    <text class="step-title" x="488" y="333">02  BOUNDED EXECUTION</text>
+    <text class="step-copy" x="488" y="358">batching • concurrency • backpressure</text>
+
+    <rect x="465" y="409" width="260" height="82" rx="3" fill="#1e3b4f" stroke="#587184"/>
+    <rect x="465" y="409" width="6" height="82" fill="#6f96ae"/>
+    <text class="step-title" x="488" y="440">03  RECORD SEMANTICS</text>
+    <text class="step-copy" x="488" y="465">same-record order • atomic Lua RMW</text>
+
+    <rect x="465" y="520" width="260" height="42" rx="3" fill="#0e2230" stroke="#526b7c"/>
+    <text x="595" y="546" text-anchor="middle" fill="#e7eef2" font-size="13" font-weight="700" letter-spacing="0.6px">COMPLETION MODE PER REQUEST</text>
+    <text x="595" y="583" text-anchor="middle" fill="#9fb2bf" font-size="12" letter-spacing="0.5px">HEALTH • METRICS • FAILURE ISOLATION</text>
   </g>
-  <path d="M437 315H459" fill="none" stroke="#2563eb" stroke-width="4"/>
-  <circle cx="465" cy="315" r="6" fill="#ffffff" stroke="#2563eb" stroke-width="3"/>
-  <text class="sink-title" x="637" y="139" text-anchor="middle">Sink</text>
-  <text class="sink-copy" x="637" y="168" text-anchor="middle">Read • Write • Delete for JSON records</text>
 
-  <rect x="505" y="205" width="265" height="82" rx="14" fill="#ffffff" fill-opacity="0.15" stroke="#ffffff" stroke-opacity="0.32"/>
-  <circle cx="535" cy="246" r="17" fill="#ffffff" fill-opacity="0.2"/>
-  <text class="sink-step" x="535" y="252" text-anchor="middle">1</text>
-  <text class="sink-step" x="564" y="239">Validate + route</text>
-  <text class="sink-step-copy" x="564" y="262">address.store selects a backend</text>
-
-  <path d="M637 287v20" stroke="#bfdbfe" stroke-width="2" marker-end="url(#arrow-blue)"/>
-
-  <rect x="505" y="310" width="265" height="82" rx="14" fill="#ffffff" fill-opacity="0.15" stroke="#ffffff" stroke-opacity="0.32"/>
-  <circle cx="535" cy="351" r="17" fill="#ffffff" fill-opacity="0.2"/>
-  <text class="sink-step" x="535" y="357" text-anchor="middle">2</text>
-  <text class="sink-step" x="564" y="344">Batch + bound</text>
-  <text class="sink-step-copy" x="564" y="367">throughput without unbounded queues</text>
-
-  <path d="M637 392v20" stroke="#bfdbfe" stroke-width="2" marker-end="url(#arrow-blue)"/>
-
-  <rect x="505" y="415" width="265" height="82" rx="14" fill="#ffffff" fill-opacity="0.15" stroke="#ffffff" stroke-opacity="0.32"/>
-  <circle cx="535" cy="456" r="17" fill="#ffffff" fill-opacity="0.2"/>
-  <text class="sink-step" x="535" y="462" text-anchor="middle">3</text>
-  <text class="sink-step" x="564" y="449">Order + merge</text>
-  <text class="sink-step-copy" x="564" y="472">same-record order and atomic Lua RMW</text>
-
-  <rect x="523" y="535" width="229" height="44" rx="22" fill="#ffffff" fill-opacity="0.18"/>
-  <text class="sink-step" x="637" y="562" text-anchor="middle">Choose completion mode</text>
-
-  <circle cx="810" cy="355" r="6" fill="#ffffff" stroke="#2563eb" stroke-width="3"/>
-  <path d="M816 355H827" fill="none" stroke="#2563eb" stroke-width="4"/>
-
-  <polygon points="860,326 889,355 860,384 831,355" fill="#ffffff" stroke="#6366f1" stroke-width="2" filter="url(#shadow)"/>
-  <path d="M853 355l6 6 10-14" fill="none" stroke="#4f46e5" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text class="small-label" x="860" y="407" text-anchor="middle">PER REQUEST</text>
-
-  <path d="M860 326C860 270 870 246 885 246" fill="none" stroke="#2563eb" stroke-width="4"/>
-  <path d="M860 384C860 464 870 515 885 515" fill="none" stroke="#7c3aed" stroke-width="4"/>
-
-  <g filter="url(#shadow)">
-    <rect x="890" y="174" width="185" height="144" rx="18" fill="url(#sync-gradient)" stroke="#93c5fd"/>
+  <g>
+    <polygon points="800,516 818,534 800,552 782,534" fill="#ffffff" stroke="#5e7180" stroke-width="2"/>
+    <path d="M794 534l5 5 9-12" fill="none" stroke="#2d5f7c" stroke-width="2.5"/>
   </g>
-  <text class="lane-title" x="982" y="207" text-anchor="middle" fill="#1d4ed8">SYNCHRONOUS</text>
-  <circle cx="928" cy="248" r="21" fill="#ffffff" stroke="#60a5fa"/>
-  <path d="M918 248l7 7 14-17" fill="none" stroke="#2563eb" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <text class="card-title" x="956" y="244">Apply now</text>
-  <text class="lane-copy" x="956" y="266">applied / visible</text>
-  <text class="lane-copy" x="982" y="298" text-anchor="middle">RPC succeeds after this path</text>
-  <circle cx="890" cy="246" r="5" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
-  <circle cx="1075" cy="246" r="5" fill="#2563eb"/>
 
-  <g filter="url(#shadow)">
-    <rect x="890" y="425" width="185" height="180" rx="18" fill="url(#async-gradient)" stroke="#c4b5fd"/>
+  <g>
+    <rect x="845" y="135" width="225" height="190" rx="6" fill="#ffffff" stroke="#7f9cb1" stroke-width="1.5"/>
+    <rect x="845" y="135" width="225" height="46" rx="6" fill="#245b82"/>
+    <rect x="845" y="175" width="225" height="6" fill="#245b82"/>
+    <text class="lane-title" x="865" y="165">SYNCHRONOUS</text>
+    <text class="module-title" x="865" y="213">Apply to selected store</text>
+    <text class="code" x="865" y="247">WAIT_UNTIL_APPLIED</text>
+    <text class="code" x="865" y="271">WAIT_UNTIL_VISIBLE</text>
+    <path d="M865 287H1050" stroke="#c1ccd4"/>
+    <text class="lane-copy" x="865" y="307">RPC returns after apply</text>
+    <text class="lane-copy" x="865" y="324">or search visibility</text>
+
+    <rect x="845" y="405" width="225" height="230" rx="6" fill="#ffffff" stroke="#6e9894" stroke-width="1.5"/>
+    <rect x="845" y="405" width="225" height="46" rx="6" fill="#0f6a63"/>
+    <rect x="845" y="445" width="225" height="6" fill="#0f6a63"/>
+    <text class="lane-title" x="865" y="435">ASYNCHRONOUS</text>
+    <text class="module-title" x="865" y="482">Kafka</text>
+    <text class="lane-copy" x="865" y="505">durable acceptance</text>
+    <text x="865" y="529" fill="#0f6a63" font-size="13" font-weight="700">RPC RETURNS HERE</text>
+    <path d="M865 547H1050" stroke="#c1ccd4"/>
+    <text class="module-title" x="865" y="583">Worker</text>
+    <text class="lane-copy" x="865" y="607">applies the mutation later</text>
   </g>
-  <text class="lane-title" x="982" y="458" text-anchor="middle" fill="#6d28d9">ASYNCHRONOUS</text>
-  <circle cx="928" cy="500" r="20" fill="#ffffff" stroke="#a78bfa"/>
-  <path d="M919 494h18M919 500h18M919 506h18" stroke="#7c3aed" stroke-width="2.5" stroke-linecap="round"/>
-  <text class="card-title" x="956" y="496">Kafka</text>
-  <text class="lane-copy" x="956" y="518">durable acceptance</text>
-  <path d="M982 528v14" stroke="#7c3aed" stroke-width="2.5"/>
-  <rect x="926" y="549" width="112" height="34" rx="17" fill="#ffffff"/>
-  <text class="lane-copy" x="982" y="571" text-anchor="middle">worker applies later</text>
-  <circle cx="890" cy="515" r="5" fill="#ffffff" stroke="#7c3aed" stroke-width="2"/>
-  <circle cx="1075" cy="515" r="5" fill="#7c3aed"/>
 
-  <path d="M1080 246C1100 246 1092 336 1111 336" fill="none" stroke="#2563eb" stroke-width="4"/>
-  <path d="M1080 515C1100 515 1092 424 1111 424" fill="none" stroke="#7c3aed" stroke-width="4"/>
-
-  <g filter="url(#shadow)">
-    <rect x="1118" y="315" width="70" height="130" rx="18" fill="#ffffff" stroke="#818cf8" stroke-width="2"/>
+  <g>
+    <rect x="1115" y="270" width="115" height="230" rx="4" fill="#ffffff" stroke="#738795" stroke-width="1.5"/>
+    <rect x="1115" y="270" width="115" height="58" rx="4" fill="#223b4d"/>
+    <rect x="1115" y="322" width="115" height="6" fill="#223b4d"/>
+    <text class="route-title" x="1172.5" y="295" text-anchor="middle">STORAGE</text>
+    <text class="route-title" x="1172.5" y="315" text-anchor="middle">ROUTER</text>
+    <text class="code" x="1172.5" y="363" text-anchor="middle">address.store</text>
+    <text x="1172.5" y="414" text-anchor="middle" fill="#223b4d" font-size="40" font-weight="700">1</text>
+    <text x="1172.5" y="438" text-anchor="middle" fill="#223b4d" font-size="14" font-weight="700" letter-spacing="1px">MATCH</text>
+    <text class="route-copy" x="1172.5" y="468" text-anchor="middle">per operation</text>
   </g>
-  <circle cx="1153" cy="348" r="18" fill="#e0e7ff"/>
-  <path d="M1145 342h16M1145 348h16M1145 354h16" stroke="#4f46e5" stroke-width="2.5" stroke-linecap="round"/>
-  <text class="small-label" x="1153" y="386" text-anchor="middle">STORE</text>
-  <text class="small-label" x="1153" y="404" text-anchor="middle">SELECTOR</text>
-  <rect x="1129" y="415" width="48" height="20" rx="10" fill="#e0e7ff"/>
-  <text x="1153" y="429" text-anchor="middle" fill="#3730a3" font-size="11" font-weight="700">1 MATCH</text>
-  <circle cx="1118" cy="336" r="5" fill="#ffffff" stroke="#2563eb" stroke-width="2"/>
-  <circle cx="1118" cy="424" r="5" fill="#ffffff" stroke="#7c3aed" stroke-width="2"/>
-  <circle cx="1188" cy="380" r="5" fill="#4f46e5"/>
 
-  <text class="small-label" x="1290" y="82" text-anchor="middle">address.store picks exactly one</text>
+  <g>
+    <rect x="1300" y="100" width="165" height="125" rx="4" fill="#ffffff" stroke="#9daab4" stroke-width="1.5"/>
+    <rect x="1300" y="100" width="165" height="45" rx="4" fill="#e2e8ec"/>
+    <rect x="1300" y="139" width="165" height="6" fill="#e2e8ec"/>
+    <text class="store-title" x="1382.5" y="129" text-anchor="middle">MONGODB</text>
+    <text class="store-copy" x="1382.5" y="174" text-anchor="middle">store: mongo-main</text>
+    <text class="store-copy" x="1382.5" y="199" text-anchor="middle">database / collection</text>
 
-  <path d="M1193 380C1210 380 1197 149 1215 149" fill="none" stroke="#4f46e5" stroke-width="3"/>
-  <path d="M1193 380H1215" fill="none" stroke="#4f46e5" stroke-width="3"/>
-  <path d="M1193 380C1210 380 1197 611 1215 611" fill="none" stroke="#4f46e5" stroke-width="3"/>
+    <rect x="1300" y="300" width="165" height="125" rx="4" fill="#ffffff" stroke="#9daab4" stroke-width="1.5"/>
+    <rect x="1300" y="300" width="165" height="45" rx="4" fill="#e2e8ec"/>
+    <rect x="1300" y="339" width="165" height="6" fill="#e2e8ec"/>
+    <text class="store-title" x="1382.5" y="329" text-anchor="middle">ELASTICSEARCH</text>
+    <text class="store-copy" x="1382.5" y="374" text-anchor="middle">store: search-main</text>
+    <text class="store-copy" x="1382.5" y="399" text-anchor="middle">existing index / alias</text>
 
-  <g filter="url(#shadow)">
-    <rect x="1220" y="96" width="150" height="106" rx="16" fill="#ffffff" stroke="#93c5fd"/>
-    <ellipse cx="1248" cy="125" rx="15" ry="6" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
-    <path d="M1233 125v18c0 4 7 7 15 7s15-3 15-7v-18" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
-    <text class="store-title" x="1274" y="130">MongoDB</text>
-    <text class="store-copy" x="1235" y="177">store: mongo-main</text>
-
-    <rect x="1220" y="327" width="150" height="106" rx="16" fill="#ffffff" stroke="#a5b4fc"/>
-    <rect x="1233" y="350" width="30" height="30" rx="7" fill="#e0e7ff"/>
-    <path d="M1240 358h16M1240 365h16M1240 372h11" stroke="#4f46e5" stroke-width="2.5" stroke-linecap="round"/>
-    <text x="1272" y="370" fill="#0f172a" font-size="16" font-weight="700">Elasticsearch</text>
-    <text class="store-copy" x="1235" y="410">store: search-main</text>
-
-    <rect x="1220" y="558" width="150" height="106" rx="16" fill="#ffffff" stroke="#c4b5fd"/>
-    <circle cx="1248" cy="591" r="16" fill="#ede9fe"/>
-    <path d="M1241 591l5 5 10-12" fill="none" stroke="#7c3aed" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <text x="1272" y="598" fill="#0f172a" font-size="16" font-weight="700">OpenSearch</text>
-    <text class="store-copy" x="1235" y="641">store: search-archive</text>
+    <rect x="1300" y="500" width="165" height="125" rx="4" fill="#ffffff" stroke="#9daab4" stroke-width="1.5"/>
+    <rect x="1300" y="500" width="165" height="45" rx="4" fill="#e2e8ec"/>
+    <rect x="1300" y="539" width="165" height="6" fill="#e2e8ec"/>
+    <text class="store-title" x="1382.5" y="529" text-anchor="middle">OPENSEARCH</text>
+    <text class="store-copy" x="1382.5" y="574" text-anchor="middle">store: search-archive</text>
+    <text class="store-copy" x="1382.5" y="599" text-anchor="middle">existing index / alias</text>
   </g>
-  <circle cx="1220" cy="149" r="5" fill="#ffffff" stroke="#4f46e5" stroke-width="2"/>
-  <circle cx="1220" cy="380" r="5" fill="#ffffff" stroke="#4f46e5" stroke-width="2"/>
-  <circle cx="1220" cy="611" r="5" fill="#ffffff" stroke="#4f46e5" stroke-width="2"/>
+
+  <g fill="none" stroke-linecap="square" stroke-linejoin="miter">
+    <path d="M245 175H273" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M245 345H273" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M245 515H273" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M390 333H418" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M760 534H770" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M800 516V230H833" stroke="#245b82" stroke-width="3"/>
+    <path d="M818 534H833" stroke="#0f6a63" stroke-width="3"/>
+    <path d="M1070 230H1090V340H1103" stroke="#245b82" stroke-width="3"/>
+    <path d="M1070 585H1090V445H1103" stroke="#0f6a63" stroke-width="3"/>
+    <path d="M1230 385H1265V162.5M1265 385V562.5" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M1265 162.5H1288M1265 362.5H1288M1265 562.5H1288" stroke="#3e5a6c" stroke-width="3"/>
+    <path d="M595 277V290M595 384V397" stroke="#9fb3c0" stroke-width="2"/>
+    <path d="M957.5 529V548" stroke="#0f6a63" stroke-width="2.5"/>
+  </g>
 
   <g aria-hidden="true">
-    <polygon points="350,282 339,275 347,269" fill="#2563eb"/>
-    <polygon points="342,315 331,309 331,321" fill="#2563eb"/>
-    <polygon points="350,348 347,361 339,355" fill="#2563eb"/>
-    <polygon points="459,315 447,308 447,322" fill="#2563eb"/>
-    <polygon points="827,355 816,349 816,361" fill="#2563eb"/>
-    <polygon points="885,246 874,240 874,252" fill="#2563eb"/>
-    <polygon points="885,515 874,509 874,521" fill="#7c3aed"/>
-    <polygon points="982,548 976,538 988,538" fill="#7c3aed"/>
-    <polygon points="1111,336 1100,330 1100,342" fill="#2563eb"/>
-    <polygon points="1111,424 1100,418 1100,430" fill="#7c3aed"/>
-    <polygon points="1215,149 1204,143 1204,155" fill="#4f46e5"/>
-    <polygon points="1215,380 1204,374 1204,386" fill="#4f46e5"/>
-    <polygon points="1215,611 1204,605 1204,617" fill="#4f46e5"/>
+    <rect x="241" y="171" width="8" height="8" fill="#3e5a6c"/>
+    <rect x="241" y="341" width="8" height="8" fill="#3e5a6c"/>
+    <rect x="241" y="511" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="285,175 273,168 273,182" fill="#3e5a6c"/>
+    <polygon points="285,345 273,338 273,352" fill="#3e5a6c"/>
+    <polygon points="285,515 273,508 273,522" fill="#3e5a6c"/>
+
+    <rect x="386" y="329" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="430,333 418,326 418,340" fill="#3e5a6c"/>
+
+    <rect x="756" y="530" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="782,534 770,527 770,541" fill="#3e5a6c"/>
+
+    <polygon points="845,230 833,223 833,237" fill="#245b82"/>
+    <polygon points="845,534 833,527 833,541" fill="#0f6a63"/>
+
+    <rect x="1066" y="226" width="8" height="8" fill="#245b82"/>
+    <rect x="1066" y="581" width="8" height="8" fill="#0f6a63"/>
+    <polygon points="1115,340 1103,333 1103,347" fill="#245b82"/>
+    <polygon points="1115,445 1103,438 1103,452" fill="#0f6a63"/>
+
+    <rect x="1226" y="381" width="8" height="8" fill="#3e5a6c"/>
+    <polygon points="1300,162.5 1288,155.5 1288,169.5" fill="#3e5a6c"/>
+    <polygon points="1300,362.5 1288,355.5 1288,369.5" fill="#3e5a6c"/>
+    <polygon points="1300,562.5 1288,555.5 1288,569.5" fill="#3e5a6c"/>
+
+    <polygon points="595,302 588,290 602,290" fill="#9fb3c0"/>
+    <polygon points="595,409 588,397 602,397" fill="#9fb3c0"/>
+    <polygon points="957.5,560 950.5,548 964.5,548" fill="#0f6a63"/>
   </g>
 
-  <rect x="50" y="697" width="1315" height="42" rx="15" fill="#dbeafe"/>
-  <text class="footer" x="707" y="723" text-anchor="middle">Each operation: one record address → one completion mode → one configured store</text>
+  <rect x="35" y="752" width="1430" height="44" rx="3" fill="#132a3a"/>
+  <text class="footer" x="750" y="779" text-anchor="middle">ONE RECORD CONTRACT   |   TWO DELIVERY MODES   |   ONE MATCHING STORE PER OPERATION</text>
 </svg>
