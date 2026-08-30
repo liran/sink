@@ -1,0 +1,197 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="760" viewBox="0 0 1500 760" role="img" aria-labelledby="title description">
+  <title id="title">Sink database load protection for crawler fleets</title>
+  <desc id="description">A comparison of direct database writes and writes through Sink. Without Sink, each crawler process owns a driver pool and sends fragmented requests to the database. With Sink, crawler processes use gRPC, Sink instances own bounded backend pools, and the micro-batcher turns concurrent small calls into bulk storage operations.</desc>
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M40 0H0V40" fill="none" stroke="#d8e0e6" stroke-width="1" opacity="0.45"/>
+    </pattern>
+    <style>
+      text { font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+      .eyebrow { fill: #415466; font-size: 15px; font-weight: 700; letter-spacing: 1.7px; }
+      .headline { fill: #132a3a; font-size: 25px; font-weight: 700; }
+      .subhead { fill: #526575; font-size: 14px; }
+      .panel-title { fill: #ffffff; font-size: 18px; font-weight: 700; letter-spacing: 1.2px; }
+      .panel-note { fill: #dfe8ed; font-size: 13px; }
+      .zone { fill: #516574; font-size: 12px; font-weight: 700; letter-spacing: 1.1px; }
+      .process-title { fill: #173044; font-size: 14px; font-weight: 700; letter-spacing: 0.5px; }
+      .process-copy { fill: #536876; font-size: 12px; }
+      .sink-title { fill: #ffffff; font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+      .sink-step { fill: #eaf1f5; font-size: 13px; font-weight: 700; }
+      .sink-copy { fill: #bfd0da; font-size: 11px; }
+      .db-title { fill: #173044; font-size: 14px; font-weight: 700; letter-spacing: 0.7px; }
+      .db-copy { fill: #536876; font-size: 12px; }
+      .risk { fill: #6c3d3d; font-size: 13px; font-weight: 700; }
+      .benefit { fill: #245c61; font-size: 13px; font-weight: 700; }
+      .arrow-label { fill: #536876; font-size: 11px; font-weight: 700; letter-spacing: 0.4px; }
+      .outcome-title { fill: #eaf1f5; font-size: 13px; font-weight: 700; letter-spacing: 0.8px; }
+      .outcome-copy { fill: #bfcdd6; font-size: 12px; }
+    </style>
+  </defs>
+
+  <rect width="1500" height="760" rx="12" fill="#f3f6f8"/>
+  <rect width="1500" height="760" rx="12" fill="url(#grid)"/>
+  <path d="M12 0H1488A12 12 0 0 1 1500 12V18H0V12A12 12 0 0 1 12 0Z" fill="#132a3a"/>
+
+  <text class="eyebrow" x="35" y="58">DATABASE LOAD PROTECTION</text>
+  <text class="headline" x="35" y="91">Move connection and request amplification out of the crawler fleet</text>
+  <text class="subhead" x="35" y="116">Threads share a pool inside one process; separate processes normally create separate pools.</text>
+
+  <g>
+    <rect x="35" y="140" width="680" height="485" rx="7" fill="#ffffff" stroke="#b7c1c8" stroke-width="1.5"/>
+    <rect x="35" y="140" width="680" height="58" rx="7" fill="#5b4040"/>
+    <rect x="35" y="191" width="680" height="7" fill="#5b4040"/>
+    <text class="panel-title" x="62" y="169">WITHOUT SINK</text>
+    <text class="panel-note" x="62" y="189">connection pools and small writes multiply with crawler processes</text>
+
+    <text class="zone" x="70" y="228">CRAWLER PROCESSES</text>
+    <text class="zone" x="545" y="228">DATABASE</text>
+
+    <g>
+      <rect x="70" y="248" width="270" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
+      <rect x="70" y="248" width="5" height="68" fill="#7b5555"/>
+      <rect x="91" y="265" width="30" height="30" fill="#e7ecef" stroke="#8798a4"/>
+      <path d="M98 273h16M98 280h16M98 287h11" stroke="#536876" stroke-width="2"/>
+      <text class="process-title" x="136" y="273">PROCESS 01</text>
+      <text class="process-copy" x="136" y="294">worker threads + driver pool</text>
+
+      <rect x="70" y="341" width="270" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
+      <rect x="70" y="341" width="5" height="68" fill="#7b5555"/>
+      <rect x="91" y="358" width="30" height="30" fill="#e7ecef" stroke="#8798a4"/>
+      <path d="M98 366h16M98 373h16M98 380h11" stroke="#536876" stroke-width="2"/>
+      <text class="process-title" x="136" y="366">PROCESS 02</text>
+      <text class="process-copy" x="136" y="387">worker threads + driver pool</text>
+
+      <rect x="70" y="434" width="270" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
+      <rect x="70" y="434" width="5" height="68" fill="#7b5555"/>
+      <rect x="91" y="451" width="30" height="30" fill="#e7ecef" stroke="#8798a4"/>
+      <path d="M98 459h16M98 466h16M98 473h11" stroke="#536876" stroke-width="2"/>
+      <text class="process-title" x="136" y="459">PROCESS N</text>
+      <text class="process-copy" x="136" y="480">worker threads + driver pool</text>
+    </g>
+
+    <g>
+      <rect x="545" y="280" width="130" height="190" rx="5" fill="#f7f9fa" stroke="#9aa9b3" stroke-width="1.5"/>
+      <ellipse cx="610" cy="319" rx="38" ry="14" fill="#dfe6ea" stroke="#7c909d" stroke-width="1.5"/>
+      <path d="M572 319V386C572 394 589 400 610 400S648 394 648 386V319" fill="#e8edf0" stroke="#7c909d" stroke-width="1.5"/>
+      <path d="M572 352C572 360 589 366 610 366S648 360 648 352" fill="none" stroke="#a0afb8"/>
+      <text class="db-title" x="610" y="428" text-anchor="middle">DATABASE</text>
+      <text class="db-copy" x="610" y="449" text-anchor="middle">many pools</text>
+    </g>
+
+    <g fill="none" stroke="#7b5555" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter">
+      <path d="M340 282H398L533 327"/>
+      <path d="M340 375H533"/>
+      <path d="M340 468H398L533 423"/>
+    </g>
+    <g aria-hidden="true" fill="#7b5555">
+      <rect x="336" y="278" width="8" height="8"/>
+      <rect x="336" y="371" width="8" height="8"/>
+      <rect x="336" y="464" width="8" height="8"/>
+      <polygon points="545,331 533,320 533,334"/>
+      <polygon points="545,375 533,368 533,382"/>
+      <polygon points="545,419 533,412 533,426"/>
+    </g>
+    <text class="arrow-label" x="432" y="359" text-anchor="middle">FRAGMENTED WRITES</text>
+
+    <rect x="70" y="536" width="605" height="58" rx="4" fill="#f2e9e8" stroke="#d8bbb8"/>
+    <circle cx="96" cy="565" r="10" fill="#7b5555"/>
+    <path d="M92 561l8 8M100 561l-8 8" stroke="#ffffff" stroke-width="2"/>
+    <text class="risk" x="116" y="561">Pool count follows crawler process count</text>
+    <text class="process-copy" x="116" y="581">Connections and storage requests rise with horizontal scaling.</text>
+  </g>
+
+  <g>
+    <rect x="785" y="140" width="680" height="485" rx="7" fill="#ffffff" stroke="#9caeba" stroke-width="1.5"/>
+    <rect x="785" y="140" width="680" height="58" rx="7" fill="#214e69"/>
+    <rect x="785" y="191" width="680" height="7" fill="#214e69"/>
+    <text class="panel-title" x="812" y="169">WITH SINK</text>
+    <text class="panel-note" x="812" y="189">gRPC fan-in, bounded pools, micro-batches, and backpressure</text>
+
+    <text class="zone" x="820" y="228">CRAWLER PROCESSES</text>
+    <text class="zone" x="1080" y="228">SINK TIER</text>
+    <text class="zone" x="1336" y="228">STORAGE</text>
+
+    <g>
+      <rect x="820" y="248" width="190" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
+      <rect x="820" y="248" width="5" height="68" fill="#426b84"/>
+      <text class="process-title" x="844" y="273">PROCESS 01</text>
+      <text class="process-copy" x="844" y="294">worker threads • gRPC</text>
+
+      <rect x="820" y="341" width="190" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
+      <rect x="820" y="341" width="5" height="68" fill="#426b84"/>
+      <text class="process-title" x="844" y="366">PROCESS 02</text>
+      <text class="process-copy" x="844" y="387">worker threads • gRPC</text>
+
+      <rect x="820" y="434" width="190" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
+      <rect x="820" y="434" width="5" height="68" fill="#426b84"/>
+      <text class="process-title" x="844" y="459">PROCESS N</text>
+      <text class="process-copy" x="844" y="480">worker threads • gRPC</text>
+    </g>
+
+    <g>
+      <rect x="1080" y="244" width="210" height="260" rx="6" fill="#132a3a" stroke="#0b1c28" stroke-width="2"/>
+      <text class="sink-title" x="1103" y="276">SINK</text>
+      <path d="M1103 287H1267" stroke="#536d7e"/>
+
+      <rect x="1103" y="302" width="164" height="52" rx="3" fill="#1e3b4f" stroke="#5a7384"/>
+      <text class="sink-step" x="1117" y="323">CONNECTION FAN-IN</text>
+      <text class="sink-copy" x="1117" y="342">pools follow Sink replicas</text>
+
+      <rect x="1103" y="367" width="164" height="52" rx="3" fill="#1e3b4f" stroke="#5a7384"/>
+      <text class="sink-step" x="1117" y="388">MICRO-BATCHING</text>
+      <text class="sink-copy" x="1117" y="407">small RPCs → bulk operations</text>
+
+      <rect x="1103" y="432" width="164" height="52" rx="3" fill="#1e3b4f" stroke="#5a7384"/>
+      <text class="sink-step" x="1117" y="453">LOAD CONTROL</text>
+      <text class="sink-copy" x="1117" y="472">bounded queues • backpressure</text>
+    </g>
+
+    <g>
+      <rect x="1340" y="292" width="95" height="175" rx="5" fill="#f7f9fa" stroke="#7f9aa8" stroke-width="1.5"/>
+      <ellipse cx="1387.5" cy="326" rx="29" ry="11" fill="#dce7ea" stroke="#638592" stroke-width="1.5"/>
+      <path d="M1358.5 326V381C1358.5 388 1371.5 393 1387.5 393S1416.5 388 1416.5 381V326" fill="#e4edef" stroke="#638592" stroke-width="1.5"/>
+      <path d="M1358.5 353C1358.5 360 1371.5 365 1387.5 365S1416.5 360 1416.5 353" fill="none" stroke="#91a8af"/>
+      <text class="db-title" x="1387.5" y="421" text-anchor="middle">DATABASE</text>
+      <text class="db-copy" x="1387.5" y="442" text-anchor="middle">bulk I/O</text>
+    </g>
+
+    <g fill="none" stroke="#426b84" stroke-width="3" stroke-linecap="square">
+      <path d="M1010 282H1068"/>
+      <path d="M1010 375H1068"/>
+      <path d="M1010 468H1068"/>
+    </g>
+    <g aria-hidden="true" fill="#426b84">
+      <rect x="1006" y="278" width="8" height="8"/>
+      <rect x="1006" y="371" width="8" height="8"/>
+      <rect x="1006" y="464" width="8" height="8"/>
+      <polygon points="1080,282 1068,275 1068,289"/>
+      <polygon points="1080,375 1068,368 1068,382"/>
+      <polygon points="1080,468 1068,461 1068,475"/>
+    </g>
+
+    <path d="M1290 375H1328" fill="none" stroke="#176b65" stroke-width="5" stroke-linecap="square"/>
+    <rect x="1286" y="371" width="8" height="8" fill="#176b65"/>
+    <polygon points="1340,375 1328,367 1328,383" fill="#176b65"/>
+    <text class="arrow-label" x="1315" y="355" text-anchor="middle">BULK OPS</text>
+
+    <rect x="820" y="536" width="615" height="58" rx="4" fill="#e6f0ef" stroke="#abc8c5"/>
+    <circle cx="846" cy="565" r="10" fill="#176b65"/>
+    <path d="M841 565l4 4 7-9" fill="none" stroke="#ffffff" stroke-width="2"/>
+    <text class="benefit" x="866" y="561">Pool count follows the deliberately sized Sink tier</text>
+    <text class="process-copy" x="866" y="581">Fewer, fuller requests reduce backend connection and request pressure.</text>
+  </g>
+
+  <g>
+    <rect x="35" y="651" width="1430" height="79" rx="4" fill="#132a3a"/>
+    <path d="M511.5 668V713M988.5 668V713" stroke="#425a6b"/>
+
+    <text class="outcome-title" x="70" y="680">CONNECTION CONTROL</text>
+    <text class="outcome-copy" x="70" y="705">Backend pools scale with Sink replicas, not crawler processes.</text>
+
+    <text class="outcome-title" x="546" y="680">REQUEST EFFICIENCY</text>
+    <text class="outcome-copy" x="546" y="705">Concurrent small RPCs become bounded bulk storage operations.</text>
+
+    <text class="outcome-title" x="1023" y="680">OVERLOAD PROTECTION</text>
+    <text class="outcome-copy" x="1023" y="705">Queue limits, concurrency limits, and backpressure absorb bursts.</text>
+  </g>
+</svg>
