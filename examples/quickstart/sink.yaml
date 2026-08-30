@@ -22,7 +22,6 @@ storages:
       topic: sink-mutations
       group_id: sink-quickstart
       dead_letter_topic: sink-mutations.dlq
-      create_topic_if_not_exists: true
       topic_partitions: 4
       topic_replication_factor: 1
       topic_retention_hours: 72

@@ -162,7 +162,6 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		topicOptions := queuekafka.TopicOptions{
 			Brokers:           configured.kafka.brokers,
 			Topics:            topics,
-			CreateIfNotExists: configured.kafka.createTopicIfNotExists,
 			Partitions:        configured.kafka.topicPartitions,
 			ReplicationFactor: configured.kafka.topicReplicationFactor,
 			Retention:         configured.kafka.topicRetention,

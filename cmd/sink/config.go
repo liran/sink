@@ -80,7 +80,6 @@ type backendKafkaConfig struct {
 	topic                  string
 	groupID                string
 	deadLetterTopic        string
-	createTopicIfNotExists bool
 	topicPartitions        int
 	topicReplicationFactor int
 	topicRetention         time.Duration
@@ -161,7 +160,6 @@ type kafkaConfigFile struct {
 	Topic                       string   `yaml:"topic"`
 	GroupID                     string   `yaml:"group_id"`
 	DeadLetterTopic             string   `yaml:"dead_letter_topic"`
-	CreateTopicIfNotExists      *bool    `yaml:"create_topic_if_not_exists"`
 	TopicPartitions             *int     `yaml:"topic_partitions"`
 	TopicReplicationFactor      *int     `yaml:"topic_replication_factor"`
 	TopicRetentionHours         *int     `yaml:"topic_retention_hours"`
@@ -287,7 +285,6 @@ func loadKafkaConfig(prefix string, file kafkaConfigFile) (backendKafkaConfig, e
 	loaded.topic = strings.TrimSpace(file.Topic)
 	loaded.groupID = strings.TrimSpace(file.GroupID)
 	loaded.deadLetterTopic = strings.TrimSpace(file.DeadLetterTopic)
-	loaded.createTopicIfNotExists = boolOrDefault(file.CreateTopicIfNotExists, true)
 	if loaded.topic != "" && loaded.deadLetterTopic == "" {
 		loaded.deadLetterTopic = loaded.topic + ".dlq"
 	}

@@ -238,7 +238,6 @@ storages:
         - kafka-2:9092
       topic: sink-mutations
       group_id: sink-workers
-      create_topic_if_not_exists: false
       topic_partitions: 12
       topic_replication_factor: 3
       topic_retention_hours: 48
@@ -269,7 +268,7 @@ shutdown_timeout_seconds: 30
 	if configured.kafka.deadLetterTopic != "sink-dead-letters" || configured.kafka.maxRetryAttempts != 4 || configured.kafka.retryBackoff != 20*time.Millisecond || configured.kafka.maxRetryBackoff != 200*time.Millisecond {
 		t.Fatalf("loadConfig() Kafka retry settings = %#v", configured.kafka)
 	}
-	if configured.kafka.createTopicIfNotExists || configured.kafka.topicPartitions != 12 ||
+	if configured.kafka.topicPartitions != 12 ||
 		configured.kafka.topicReplicationFactor != 3 || configured.kafka.topicRetention != 48*time.Hour {
 		t.Fatalf("loadConfig() Kafka topic settings = %#v", configured.kafka)
 	}
@@ -577,7 +576,7 @@ storages:
 	configured := loaded.storages[0].kafka
 	if configured.deadLetterTopic != "sink-mutations.dlq" || configured.maxPollRecords != 500 ||
 		configured.maxRetryAttempts != 10 || configured.retryBackoff != 100*time.Millisecond ||
-		configured.maxRetryBackoff != 10*time.Second || !configured.createTopicIfNotExists ||
+		configured.maxRetryBackoff != 10*time.Second ||
 		configured.topicPartitions != 4 || configured.topicReplicationFactor != 2 ||
 		configured.topicRetention != 72*time.Hour {
 		t.Fatalf("Kafka defaults = %#v", configured)
