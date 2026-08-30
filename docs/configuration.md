@@ -349,19 +349,21 @@ reference it by SHA-256 digest; a raw protocol client may also embed full source
 directly in an operation. The chunk must return exactly one function:
 
 ```lua
-return function(current, incoming, context)
+return function(current, incoming)
     current = current or json.object()
-    current.stock = incoming.stock
-    current.last_found_at = context.observed_at
+    sink.v1.object.replace_nonempty_string(current, incoming, "title")
+    current.updated_at = sink.v1.time.now()
     return current
 end
 ```
 
 `current` is `nil` when `MISSING_DOCUMENT_MODE_CREATE` creates a missing record.
-`incoming` is the operation's incoming JSON object. `context.observed_at` is an
-RFC 3339 timestamp fixed across CAS retries of one execution. The returned value
-must be a JSON object. All documents use the protocol's JSON representation;
-storage-specific conversion happens after the merge.
+`incoming` is the operation's incoming JSON object. The returned value must be a
+JSON object. All documents use the protocol's JSON representation;
+storage-specific conversion happens after the merge. There is no context
+argument; use the versioned `sink.v1` helpers for common operations and the
+stable merge observation time. See the [Lua merge developer guide](lua-merge-guide.md)
+for the complete API, examples, retry semantics, and testing checklist.
 
 JSON null is represented by `json.null` instead of Lua `nil`, which would remove
 a table key. The bridge preserves empty input objects and arrays. Use
@@ -377,6 +379,11 @@ debug APIs, output, random numbers, metatable mutation, and unbounded string
 repetition are unavailable. Each merge runs in a new VM. Only immutable
 compiled programs are shared through a bounded process-local LRU cache keyed by
 the computed SHA-256 digest; a supplied digest must match the source.
+
+`sink.v1` provides validated array, object, and time helpers implemented by the
+runtime. `sink.v1.time.now()` is fixed across revision-conflict retries of one
+operation. The unrestricted Lua `time` and operating-system libraries remain
+unavailable.
 
 Wall-clock, instruction, call-depth, VM-stack, source-size, and result-size
 limits protect the service. Call depth is fixed at 256 and VM stack slots at

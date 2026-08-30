@@ -157,8 +157,11 @@ global state. Asynchronous queue records contain the full source and remain
 replayable without server-side rule registration.
 
 Lua runs inside a restricted environment with time, instruction, source, and
-result limits. See [Lua merge programs](configuration.md#lua-merge-programs)
-for its signature, JSON bridge, available libraries, and resource limits.
+result limits. Merge functions receive only `current` and `incoming`; versioned
+`sink.v1` helpers provide validated collection operations and a retry-stable
+observation time. See the [Lua merge developer guide](lua-merge-guide.md) for
+the full authoring contract and [Lua merge programs](configuration.md#lua-merge-programs)
+for runtime configuration.
 
 ## Asynchronous delivery
 

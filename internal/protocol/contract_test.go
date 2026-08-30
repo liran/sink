@@ -51,7 +51,7 @@ func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 		Action:  &sink.WriteOperation_Put{Put: put},
 	}
 
-	source := []byte("return function(current, incoming, context) return incoming end")
+	source := []byte("return function(current, incoming) return incoming end")
 	digest := sha256.Sum256(source)
 	programReference := &sink.LuaProgram{
 		Sha256: digest[:],

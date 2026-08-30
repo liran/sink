@@ -139,7 +139,7 @@ local array_replace_fields = {
     "brands",
 }
 
-return function(current, incoming, context)
+return function(current, incoming)
     if current == nil then
         current = {}
     end
@@ -215,9 +215,11 @@ return function(current, incoming, context)
     merge_string_set(current, incoming, "languages")
     merge_string_set(current, incoming, "countries_from_ip")
 
-    current.last_found_at = context.observed_at
-    if current.first_found_at == nil then
-        current.first_found_at = incoming.first_found_at or context.observed_at
+    if incoming.last_found_at ~= nil then
+        current.last_found_at = incoming.last_found_at
+    end
+    if current.first_found_at == nil and incoming.first_found_at ~= nil then
+        current.first_found_at = incoming.first_found_at
     end
 
     if incoming.evicted_at ~= nil then

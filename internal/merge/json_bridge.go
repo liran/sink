@@ -21,6 +21,7 @@ type luaJSONBridge struct {
 	nullMeta        *vm.Table
 	nullTable       *vm.Table
 	dateTimeValues  map[string]struct{}
+	forcedDateTimes map[string]struct{}
 	typedPathValues map[string]map[string]struct{}
 	untypedValues   map[string]struct{}
 }
@@ -39,6 +40,7 @@ func newLuaJSONBridge(luaVM *vm.VM) *luaJSONBridge {
 		nullMeta:        protectedMetatable("JSON null"),
 		nullTable:       vm.NewEmptyTable(),
 		dateTimeValues:  make(map[string]struct{}),
+		forcedDateTimes: make(map[string]struct{}),
 		typedPathValues: make(map[string]map[string]struct{}),
 		untypedValues:   make(map[string]struct{}),
 	}
@@ -47,14 +49,12 @@ func newLuaJSONBridge(luaVM *vm.VM) *luaJSONBridge {
 	jsonLibrary := vm.NewEmptyTable()
 	jsonLibrary.SetString("null", vm.NewTable(bridge.nullTable))
 	jsonLibrary.SetString("object", vm.NewNativeFunc(func(state *vm.VM) int {
-		table := vm.NewEmptyTable()
-		table.SetMetatable(bridge.objectMeta)
+		table := bridge.newObject(0)
 		state.Set(0, vm.NewTable(table))
 		return 1
 	}))
 	jsonLibrary.SetString("array", vm.NewNativeFunc(func(state *vm.VM) int {
-		table := vm.NewEmptyTable()
-		table.SetMetatable(bridge.arrayMeta)
+		table := bridge.newArray(0)
 		state.Set(0, vm.NewTable(table))
 		return 1
 	}))
@@ -69,6 +69,18 @@ func newLuaJSONBridge(luaVM *vm.VM) *luaJSONBridge {
 	}))
 	luaVM.SetGlobal("json", vm.NewTable(jsonLibrary))
 	return bridge
+}
+
+func (b *luaJSONBridge) newObject(capacity int) *vm.Table {
+	table := vm.NewTableWithSize(0, capacity)
+	table.SetMetatable(b.objectMeta)
+	return table
+}
+
+func (b *luaJSONBridge) newArray(capacity int) *vm.Table {
+	table := vm.NewTableWithSize(capacity, 0)
+	table.SetMetatable(b.arrayMeta)
+	return table
 }
 
 func protectedMetatable(label string) *vm.Table {
@@ -211,6 +223,10 @@ func (b *luaJSONBridge) collectResultDateTimePaths(value any, pointer jsontext.P
 			return
 		}
 		path := string(pointer)
+		if _, forced := b.forcedDateTimes[typed]; forced {
+			*paths = append(*paths, path)
+			return
+		}
 		valuesAtPath := b.typedPathValues[path]
 		_, preservedAtPath := valuesAtPath[typed]
 		_, alsoUntyped := b.untypedValues[typed]

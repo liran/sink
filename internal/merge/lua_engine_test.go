@@ -20,10 +20,9 @@ import (
 
 func TestLuaMergePreservesDateTimeMetadata(t *testing.T) {
 	source := []byte(`
-return function(current, incoming, context)
+return function(current, incoming)
     return {
         created_at = incoming.created_at,
-        observed_at = context.observed_at,
         literal = incoming.literal,
     }
 end`)
@@ -33,13 +32,12 @@ end`)
 		JSON:          []byte(`{"created_at":"2026-08-29T04:34:56.789Z","literal":"2026-08-29T04:34:56.789Z"}`),
 		DateTimePaths: []string{"/created_at"},
 	}
-	observedAt := time.Date(2026, time.August, 31, 1, 2, 3, 456000000, time.UTC)
-	request := merge.Request{Incoming: incoming, ObservedAt: observedAt}
+	request := merge.Request{Incoming: incoming}
 	result, err := merger.Merge(t.Context(), request)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
 	}
-	wantPaths := []string{"/created_at", "/observed_at"}
+	wantPaths := []string{"/created_at"}
 	if !slices.Equal(result.Document.DateTimePaths, wantPaths) {
 		t.Fatalf("merged date-time paths = %v, want %v", result.Document.DateTimePaths, wantPaths)
 	}
@@ -47,16 +45,14 @@ end`)
 	if err := json.Unmarshal(result.Document.JSON, &decoded); err != nil {
 		t.Fatalf("json.Unmarshal() error = %v", err)
 	}
-	if decoded["created_at"] != "2026-08-29T04:34:56.789Z" ||
-		decoded["observed_at"] != observedAt.Format(time.RFC3339Nano) ||
-		decoded["literal"] != "2026-08-29T04:34:56.789Z" {
+	if decoded["created_at"] != "2026-08-29T04:34:56.789Z" || decoded["literal"] != "2026-08-29T04:34:56.789Z" {
 		t.Fatalf("merged document = %v", decoded)
 	}
 }
 
 func TestLuaMergePreservesJSONTypesAndInt64(t *testing.T) {
 	source := []byte(`
-return function(current, incoming, context)
+return function(current, incoming)
     current = current or json.object()
     current.id = incoming.id
     current.null_value = incoming.null_value
@@ -64,20 +60,18 @@ return function(current, incoming, context)
     current.empty_object = incoming.empty_object
     current.created_array = json.array()
     current.created_object = json.object()
-    current.observed_at = context.observed_at
     return current
 end`)
 	options := merge.LuaOptions{}
 	merger := compileTestProgram(t, source, options)
 	current := jsonDocument(`{"keep":true}`)
 	incoming := jsonDocument(`{"id":9223372036854775807,"null_value":null,"empty_array":[],"empty_object":{}}`)
-	observedAt := time.Date(2026, time.August, 29, 10, 11, 12, 123, time.UTC)
-	request := merge.Request{Current: &current, Incoming: incoming, ObservedAt: observedAt}
+	request := merge.Request{Current: &current, Incoming: incoming}
 	result, err := merger.Merge(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
 	}
-	want := `{"created_array":[],"created_object":{},"empty_array":[],"empty_object":{},"id":9223372036854775807,"keep":true,"null_value":null,"observed_at":"2026-08-29T10:11:12.000000123Z"}`
+	want := `{"created_array":[],"created_object":{},"empty_array":[],"empty_object":{},"id":9223372036854775807,"keep":true,"null_value":null}`
 	if string(result.Document.JSON) != want {
 		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
 	}
@@ -89,8 +83,7 @@ func TestLuaMergeRunsProductRule(t *testing.T) {
 	merger := compileTestProgram(t, source, options)
 	current := jsonDocument(`{"uid":"old","uids":["legacy"],"brand":"OLD","allowed_countries":["US"],"solds":[{"sold":1,"period_hours":24,"record_at":"2026-08-01T00:00:00Z"}]}`)
 	incoming := jsonDocument(`{"uid":"new","uids":["legacy","new"],"brand":"new brand","allowed_countries":["US","JP"],"solds":[{"sold":2,"period_hours":24,"record_at":"2026-08-02T00:00:00Z"}],"available":true}`)
-	observedAt := time.Date(2026, time.August, 29, 12, 0, 0, 0, time.UTC)
-	request := merge.Request{Current: &current, Incoming: incoming, ObservedAt: observedAt}
+	request := merge.Request{Current: &current, Incoming: incoming}
 	result, err := merger.Merge(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
@@ -102,12 +95,11 @@ func TestLuaMergeRunsProductRule(t *testing.T) {
 		AllowedCountries []string `json:"allowed_countries"`
 		Solds            []any    `json:"solds"`
 		Available        bool     `json:"available"`
-		LastFoundAt      string   `json:"last_found_at"`
 	}
 	if err := json.Unmarshal(result.Document.JSON, &product); err != nil {
 		t.Fatalf("decode merged product: %v", err)
 	}
-	if product.UID != "new" || product.Brand != "NEW BRAND" || !product.Available || product.LastFoundAt != "2026-08-29T12:00:00Z" {
+	if product.UID != "new" || product.Brand != "NEW BRAND" || !product.Available {
 		t.Fatalf("merged product = %+v", product)
 	}
 	if len(product.UIDs) != 3 || len(product.AllowedCountries) != 2 || len(product.Solds) != 2 {
@@ -141,7 +133,7 @@ func BenchmarkLuaMergeProduct5KB(b *testing.B) {
 	}
 	current := jsonDocument(string(currentJSON))
 	incoming := jsonDocument(string(incomingJSON))
-	request := merge.Request{Current: &current, Incoming: incoming, ObservedAt: time.Now()}
+	request := merge.Request{Current: &current, Incoming: incoming}
 	b.SetBytes(int64(len(currentJSON) + len(incomingJSON)))
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -155,13 +147,13 @@ func BenchmarkLuaMergeProduct5KB(b *testing.B) {
 func TestLuaMergeUsesFreshVMForEveryCall(t *testing.T) {
 	source := []byte(`
 counter = 0
-return function(current, incoming, context)
+return function(current, incoming)
     counter = counter + 1
     return {counter = counter}
 end`)
 	options := merge.LuaOptions{}
 	merger := compileTestProgram(t, source, options)
-	request := merge.Request{Incoming: jsonDocument(`{}`), ObservedAt: time.Now()}
+	request := merge.Request{Incoming: jsonDocument(`{}`)}
 	for range 2 {
 		result, err := merger.Merge(context.Background(), request)
 		if err != nil {
@@ -175,7 +167,7 @@ end`)
 
 func TestLuaMergePresentsObjectKeysDeterministically(t *testing.T) {
 	source := []byte(`
-return function(current, incoming, context)
+return function(current, incoming)
     local keys = {}
     for key in pairs(incoming) do
         keys[#keys + 1] = key
@@ -184,7 +176,7 @@ return function(current, incoming, context)
 end`)
 	options := merge.LuaOptions{}
 	merger := compileTestProgram(t, source, options)
-	request := merge.Request{Incoming: jsonDocument(`{"z":1,"a":2,"m":3}`), ObservedAt: time.Now()}
+	request := merge.Request{Incoming: jsonDocument(`{"z":1,"a":2,"m":3}`)}
 	result, err := merger.Merge(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
@@ -195,10 +187,10 @@ end`)
 }
 
 func TestLuaMergeSupportsConcurrentCalls(t *testing.T) {
-	source := []byte(`return function(current, incoming, context) return incoming end`)
+	source := []byte(`return function(current, incoming) return incoming end`)
 	options := merge.LuaOptions{}
 	merger := compileTestProgram(t, source, options)
-	request := merge.Request{Incoming: jsonDocument(`{"value":1}`), ObservedAt: time.Now()}
+	request := merge.Request{Incoming: jsonDocument(`{"value":1}`)}
 
 	const calls = 32
 	var waitGroup sync.WaitGroup
@@ -221,7 +213,7 @@ func TestLuaMergeSupportsConcurrentCalls(t *testing.T) {
 
 func TestLuaMergeRestrictsNondeterministicAndHostAPIs(t *testing.T) {
 	source := []byte(`
-return function(current, incoming, context)
+return function(current, incoming)
     return {
         ["global"] = _G ~= nil,
         io = io ~= nil,
@@ -235,7 +227,7 @@ return function(current, incoming, context)
 end`)
 	options := merge.LuaOptions{}
 	merger := compileTestProgram(t, source, options)
-	request := merge.Request{Incoming: jsonDocument(`{}`), ObservedAt: time.Now()}
+	request := merge.Request{Incoming: jsonDocument(`{}`)}
 	result, err := merger.Merge(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
@@ -248,12 +240,12 @@ end`)
 
 func TestLuaMergeProvidesUnicodeUpper(t *testing.T) {
 	source := []byte(`
-return function(current, incoming, context)
+return function(current, incoming)
     return {brand = utf8.upper(incoming.brand)}
 end`)
 	options := merge.LuaOptions{}
 	merger := compileTestProgram(t, source, options)
-	request := merge.Request{Incoming: jsonDocument(`{"brand":"café Straße 品牌"}`), ObservedAt: time.Now()}
+	request := merge.Request{Incoming: jsonDocument(`{"brand":"café Straße 品牌"}`)}
 	result, err := merger.Merge(context.Background(), request)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
@@ -261,6 +253,132 @@ end`)
 	want := `{"brand":"CAFÉ STRAßE 品牌"}`
 	if string(result.Document.JSON) != want {
 		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	}
+}
+
+func TestLuaMergeProvidesSinkV1Utilities(t *testing.T) {
+	source := []byte(`
+return function(current, incoming)
+    local array = sink.v1.array
+    local object = sink.v1.object
+    local appended = json.array()
+    local returned = array.append_all(appended, incoming.left)
+    array.append_all(appended, incoming.right)
+    array.append_all(appended, nil)
+
+    local target = json.object()
+    target.title = "old"
+    target.gallery = incoming.previous_gallery
+    object.replace_nonempty_string(target, incoming, "title")
+    object.replace_nonempty_string(target, incoming, "empty_title")
+    object.replace_nonempty_array(target, incoming, "gallery")
+    object.replace_nonempty_array(target, incoming, "empty_gallery")
+
+    local result = {
+        append_returns_target = returned == appended,
+        appended = appended,
+        deduplicated = array.deduplicate(incoming.records, function(item) return item.id end),
+        source_record_count = #incoming.records,
+        tail = array.keep_tail(appended, 2),
+        target = target,
+        union = array.union_strings(incoming.current_tags, incoming.new_tags),
+        v2_missing = sink.v2 == nil,
+    }
+    return result
+end`)
+	options := merge.LuaOptions{}
+	merger := compileTestProgram(t, source, options)
+	incoming := jsonDocument(`{"left":[1,2],"right":[3,4],"records":[{"id":"a","value":1},{"id":"a","value":2},{"id":"b","value":3}],"previous_gallery":["old"],"title":"new","empty_title":"","gallery":["new"],"empty_gallery":[],"current_tags":["a","b"],"new_tags":["b","c"]}`)
+	request := merge.Request{Incoming: incoming}
+	result, err := merger.Merge(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	want := `{"append_returns_target":true,"appended":[1,2,3,4],"deduplicated":[{"id":"a","value":1},{"id":"b","value":3}],"source_record_count":3,"tail":[3,4],"target":{"gallery":["new"],"title":"new"},"union":["a","b","c"],"v2_missing":true}`
+	if string(result.Document.JSON) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	}
+}
+
+func TestLuaMergeProvidesStableSinkV1Time(t *testing.T) {
+	source := []byte(`
+return function(current, incoming)
+    local first = sink.v1.time.now()
+    local second = sink.v1.time.now()
+    return {first = first, same = first == second, second = second}
+end`)
+	options := merge.LuaOptions{}
+	merger := compileTestProgram(t, source, options)
+	observedAt := time.Date(2026, time.August, 30, 9, 8, 7, 654321000, time.UTC)
+	request := merge.Request{Incoming: jsonDocument(`{}`), ObservedAt: observedAt}
+	result, err := merger.Merge(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	want := `{"first":"2026-08-30T09:08:07.654321Z","same":true,"second":"2026-08-30T09:08:07.654321Z"}`
+	if string(result.Document.JSON) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	}
+	wantPaths := []string{"/first", "/second"}
+	if !slices.Equal(result.Document.DateTimePaths, wantPaths) {
+		t.Fatalf("Merge() date-time paths = %v, want %v", result.Document.DateTimePaths, wantPaths)
+	}
+}
+
+func TestLuaMergeSinkV1TimeMetadataWinsOverMatchingUntypedInput(t *testing.T) {
+	source := []byte(`
+return function(current, incoming)
+    return {copied = incoming.literal, generated = sink.v1.time.now()}
+end`)
+	options := merge.LuaOptions{}
+	merger := compileTestProgram(t, source, options)
+	observedAt := time.Date(2026, time.August, 30, 9, 8, 7, 0, time.UTC)
+	request := merge.Request{
+		Incoming:   jsonDocument(`{"literal":"2026-08-30T09:08:07Z"}`),
+		ObservedAt: observedAt,
+	}
+	result, err := merger.Merge(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	wantPaths := []string{"/copied", "/generated"}
+	if !slices.Equal(result.Document.DateTimePaths, wantPaths) {
+		t.Fatalf("Merge() date-time paths = %v, want %v", result.Document.DateTimePaths, wantPaths)
+	}
+}
+
+func TestLuaMergeSinkV1UtilitiesRejectInvalidInputs(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		incoming string
+		want     string
+	}{
+		{name: "argument count", body: `sink.v1.array.keep_tail(incoming.items)`, incoming: `{"items":[]}`, want: "bad argument count"},
+		{name: "array object", body: `sink.v1.array.append_all(incoming.object, incoming.items)`, incoming: `{"object":{},"items":[]}`, want: "must be a JSON array"},
+		{name: "array hole", body: `incoming.items[2] = nil; sink.v1.array.keep_tail(incoming.items, 2)`, incoming: `{"items":[1,2,3]}`, want: "contiguous integer keys"},
+		{name: "fractional limit", body: `sink.v1.array.keep_tail(incoming.items, 1.5)`, incoming: `{"items":[]}`, want: "non-negative integer"},
+		{name: "negative limit", body: `sink.v1.array.keep_tail(incoming.items, -1)`, incoming: `{"items":[]}`, want: "non-negative integer"},
+		{name: "union item type", body: `sink.v1.array.union_strings(incoming.items, nil)`, incoming: `{"items":["ok",1]}`, want: "array item 2 must be a string"},
+		{name: "deduplicate callback error", body: `sink.v1.array.deduplicate(incoming.items, function() error("key failed") end)`, incoming: `{"items":[1]}`, want: "key function failed"},
+		{name: "deduplicate nil key", body: `sink.v1.array.deduplicate(incoming.items, function() return nil end)`, incoming: `{"items":[1]}`, want: "must return a string, number, or boolean"},
+		{name: "deduplicate callback type", body: `sink.v1.array.deduplicate(incoming.items, "key")`, incoming: `{"items":[1]}`, want: "function expected"},
+		{name: "string field type", body: `sink.v1.object.replace_nonempty_string(incoming.target, incoming.source, "value")`, incoming: `{"target":{},"source":{"value":1}}`, want: "must be a string or nil"},
+		{name: "array field type", body: `sink.v1.object.replace_nonempty_array(incoming.target, incoming.source, "value")`, incoming: `{"target":{},"source":{"value":{}}}`, want: "must be a JSON array"},
+		{name: "time argument", body: `sink.v1.time.now(1)`, incoming: `{}`, want: "bad argument count"},
+		{name: "missing observation time", body: `sink.v1.time.now()`, incoming: `{}`, want: "observation time is missing"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := []byte(`return function(current, incoming) ` + test.body + `; return incoming end`)
+			options := merge.LuaOptions{}
+			merger := compileTestProgram(t, source, options)
+			request := merge.Request{Incoming: jsonDocument(test.incoming)}
+			_, err := merger.Merge(t.Context(), request)
+			if !errors.Is(err, merge.ErrExecution) || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Merge() error = %v, want execution error containing %q", err, test.want)
+			}
+		})
 	}
 }
 
@@ -276,12 +394,12 @@ func TestLuaMergeUnicodeUpperRejectsInvalidInput(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			source := []byte(`
-return function(current, incoming, context)
+return function(current, incoming)
     return {brand = ` + test.source + `}
 end`)
 			options := merge.LuaOptions{}
 			merger := compileTestProgram(t, source, options)
-			request := merge.Request{Incoming: jsonDocument(test.incoming), ObservedAt: time.Now()}
+			request := merge.Request{Incoming: jsonDocument(test.incoming)}
 			_, err := merger.Merge(t.Context(), request)
 			if !errors.Is(err, merge.ErrExecution) {
 				t.Fatalf("Merge() error = %v", err)
@@ -321,9 +439,9 @@ func TestLuaEngineValidatesProgram(t *testing.T) {
 func TestLuaMergeEnforcesExecutionLimits(t *testing.T) {
 	t.Run("instructions", func(t *testing.T) {
 		options := merge.LuaOptions{MaxInstructions: 100}
-		source := []byte(`return function(current, incoming, context) while true do end end`)
+		source := []byte(`return function(current, incoming) while true do end end`)
 		merger := compileTestProgram(t, source, options)
-		request := merge.Request{Incoming: jsonDocument(`{}`), ObservedAt: time.Now()}
+		request := merge.Request{Incoming: jsonDocument(`{}`)}
 		_, err := merger.Merge(context.Background(), request)
 		if !errors.Is(err, merge.ErrExecutionExhausted) {
 			t.Fatalf("Merge() error = %v", err)
@@ -332,9 +450,9 @@ func TestLuaMergeEnforcesExecutionLimits(t *testing.T) {
 
 	t.Run("deadline", func(t *testing.T) {
 		options := merge.LuaOptions{Timeout: time.Nanosecond, MaxInstructions: 10_000_000}
-		source := []byte(`return function(current, incoming, context) while true do end end`)
+		source := []byte(`return function(current, incoming) while true do end end`)
 		merger := compileTestProgram(t, source, options)
-		request := merge.Request{Incoming: jsonDocument(`{}`), ObservedAt: time.Now()}
+		request := merge.Request{Incoming: jsonDocument(`{}`)}
 		_, err := merger.Merge(context.Background(), request)
 		if !errors.Is(err, merge.ErrExecutionDeadline) {
 			t.Fatalf("Merge() error = %v", err)
@@ -343,10 +461,29 @@ func TestLuaMergeEnforcesExecutionLimits(t *testing.T) {
 
 	t.Run("result bytes", func(t *testing.T) {
 		options := merge.LuaOptions{MaxResultBytes: 8}
-		source := []byte(`return function(current, incoming, context) return {value = "too large"} end`)
+		source := []byte(`return function(current, incoming) return {value = "too large"} end`)
 		merger := compileTestProgram(t, source, options)
-		request := merge.Request{Incoming: jsonDocument(`{}`), ObservedAt: time.Now()}
+		request := merge.Request{Incoming: jsonDocument(`{}`)}
 		_, err := merger.Merge(context.Background(), request)
+		if !errors.Is(err, merge.ErrExecutionExhausted) {
+			t.Fatalf("Merge() error = %v", err)
+		}
+	})
+
+	t.Run("native utility work", func(t *testing.T) {
+		options := merge.LuaOptions{MaxInstructions: 100}
+		source := []byte(`return function(current, incoming) return {items = sink.v1.array.keep_tail(incoming.items, 101)} end`)
+		merger := compileTestProgram(t, source, options)
+		items := make([]int, 101)
+		for index := range items {
+			items[index] = index
+		}
+		incomingJSON, err := json.Marshal(map[string]any{"items": items})
+		if err != nil {
+			t.Fatalf("json.Marshal() error = %v", err)
+		}
+		request := merge.Request{Incoming: jsonDocument(string(incomingJSON))}
+		_, err = merger.Merge(t.Context(), request)
 		if !errors.Is(err, merge.ErrExecutionExhausted) {
 			t.Fatalf("Merge() error = %v", err)
 		}
@@ -355,7 +492,7 @@ func TestLuaMergeEnforcesExecutionLimits(t *testing.T) {
 
 func TestLuaMergeClassifiesDocumentAndScriptErrors(t *testing.T) {
 	t.Run("incoming", func(t *testing.T) {
-		source := []byte(`return function(current, incoming, context) return incoming end`)
+		source := []byte(`return function(current, incoming) return incoming end`)
 		options := merge.LuaOptions{}
 		merger := compileTestProgram(t, source, options)
 		request := merge.Request{Incoming: storage.Document{JSON: []byte("bad")}}
@@ -366,7 +503,7 @@ func TestLuaMergeClassifiesDocumentAndScriptErrors(t *testing.T) {
 	})
 
 	t.Run("current", func(t *testing.T) {
-		source := []byte(`return function(current, incoming, context) return incoming end`)
+		source := []byte(`return function(current, incoming) return incoming end`)
 		options := merge.LuaOptions{}
 		merger := compileTestProgram(t, source, options)
 		current := jsonDocument(`not-json`)
@@ -378,7 +515,7 @@ func TestLuaMergeClassifiesDocumentAndScriptErrors(t *testing.T) {
 	})
 
 	t.Run("runtime", func(t *testing.T) {
-		source := []byte(`return function(current, incoming, context) error("bad rule") end`)
+		source := []byte(`return function(current, incoming) error("bad rule") end`)
 		options := merge.LuaOptions{}
 		merger := compileTestProgram(t, source, options)
 		request := merge.Request{Incoming: jsonDocument(`{}`)}
