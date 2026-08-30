@@ -54,7 +54,6 @@ storages:
       topic: catalog-mutations
       group_id: catalog-sink-workers
       dead_letter_topic: catalog-mutations.dlq
-      create_topic_if_not_exists: true
       topic_partitions: 4
       topic_replication_factor: 2
       topic_retention_hours: 72
@@ -285,7 +284,6 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].kafka.topic` | string | Conditionally | none | Any valid Kafka topic name | Required when Kafka is enabled. The server publishes only mutations whose `address.store` selects this store. |
 | `storages[].kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Required for every Kafka-enabled store in `worker` and `all` modes; optional and unused in `server` mode. |
 | `storages[].kafka.dead_letter_topic` | string | No | `<storages[].kafka.topic>.dlq` | Non-empty Kafka topic different from the source topic | Destination for malformed, cross-store, permanent, and retry-exhausted records for this store. |
-| `storages[].kafka.create_topic_if_not_exists` | boolean | No | `true` | `true`, `false` | Creates the source and dead-letter topics when missing. When `false`, either missing Topic fails startup. Existing Topics are reconciled in both cases. |
 | `storages[].kafka.topic_partitions` | positive integer | No | `4` | Integer from `1` through `2147483647` | Required partition count for both Topics. Sink increases a lower count; a higher existing count fails startup because Kafka cannot safely decrease it. |
 | `storages[].kafka.topic_replication_factor` | positive integer | No | `2` | Integer from `1` through `32767`, not exceeding available brokers | Required replica count for every partition of both Topics. Sink submits and waits for partition reassignment when it differs. |
 | `storages[].kafka.topic_retention_hours` | positive integer | No | `72` (3 days) | Integer greater than `0` within Go duration range | Required retention for both Topics. Sink sets Kafka `retention.ms` to this value. |
@@ -327,14 +325,13 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
   different Kafka clusters.
 
 Before publishers or consumers start, Sink reconciles both the source Topic and
-dead-letter Topic. Missing Topics are created only when
-`create_topic_if_not_exists` is `true`. Partition counts can increase but cannot
-decrease without destructive Topic recreation, so an excessive existing count
-fails startup. Replication-factor changes use Kafka partition reassignment and
-may move substantial data; Sink waits for Kafka metadata to report the target
-factor. Retention differences are updated through `retention.ms`. The Kafka
-principal therefore needs the corresponding describe, create (when enabled),
-alter, describe-config, and alter-config permissions.
+dead-letter Topic. Missing Topics are created automatically. Partition counts
+can increase but cannot decrease without destructive Topic recreation, so an
+excessive existing count fails startup. Replication-factor changes use Kafka
+partition reassignment and may move substantial data; Sink waits for Kafka
+metadata to report the target factor. Retention differences are updated through
+`retention.ms`. The Kafka principal therefore needs the corresponding describe,
+create, alter, describe-config, and alter-config permissions.
 
 Each consumer rejects a record whose embedded `address.store` does not match
 the store that owns its source Topic. A source record is committed only after

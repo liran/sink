@@ -25,7 +25,6 @@ const (
 type TopicOptions struct {
 	Brokers           []string
 	Topics            []string
-	CreateIfNotExists bool
 	Partitions        int
 	ReplicationFactor int
 	Retention         time.Duration
@@ -102,9 +101,6 @@ func ensureTopics(ctx context.Context, admin *kadm.Client, opts TopicOptions) er
 	}
 	missing := missingTopics(details, opts.Topics)
 	if len(missing) > 0 {
-		if !opts.CreateIfNotExists {
-			return fmt.Errorf("configure Kafka topics: topics do not exist: %s", strings.Join(missing, ", "))
-		}
 		createErr := createTopics(ctx, admin, opts, missing)
 		if createErr != nil {
 			return createErr

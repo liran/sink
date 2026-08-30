@@ -40,7 +40,6 @@ func TestEnsureTopicsCreatesAndReconcilesTopicSettings(t *testing.T) {
 	topicOptions := kafka.TopicOptions{
 		Brokers:           cluster.ListenAddrs(),
 		Topics:            topics,
-		CreateIfNotExists: true,
 		Partitions:        4,
 		ReplicationFactor: 2,
 		Retention:         72 * time.Hour,
@@ -86,7 +85,8 @@ func TestEnsureTopicsCreatesAndReconcilesTopicSettings(t *testing.T) {
 	}
 }
 
-func TestEnsureTopicsRejectsMissingTopicWhenCreationDisabled(t *testing.T) {
+func TestEnsureTopicsCreatesMissingTopic(t *testing.T) {
+	const topic = "missing-topic"
 	cluster, err := kfake.NewCluster(kfake.NumBrokers(2))
 	if err != nil {
 		t.Fatalf("kfake.NewCluster() error = %v", err)
@@ -94,15 +94,28 @@ func TestEnsureTopicsRejectsMissingTopicWhenCreationDisabled(t *testing.T) {
 	t.Cleanup(cluster.Close)
 	topicOptions := kafka.TopicOptions{
 		Brokers:           cluster.ListenAddrs(),
-		Topics:            []string{"missing-topic"},
-		CreateIfNotExists: false,
+		Topics:            []string{topic},
 		Partitions:        4,
 		ReplicationFactor: 2,
 		Retention:         72 * time.Hour,
 	}
 	err = kafka.EnsureTopics(t.Context(), topicOptions)
-	if err == nil || !strings.Contains(err.Error(), "topics do not exist") {
+	if err != nil {
 		t.Fatalf("EnsureTopics() error = %v", err)
+	}
+
+	clientOptions := []kgo.Opt{kgo.SeedBrokers(cluster.ListenAddrs()...)}
+	client, err := kgo.NewClient(clientOptions...)
+	if err != nil {
+		t.Fatalf("kgo.NewClient() error = %v", err)
+	}
+	t.Cleanup(client.Close)
+	details, err := kadm.NewClient(client).ListTopics(t.Context(), topic)
+	if err != nil {
+		t.Fatalf("ListTopics() error = %v", err)
+	}
+	if !details.Has(topic) || len(details[topic].Partitions) != 4 {
+		t.Fatalf("topic details = %#v", details[topic])
 	}
 }
 
@@ -120,7 +133,6 @@ func TestEnsureTopicsRejectsPartitionDecrease(t *testing.T) {
 	topicOptions := kafka.TopicOptions{
 		Brokers:           cluster.ListenAddrs(),
 		Topics:            []string{topic},
-		CreateIfNotExists: true,
 		Partitions:        4,
 		ReplicationFactor: 2,
 		Retention:         72 * time.Hour,
@@ -140,7 +152,6 @@ func TestEnsureTopicsRejectsReplicationFactorAboveBrokerCount(t *testing.T) {
 	topicOptions := kafka.TopicOptions{
 		Brokers:           cluster.ListenAddrs(),
 		Topics:            []string{"sink-mutations"},
-		CreateIfNotExists: true,
 		Partitions:        4,
 		ReplicationFactor: 2,
 		Retention:         72 * time.Hour,
