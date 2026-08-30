@@ -102,13 +102,13 @@ func (s *Store) performOnce(ctx context.Context, opts requestOptions, endpoint *
 
 	httpResponse, err := s.client.Do(request)
 	if err != nil {
-		return empty, err
+		return empty, storage.BackendError(err)
 	}
 	defer httpResponse.Body.Close()
 	limited := io.LimitReader(httpResponse.Body, s.maxResponseSize+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
-		return empty, err
+		return empty, storage.BackendError(err)
 	}
 	if int64(len(body)) > s.maxResponseSize {
 		return empty, fmt.Errorf("%s response exceeds %d bytes", s.driver, s.maxResponseSize)
