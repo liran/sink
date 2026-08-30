@@ -110,7 +110,7 @@ func applyMultiGetDocument(result *storage.ReadResult, document multiGetDocument
 			result.Status = storage.ReadStatusNotFound
 			return
 		}
-		setReadError(result, document.Error)
+		setReadError(result, classifySearchError(document.Error))
 		return
 	}
 	if !document.Found {

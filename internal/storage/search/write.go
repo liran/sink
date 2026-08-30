@@ -262,6 +262,10 @@ func applyWriteItem(result *storage.WriteResult, item bulkItem) {
 }
 
 func classifySearchStatus(statusCode int, cause error) error {
+	var detail *errorDetail
+	if errors.As(cause, &detail) && isRetryableSearchError(detail) {
+		return storage.BackendError(cause)
+	}
 	switch statusCode {
 	case 408, 502, 503, 504:
 		return storage.BackendError(cause)

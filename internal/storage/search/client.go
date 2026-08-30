@@ -143,6 +143,10 @@ func responseError(driver Driver, response apiResponse) error {
 	} else {
 		cause = fmt.Errorf("%s request returned HTTP %d", driver, response.statusCode)
 	}
+	var structured *errorDetail
+	if errors.As(detail, &structured) && isRetryableSearchError(structured) {
+		return storage.BackendError(cause)
+	}
 	switch response.statusCode {
 	case http.StatusRequestTimeout, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		return storage.BackendError(cause)
@@ -153,6 +157,24 @@ func responseError(driver Driver, response apiResponse) error {
 	default:
 		return cause
 	}
+}
+
+func classifySearchError(detail *errorDetail) error {
+	if isRetryableSearchError(detail) {
+		return storage.BackendError(detail)
+	}
+	return detail
+}
+
+func isRetryableSearchError(detail *errorDetail) bool {
+	for detail != nil {
+		switch detail.Type {
+		case "no_shard_available_action_exception", "unavailable_shards_exception":
+			return true
+		}
+		detail = detail.CausedBy
+	}
+	return false
 }
 
 func retryableSearchStatus(statusCode int) bool {
@@ -176,7 +198,7 @@ func decodeResponseError(body []byte) error {
 	if err := json.Unmarshal(envelope.Error, &detail); err != nil || (detail.Type == "" && detail.Reason == "") {
 		return nil
 	}
-	return detail
+	return &detail
 }
 
 func (e errorDetail) Error() string {

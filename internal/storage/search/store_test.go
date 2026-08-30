@@ -346,6 +346,56 @@ func TestStoreClassifiesResponseReadFailureAsRetryableUnavailable(t *testing.T) 
 	}
 }
 
+func TestStoreClassifiesUnavailableShardReadAsRetryableUnavailable(t *testing.T) {
+	requests := []expectedRequest{
+		{
+			method:       http.MethodPost,
+			path:         "/_mget",
+			contentType:  ContentTypeJSON,
+			bodyContains: []string{`"_id":"record"`},
+			statusCode:   http.StatusOK,
+			responseBody: `{"docs":[{"_index":"legacy-records","_id":"record","error":{"type":"no_shard_available_action_exception","reason":"No shard available"}}]}`,
+		},
+	}
+	store, handler := newScriptedStore(t, requests)
+	operation := storage.ReadOperation{Address: testAddress("record")}
+	request := storage.ReadRequest{Operations: []storage.ReadOperation{operation}}
+	response, err := store.Read(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	result := response.Results[0]
+	if result.Status != storage.ReadStatusFailed {
+		t.Fatalf("Read() status = %v", result.Status)
+	}
+	code, retryable := storage.ErrorDetails(result.Err)
+	if code != storage.ErrorCodeUnavailable || !retryable {
+		t.Fatalf("Read() error details = %s, retryable %t, error %v", code, retryable, result.Err)
+	}
+	handler.verify()
+}
+
+func TestResponseClassifiesUnavailableShardAsRetryableUnavailable(t *testing.T) {
+	response := apiResponse{
+		statusCode: http.StatusInternalServerError,
+		body:       []byte(`{"error":{"type":"unavailable_shards_exception","reason":"primary shard is not active"},"status":500}`),
+	}
+	err := responseError(DriverOpenSearch, response)
+	code, retryable := storage.ErrorDetails(err)
+	if code != storage.ErrorCodeUnavailable || !retryable {
+		t.Fatalf("response error details = %s, retryable %t, error %v", code, retryable, err)
+	}
+}
+
+func TestBulkClassifiesUnavailableShardAsRetryableUnavailable(t *testing.T) {
+	detail := &errorDetail{Type: "no_shard_available_action_exception", Reason: "No shard available"}
+	err := classifySearchStatus(http.StatusInternalServerError, detail)
+	code, retryable := storage.ErrorDetails(err)
+	if code != storage.ErrorCodeUnavailable || !retryable {
+		t.Fatalf("bulk error details = %s, retryable %t, error %v", code, retryable, err)
+	}
+}
+
 func TestStoreRejectsInvalidDocumentsWithoutSendingRequests(t *testing.T) {
 	store, handler := newScriptedStore(t, nil)
 	operation := storage.WriteOperation{
