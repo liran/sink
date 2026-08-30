@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="760" viewBox="0 0 1500 760" role="img" aria-labelledby="title description">
   <title id="title">Sink database load protection for crawler fleets</title>
-  <desc id="description">A comparison of direct database writes and writes through Sink. Without Sink, each crawler process owns a driver pool and sends fragmented requests to the database. With Sink, crawler processes use gRPC, Sink instances own bounded backend pools, and the micro-batcher turns concurrent small calls into bulk storage operations.</desc>
+  <desc id="description">A comparison of direct database writes and writes through Sink. Without Sink, each crawler process opens database connections and sends fragmented requests to the database. With Sink, crawler processes use gRPC, Sink instances own controlled backend connections, and the micro-batcher turns concurrent small calls into bulk storage operations.</desc>
   <defs>
     <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
       <path d="M40 0H0V40" fill="none" stroke="#d8e0e6" stroke-width="1" opacity="0.45"/>
@@ -34,14 +34,14 @@
 
   <text class="eyebrow" x="35" y="58">DATABASE LOAD PROTECTION</text>
   <text class="headline" x="35" y="91">Move connection and request amplification out of the crawler fleet</text>
-  <text class="subhead" x="35" y="116">Threads share a pool inside one process; separate processes normally create separate pools.</text>
+  <text class="subhead" x="35" y="116">Threads can reuse connections inside one process; separate processes normally cannot share them.</text>
 
   <g>
     <rect x="35" y="140" width="680" height="485" rx="7" fill="#ffffff" stroke="#b7c1c8" stroke-width="1.5"/>
     <rect x="35" y="140" width="680" height="58" rx="7" fill="#5b4040"/>
     <rect x="35" y="191" width="680" height="7" fill="#5b4040"/>
     <text class="panel-title" x="62" y="169">WITHOUT SINK</text>
-    <text class="panel-note" x="62" y="189">connection pools and small writes multiply with crawler processes</text>
+    <text class="panel-note" x="62" y="189">database connections and small writes multiply with crawler processes</text>
 
     <text class="zone" x="70" y="228">CRAWLER PROCESSES</text>
     <text class="zone" x="545" y="228">DATABASE</text>
@@ -52,21 +52,21 @@
       <rect x="91" y="265" width="30" height="30" fill="#e7ecef" stroke="#8798a4"/>
       <path d="M98 273h16M98 280h16M98 287h11" stroke="#536876" stroke-width="2"/>
       <text class="process-title" x="136" y="273">PROCESS 01</text>
-      <text class="process-copy" x="136" y="294">worker threads + driver pool</text>
+      <text class="process-copy" x="136" y="294">worker threads + DB connections</text>
 
       <rect x="70" y="341" width="270" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
       <rect x="70" y="341" width="5" height="68" fill="#7b5555"/>
       <rect x="91" y="358" width="30" height="30" fill="#e7ecef" stroke="#8798a4"/>
       <path d="M98 366h16M98 373h16M98 380h11" stroke="#536876" stroke-width="2"/>
       <text class="process-title" x="136" y="366">PROCESS 02</text>
-      <text class="process-copy" x="136" y="387">worker threads + driver pool</text>
+      <text class="process-copy" x="136" y="387">worker threads + DB connections</text>
 
       <rect x="70" y="434" width="270" height="68" rx="4" fill="#f7f9fa" stroke="#aebbc5"/>
       <rect x="70" y="434" width="5" height="68" fill="#7b5555"/>
       <rect x="91" y="451" width="30" height="30" fill="#e7ecef" stroke="#8798a4"/>
       <path d="M98 459h16M98 466h16M98 473h11" stroke="#536876" stroke-width="2"/>
       <text class="process-title" x="136" y="459">PROCESS N</text>
-      <text class="process-copy" x="136" y="480">worker threads + driver pool</text>
+      <text class="process-copy" x="136" y="480">worker threads + DB connections</text>
     </g>
 
     <g>
@@ -75,7 +75,7 @@
       <path d="M572 319V386C572 394 589 400 610 400S648 394 648 386V319" fill="#e8edf0" stroke="#7c909d" stroke-width="1.5"/>
       <path d="M572 352C572 360 589 366 610 366S648 360 648 352" fill="none" stroke="#a0afb8"/>
       <text class="db-title" x="610" y="428" text-anchor="middle">DATABASE</text>
-      <text class="db-copy" x="610" y="449" text-anchor="middle">many pools</text>
+      <text class="db-copy" x="610" y="449" text-anchor="middle">many connections</text>
     </g>
 
     <g fill="none" stroke="#7b5555" stroke-width="3" stroke-linecap="square" stroke-linejoin="miter">
@@ -96,7 +96,7 @@
     <rect x="70" y="536" width="605" height="58" rx="4" fill="#f2e9e8" stroke="#d8bbb8"/>
     <circle cx="96" cy="565" r="10" fill="#7b5555"/>
     <path d="M92 561l8 8M100 561l-8 8" stroke="#ffffff" stroke-width="2"/>
-    <text class="risk" x="116" y="561">Pool count follows crawler process count</text>
+    <text class="risk" x="116" y="561">Connection count follows crawler process count</text>
     <text class="process-copy" x="116" y="581">Connections and storage requests rise with horizontal scaling.</text>
   </g>
 
@@ -105,7 +105,7 @@
     <rect x="785" y="140" width="680" height="58" rx="7" fill="#214e69"/>
     <rect x="785" y="191" width="680" height="7" fill="#214e69"/>
     <text class="panel-title" x="812" y="169">WITH SINK</text>
-    <text class="panel-note" x="812" y="189">gRPC fan-in, bounded pools, micro-batches, and backpressure</text>
+    <text class="panel-note" x="812" y="189">gRPC fan-in, controlled connections, micro-batches, and backpressure</text>
 
     <text class="zone" x="820" y="228">CRAWLER PROCESSES</text>
     <text class="zone" x="1080" y="228">SINK TIER</text>
@@ -135,7 +135,7 @@
 
       <rect x="1103" y="302" width="164" height="52" rx="3" fill="#1e3b4f" stroke="#5a7384"/>
       <text class="sink-step" x="1117" y="323">CONNECTION FAN-IN</text>
-      <text class="sink-copy" x="1117" y="342">pools follow Sink replicas</text>
+      <text class="sink-copy" x="1117" y="342">connections follow Sink replicas</text>
 
       <rect x="1103" y="367" width="164" height="52" rx="3" fill="#1e3b4f" stroke="#5a7384"/>
       <text class="sink-step" x="1117" y="388">MICRO-BATCHING</text>
@@ -177,7 +177,7 @@
     <rect x="820" y="536" width="615" height="58" rx="4" fill="#e6f0ef" stroke="#abc8c5"/>
     <circle cx="846" cy="565" r="10" fill="#176b65"/>
     <path d="M841 565l4 4 7-9" fill="none" stroke="#ffffff" stroke-width="2"/>
-    <text class="benefit" x="866" y="561">Pool count follows the deliberately sized Sink tier</text>
+    <text class="benefit" x="866" y="561">Connection count follows the deliberately sized Sink tier</text>
     <text class="process-copy" x="866" y="581">Fewer, fuller requests reduce backend connection and request pressure.</text>
   </g>
 
@@ -186,7 +186,7 @@
     <path d="M511.5 668V713M988.5 668V713" stroke="#425a6b"/>
 
     <text class="outcome-title" x="70" y="680">CONNECTION CONTROL</text>
-    <text class="outcome-copy" x="70" y="705">Backend pools scale with Sink replicas, not crawler processes.</text>
+    <text class="outcome-copy" x="70" y="705">Backend connections scale with Sink replicas, not crawler processes.</text>
 
     <text class="outcome-title" x="546" y="680">REQUEST EFFICIENCY</text>
     <text class="outcome-copy" x="546" y="705">Concurrent small RPCs become bounded bulk storage operations.</text>

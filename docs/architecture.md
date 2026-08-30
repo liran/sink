@@ -29,29 +29,30 @@ counts and transport sizes are configurable independently.
 
 ## Connection fan-in and storage protection
 
-Threads in one crawler process can share a database driver pool, but separate
-processes and pods normally cannot. In a direct-write topology, adding crawler
-processes therefore adds pools and potential database connections. Small,
+Threads in one crawler process can reuse database connections, but separate
+processes and pods normally cannot share them. In a direct-write topology,
+adding crawler processes therefore adds potential database connections. Small,
 independent writes also multiply network round trips and storage-side request
 scheduling.
 
 Sink moves the database client boundary into a separately sized service tier.
 Crawler processes keep gRPC connections to Sink, while each Sink process owns
-the backend clients and their connection pools. The synchronous batcher then
-coalesces concurrent small RPCs for the same store into bounded storage
-batches. MongoDB can use collection-level bulk operations, and Elasticsearch
-or OpenSearch can use `_mget` and `_bulk`. Queue limits, adapter concurrency
-limits, and backpressure stop caller concurrency from passing through to a
-backend without bounds.
+the backend clients and their database connections. The synchronous batcher
+then coalesces concurrent small RPCs for the same store into bounded storage
+batches. MongoDB can use collection-level bulk operations, and Elasticsearch or
+OpenSearch can use `_mget` and `_bulk`. Queue limits, adapter concurrency limits,
+and backpressure stop caller concurrency from passing through to a backend
+without bounds.
 
-This changes the scaling relationship: database pool count follows the number
-of Sink replicas instead of the number of crawler processes. It is not a global
-connection cap. Every Sink replica has process-local clients, pools, queues,
-and batchers, so replica count and backend capacity must still be sized
-deliberately. Batching also stays within one Sink process and one store; callers
-that already have several records should send an explicit batch when possible.
+This changes the scaling relationship: database connection count follows the
+number of Sink replicas instead of the number of crawler processes. It is not a
+global connection cap. Every Sink replica has process-local clients,
+connections, queues, and batchers, so replica count and backend capacity must
+still be sized deliberately. Batching also stays within one Sink process and one
+store; callers that already have several records should send an explicit batch
+when possible.
 
-![Direct crawler writes multiply database pools and fragmented requests; routing through Sink consolidates backend pools and converts concurrent small RPCs into bounded bulk operations](assets/sink-database-protection.svg)
+![Direct crawler writes multiply database connections and fragmented requests; routing through Sink consolidates backend connections and converts concurrent small RPCs into bounded bulk operations](assets/sink-database-protection.svg)
 
 ## Address routing
 

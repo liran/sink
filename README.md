@@ -2,7 +2,7 @@
 
 Sink is a database-independent gRPC service for reading, writing, merging, and
 deleting JSON records. Applications use one record API while Sink handles
-routing, connection pooling, batching, concurrency, synchronous or durable
+routing, database connections, batching, concurrency, synchronous or durable
 asynchronous delivery, and storage-specific behavior for MongoDB,
 Elasticsearch, and OpenSearch.
 
@@ -21,7 +21,7 @@ Sink centralizes those concerns:
 | Problem | What Sink provides |
 | --- | --- |
 | Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON records |
-| Every crawler process owns a database connection pool | Backend pools move into the smaller Sink tier, so database connections scale with Sink replicas instead of crawler processes |
+| Every crawler process opens its own database connections | Database connections move into the smaller Sink tier, so connection growth follows Sink replicas instead of crawler processes |
 | Many small calls overload storage | Automatic bounded batching, concurrency limits, and backpressure per store |
 | Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
 | Concurrent updates lose data | Atomic per-record Lua merges with storage revision checks |
@@ -34,18 +34,18 @@ index manager, or a cross-record transaction coordinator.
 
 ### Protect storage behind crawler fleets
 
-A crawler fleet commonly runs many processes, with many threads sharing a
-database driver pool inside each process. If every process writes directly,
-database connections grow with the crawler fleet while one-record writes add
-round trips and storage scheduling overhead.
+A crawler fleet commonly runs many processes, with each process maintaining
+reusable database connections for its worker threads. If every process writes
+directly, database connections grow with the crawler fleet while one-record
+writes add round trips and storage scheduling overhead.
 
 Sink moves that fan-in boundary in front of storage. Workers connect to Sink;
-each Sink instance owns the backend clients and pools. Its short, bounded
-per-store queues coalesce concurrent small RPCs into bulk operations, while
-concurrency limits and backpressure keep bursts from reaching the database
-without control.
+each Sink instance owns the backend clients and database connections. Its
+short, bounded per-store queues coalesce concurrent small RPCs into bulk
+operations, while concurrency limits and backpressure keep bursts from reaching
+the database without control.
 
-![Without Sink, every crawler process owns a database pool and sends fragmented writes; with Sink, crawler processes converge on bounded connection pools and micro-batches before storage](docs/assets/sink-database-protection.svg)
+![Without Sink, every crawler process opens database connections and sends fragmented writes; with Sink, crawler processes converge on controlled database connections and micro-batches before storage](docs/assets/sink-database-protection.svg)
 
 Database connection demand now follows the deliberately sized Sink tier rather
 than the crawler process count, and storage receives fewer, fuller requests.
