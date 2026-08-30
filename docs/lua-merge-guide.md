@@ -1,12 +1,13 @@
-# Lua 合并脚本开发指南
+# Lua merge script guide
 
-Sink 的 Merge 操作用 Lua 描述单条记录的读、改、写规则。业务服务提交
-`incoming` 文档和 Lua 程序，Sink 读取当前文档、执行程序，并通过存储修订版本保证
-单条记录更新的原子性。
+Sink Merge operations use Lua to describe the read-modify-write rule for one
+record. A business service sends an `incoming` document and a Lua program. Sink
+reads the current document, runs the program, and uses the storage revision to
+apply the result atomically.
 
-## 最小脚本
+## Minimal script
 
-每个程序必须返回一个接收两个参数的函数：
+Every program must return one function that accepts exactly two arguments:
 
 ```lua
 return function(current, incoming)
@@ -16,20 +17,21 @@ return function(current, incoming)
 end
 ```
 
-- `current` 是存储中的当前 JSON 对象。记录不存在且 Merge 使用
-  `MISSING_DOCUMENT_MODE_CREATE` 时，它是 `nil`。
-- `incoming` 是本次 Merge 携带的 JSON 对象，始终存在。
-- 返回值必须是 JSON 对象，不能返回 `nil`、数组或标量。
-- Sink 发生修订冲突时会读取最新的 `current` 并重新执行同一个函数，所以脚本必须是
-  确定性的。
+- `current` is the stored JSON object. It is `nil` when the record does not
+  exist and the Merge uses `MISSING_DOCUMENT_MODE_CREATE`.
+- `incoming` is the JSON object carried by this Merge and is always present.
+- The function must return a JSON object. It cannot return `nil`, an array, or
+  a scalar.
+- A storage revision conflict makes Sink read the latest `current` document and
+  run the same function again, so the script must be deterministic.
 
-Lua 函数没有第三个 `context` 参数。需要执行时间时使用
-`sink.v1.time.now()`。
+There is no third `context` argument. Use `sink.v1.time.now()` when a script
+needs the execution time.
 
-## 完整示例
+## Complete example
 
-下面的脚本更新非空字段、合并标签、保留最近 20 条历史记录，并记录本次 Merge
-时间：
+The following script updates non-empty fields, merges tags, retains the latest
+20 history entries, and records the Merge time:
 
 ```lua
 local array = sink.v1.array
@@ -53,34 +55,38 @@ return function(current, incoming)
 end
 ```
 
-建议在程序顶部为常用子模块创建局部变量。这样既缩短源码，也减少每次查找全局表的
-开销。
+Create local aliases for frequently used submodules at the top of the program.
+This reduces both source size and repeated global table lookups.
 
-## `sink.v1` 公共工具
+## `sink.v1` utilities
 
-`sink.v1` 是 Sink 提供的版本化、确定性工具 API。不存在的参数、额外参数、错误类型、
-不连续数组、非法回调返回值和越界限制都会让当前 Merge 明确失败，不会静默修改数据。
+`sink.v1` is Sink's versioned, deterministic utility API. Missing or extra
+arguments, wrong types, sparse arrays, invalid callback results, and invalid
+limits fail the current Merge explicitly instead of silently changing data.
 
-### 数组工具
+### Array utilities
 
-所有数组参数必须是 JSON 数组，也就是来自 `current`、`incoming`，或者通过
-`json.array()` 创建的数组。不要用空的 `{}` 代替数组。
+Every array argument must be a JSON array: a value from `current` or `incoming`,
+or an array created with `json.array()`. Do not use an empty `{}` as an array.
 
 #### `sink.v1.array.append_all(target, source)`
 
-- `target`：必填 JSON 数组。
-- `source`：JSON 数组或 `nil`。
-- 按原顺序把 `source` 的所有元素追加到 `target`。
-- 会修改 `target`，并返回同一个 `target`；不会修改 `source`。
-- `source` 为 `nil` 时不做任何修改。
+- `target` is a required JSON array.
+- `source` is a JSON array or `nil`.
+- Appends every `source` item to `target` in its original order.
+- Mutates and returns the same `target`; it does not mutate `source`.
+- Does nothing when `source` is `nil`.
 
 #### `sink.v1.array.deduplicate(items, key_function)`
 
-- `items`：必填 JSON 数组。
-- `key_function(item)`：必填函数，必须恰好返回一个字符串、数字或布尔值。
-- 保留每个键第一次出现的元素及原顺序，返回新的 JSON 数组。
-- 不修改 `items`。回调错误会让 Merge 失败。
-- 键不能是 `nil`、表或函数。需要对对象生成复合键时，应在回调中返回稳定字符串。
+- `items` is a required JSON array.
+- `key_function(item)` is required and must return exactly one string, number,
+  or boolean.
+- Keeps the first item for each key in the original order and returns a new
+  JSON array.
+- Does not mutate `items`. A callback error fails the Merge.
+- A key cannot be `nil`, a table, or a function. Return a stable string when an
+  object needs a composite key.
 
 ```lua
 local unique = sink.v1.array.deduplicate(incoming.offers, function(item)
@@ -90,20 +96,23 @@ end)
 
 #### `sink.v1.array.keep_tail(items, limit)`
 
-- `items`：必填 JSON 数组。
-- `limit`：大于或等于 `0` 的整数。
-- 返回一个新的 JSON 数组，只保留最后 `limit` 个元素。
-- `limit` 为 `0` 时返回空数组；不会修改 `items`。
+- `items` is a required JSON array.
+- `limit` is an integer greater than or equal to `0`.
+- Returns a new JSON array containing only the last `limit` items.
+- A zero limit returns an empty array. The function does not mutate `items`.
 
 #### `sink.v1.array.union_strings(left, right)`
 
-- `left`、`right`：字符串 JSON 数组或 `nil`。
-- 按 `left` 后 `right` 的顺序合并并去重，返回新的 JSON 数组。
-- 不修改任何输入。任一数组包含非字符串元素时 Merge 会失败。
+- `left` and `right` are string JSON arrays or `nil`.
+- Combines and deduplicates them in left-then-right order and returns a new JSON
+  array.
+- Does not mutate either input. A non-string item in either array fails the
+  Merge.
 
-### 对象工具
+### Object utilities
 
-对象工具的 `target` 和 `source` 必须是 JSON 对象。它们适合批量处理字段列表：
+The `target` and `source` parameters must be JSON objects. The functions are
+convenient when the same rule applies to a list of fields:
 
 ```lua
 local fields = {"title", "description", "country"}
@@ -114,96 +123,109 @@ end
 
 #### `sink.v1.object.replace_nonempty_string(target, source, field)`
 
-- `field` 必须是字符串。
-- `source[field]` 不存在或是空字符串时不修改 `target`。
-- 非空字符串会写入 `target[field]`。
-- `source[field]` 是其他类型时 Merge 失败，避免把错误类型写入已有字段。
-- 无返回值。
+- `field` must be a string.
+- A missing or empty `source[field]` leaves `target` unchanged.
+- A non-empty string is assigned to `target[field]`.
+- Any other source type fails the Merge instead of writing an invalid value.
+- The function has no return value.
 
 #### `sink.v1.object.replace_nonempty_array(target, source, field)`
 
-- `field` 必须是字符串。
-- `source[field]` 不存在或是空数组时不修改 `target`。
-- 非空 JSON 数组会写入 `target[field]`。
-- `source[field]` 是其他类型或不连续数组时 Merge 失败。
-- 无返回值。
+- `field` must be a string.
+- A missing or empty `source[field]` leaves `target` unchanged.
+- A non-empty JSON array is assigned to `target[field]`.
+- Any other type or a sparse array fails the Merge.
+- The function has no return value.
 
-### 时间工具
+### Time utility
 
 #### `sink.v1.time.now()`
 
-- 不接收参数。
-- 返回 UTC RFC3339Nano 字符串，例如 `2026-08-30T09:08:07.654321Z`。
-- 返回的是本次 Merge 的固定观察时间。同一脚本内多次调用，以及同一操作因修订冲突
-  重新执行时，结果都相同。
-- 同步 Merge 使用服务端开始处理该操作的时间；异步 Merge 使用 Worker 开始处理 Kafka
-  记录的时间，不是客户端提交时间。
-- 将返回值写入结果文档时，Sink 会保留日期时间元数据，使 MongoDB 可以存储为 BSON
-  datetime。
+- Accepts no arguments.
+- Returns a UTC RFC3339Nano string such as
+  `2026-08-30T09:08:07.654321Z`.
+- Returns one fixed observation time for the Merge. Multiple calls in the same
+  script and reruns caused by storage revision conflicts return the same value.
+- A synchronous Merge uses the time at which the server starts processing the
+  operation. An asynchronous Merge uses the time at which the Worker starts
+  processing the Kafka record, not the client submission time.
+- When the value is written to the result, Sink preserves date-time metadata so
+  MongoDB can store it as a BSON datetime.
 
-Sink 不开放 `os.time`、宿主时钟或可变时区，以免重试产生不同结果。
+Sink does not expose `os.time`, the host clock, or mutable time zones because
+they could produce different results during a retry.
 
-## JSON 与 Lua 类型
+## JSON and Lua types
 
-输入和输出遵循以下映射：
+Inputs and outputs use the following mapping:
 
 | JSON | Lua |
 | --- | --- |
 | object | table |
-| array | table，带 JSON 数组标记 |
+| array | table with a JSON array marker |
 | string | string |
-| integer | Lua 64 位 integer |
+| integer | 64-bit Lua integer |
 | decimal | number |
 | boolean | boolean |
 | null | `json.null` |
 
-公共 JSON 工具：
+The common JSON helpers are:
 
-- `json.object()` 创建明确的空 JSON 对象。
-- `json.array()` 创建明确的空 JSON 数组。
-- `json.null` 表示 JSON null。Lua 的 `nil` 会删除表字段。
-- `json.is_null(value)` 判断是否为 `json.null`。
+- `json.object()` creates an explicitly typed empty JSON object.
+- `json.array()` creates an explicitly typed empty JSON array.
+- `json.null` represents JSON null. Assigning Lua `nil` removes a table field.
+- `json.is_null(value)` reports whether a value is `json.null`.
 
-空的 Lua 表 `{}` 会编码为对象。需要空数组时必须使用 `json.array()`。
+An empty Lua table `{}` is encoded as an object. Use `json.array()` whenever an
+empty array is required.
 
-## 可用和禁用的 Lua 能力
+## Available and restricted Lua capabilities
 
-Sink 提供确定性的 base、string、table、math 和 UTF-8 功能。
-`utf8.upper(value)` 支持 Unicode 大写转换；`string.upper` 只适合 ASCII。
+Sink provides deterministic base, string, table, math, and UTF-8 functions.
+`utf8.upper(value)` performs Unicode-aware uppercasing; `string.upper` is only
+suitable for ASCII text.
 
-以下能力不可用：宿主文件与网络 I/O、操作系统 API、`require`/package、动态代码加载、
-协程、debug API、随机数、输出、修改 metatable，以及无界字符串重复。业务脚本不能访问
-Sink 配置、环境变量、凭据或其他租户数据。
+Scripts cannot use host file or network I/O, operating-system APIs,
+`require`/package, dynamic code loading, coroutines, debug APIs, random numbers,
+output, metatable mutation, or unbounded string repetition. A script cannot
+access Sink configuration, environment variables, credentials, or another
+tenant's data.
 
-## 重试、异步和幂等性
+## Retries, asynchronous delivery, and idempotency
 
-- 同一记录的并发 Merge 通过修订条件检测冲突，并以最新文档重新执行。
-- Kafka 是至少一次投递。Worker 在写入成功但提交 offset 前崩溃时，同一 Merge 可能再次
-  执行。
-- 去重键、追加逻辑和计数逻辑必须考虑重复执行。仅执行 `current.count = current.count + 1`
-  不是天然幂等的。
-- 不要依赖表遍历以外的隐式顺序、随机数、外部状态或每次调用都变化的时间。
-- `sink.v1.time.now()` 只保证一次 Merge 操作及其修订冲突重试内稳定；Kafka 记录被重新
-  消费属于新的执行，业务仍需设计幂等规则。
+- Concurrent Merges for the same record use revision preconditions. A conflict
+  reruns the script with the newest document.
+- Kafka provides at-least-once delivery. If a Worker applies a write and exits
+  before committing the offset, it may execute the same Merge again.
+- Deduplication keys, append rules, and counters must account for replaying the
+  same input. `current.count = current.count + 1` is not inherently idempotent.
+- Do not depend on random values, external state, or a time value that changes
+  on every call.
+- `sink.v1.time.now()` is stable only within one Merge operation and its storage
+  revision retries. Consuming a Kafka record again is a new execution, so the
+  business rule must still provide its required idempotency.
 
-## 资源限制与错误
+## Resource limits and errors
 
-每次执行受配置的墙钟时间、指令数、调用深度、VM 栈、脚本源码大小和结果大小限制。
-`sink.v1` 的原生数组循环也检查执行超时和工作量上限。脚本语法、参数、类型、回调、
-资源或返回值错误只会让对应 Write operation 失败，并返回结构化 failure。
+Each execution has limits for wall-clock time, instructions, call depth, VM
+stack size, source size, and result size. Native `sink.v1` array loops also
+enforce the execution deadline and work limit. Script syntax, arguments, types,
+callbacks, resources, and result errors fail only the corresponding Write
+operation and return a structured failure.
 
-业务上线前至少应覆盖：
+Before rollout, business tests should cover at least:
 
-1. 记录存在和不存在两种输入。
-2. 字段缺失、空字符串、空数组和 `json.null`。
-3. 重复元素、历史上限和非法字段类型。
-4. 使用同一 incoming 重放两次后的结果。
-5. 并发更新造成修订冲突时的最终结果。
-6. 同步模式和 Kafka 异步模式的真实 Sink 集成测试。
+1. Existing and missing records.
+2. Missing fields, empty strings, empty arrays, and `json.null`.
+3. Duplicate elements, history limits, and invalid field types.
+4. Replaying the same incoming document twice.
+5. Final state after concurrent updates cause a storage revision conflict.
+6. Real Sink integration tests for both synchronous and Kafka modes.
 
-## 在 Go 客户端中使用
+## Using the Go client
 
-脚本应跟随业务代码版本管理，并在进程内创建一次 `LuaProgram` 后复用：
+Keep the script with the business application's source and create one reusable
+`LuaProgram` in the process:
 
 ```go
 source := []byte(`
@@ -229,11 +251,14 @@ if err != nil {
 }
 ```
 
-同一个 Write RPC 中相同源码只声明一次，Merge operation 使用 SHA-256 引用。异步 Kafka
-记录仍携带完整业务源码以支持独立处理；公共工具函数由 Sink 内建，因此不会随每个请求
-重复传输。
+Identical source is declared only once within one Write RPC; Merge operations
+refer to it by SHA-256. An asynchronous Kafka record still carries the complete
+business source so a Worker can process it independently. The common utilities
+are built into Sink and therefore are not retransmitted with every request.
 
-## API 版本
+## API versioning
 
-脚本必须显式使用 `sink.v1`。v1 内函数的名称和语义保持稳定；未来不兼容调整将使用新的
-版本命名空间。不要检测或调用未记录的全局变量、内部字段或更高版本 API。
+Scripts must select `sink.v1` explicitly. The names and semantics of v1
+functions remain stable; a future incompatible contract will use a new version
+namespace. Do not probe or call undocumented globals, internal fields, or a
+higher API version.
