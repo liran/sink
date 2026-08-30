@@ -360,10 +360,10 @@ end
 `current` is `nil` when `MISSING_DOCUMENT_MODE_CREATE` creates a missing record.
 `incoming` is the operation's incoming JSON object. The returned value must be a
 JSON object. All documents use the protocol's JSON representation;
-storage-specific conversion happens after the merge. There is no context
-argument; use the versioned `sink.v1` helpers for common operations and the
-stable merge observation time. See the [Lua merge developer guide](lua-merge-guide.md)
-for the complete API, examples, retry semantics, and testing checklist.
+storage-specific conversion happens after the merge. The versioned `sink.v1`
+helpers provide common operations and a stable merge observation time. See the
+[Lua merge developer guide](lua-merge-guide.md) for the complete API, examples,
+retry semantics, and testing checklist.
 
 JSON null is represented by `json.null` instead of Lua `nil`, which would remove
 a table key. The bridge preserves empty input objects and arrays. Use

@@ -25,8 +25,7 @@ end
 - A storage revision conflict makes Sink read the latest `current` document and
   run the same function again, so the script must be deterministic.
 
-There is no third `context` argument. Use `sink.v1.time.now()` when a script
-needs the execution time.
+Use `sink.v1.time.now()` when a script needs the execution time.
 
 ## Complete example
 
