@@ -77,9 +77,6 @@ func (e *gopherLuaEngine) Merge(currentJSON, incomingJSON []byte) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	contextTable := e.state.NewTable()
-	e.state.SetField(contextTable, "observed_at", lua.LString(benchmarkObservedAt))
-
 	if e.withTimeout {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
@@ -91,7 +88,7 @@ func (e *gopherLuaEngine) Merge(currentJSON, incomingJSON []byte) ([]byte, error
 		NRet:    1,
 		Protect: true,
 	}
-	err = e.state.CallByParam(call, currentValue, incomingValue, contextTable)
+	err = e.state.CallByParam(call, currentValue, incomingValue)
 	if err != nil {
 		return nil, err
 	}

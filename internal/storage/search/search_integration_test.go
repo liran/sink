@@ -283,7 +283,7 @@ type counterDocument struct {
 }
 
 const counterMergeLua = `
-return function(current, incoming, context)
+return function(current, incoming)
     current.counter = current.counter + incoming.delta
     return current
 end`

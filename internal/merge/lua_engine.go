@@ -129,7 +129,8 @@ func (e *LuaEngine) Compile(program Program) (Merger, error) {
 func (e *LuaEngine) validate(compiled *compiler.Proto) error {
 	ctx, cancel := context.WithTimeout(context.Background(), e.options.Timeout)
 	defer cancel()
-	luaVM, _ := e.newVM(ctx)
+	validationTime := time.Unix(0, 0).UTC()
+	luaVM, _ := e.newVM(ctx, validationTime)
 	defer luaVM.Close(context.Background())
 	results, err := luaVM.Run(compiled)
 	if err != nil {
@@ -190,7 +191,7 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 
 	executionContext, cancel := context.WithTimeout(ctx, m.engine.options.Timeout)
 	defer cancel()
-	luaVM, bridge := m.engine.newVM(executionContext)
+	luaVM, bridge := m.engine.newVM(executionContext, req.ObservedAt)
 	defer luaVM.Close(context.Background())
 	bridge.addDateTimeDocument(incoming)
 	bridge.addDateTimeDocument(current)
@@ -214,11 +215,7 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return empty, fmt.Errorf("%w: convert incoming document: %v", ErrInvalidIncoming, err)
 	}
-	observedAt := req.ObservedAt.UTC().Format(time.RFC3339Nano)
-	bridge.dateTimeValues[observedAt] = struct{}{}
-	contextTable := vm.NewEmptyTable()
-	contextTable.SetString("observed_at", vm.NewString(observedAt))
-	arguments := []vm.Value{currentValue, incomingValue, vm.NewTable(contextTable)}
+	arguments := []vm.Value{currentValue, incomingValue}
 	merged, err := luaVM.ProtectedCall(results[0], arguments)
 	if err != nil {
 		return empty, classifyExecutionError(executionContext, err)
@@ -237,7 +234,7 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	return result, nil
 }
 
-func (e *LuaEngine) newVM(ctx context.Context) (*vm.VM, *luaJSONBridge) {
+func (e *LuaEngine) newVM(ctx context.Context, observedAt time.Time) (*vm.VM, *luaJSONBridge) {
 	limits := vm.Limits{
 		MaxCallDepth:    e.options.MaxCallDepth,
 		MaxStackSlots:   e.options.MaxStackSlots,
@@ -249,6 +246,7 @@ func (e *LuaEngine) newVM(ctx context.Context) (*vm.VM, *luaJSONBridge) {
 	stdlib.Open(luaVM)
 	addUnicodeTextFunctions(luaVM)
 	bridge := newLuaJSONBridge(luaVM)
+	addSinkV1Functions(luaVM, bridge, observedAt)
 	restrictLuaEnvironment(luaVM)
 	return luaVM, bridge
 }

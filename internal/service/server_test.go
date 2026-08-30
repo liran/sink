@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,51 @@ import (
 type unavailableStorage struct{}
 
 type conflictStorage struct{}
+
+type retryTimeStorage struct {
+	mu        sync.Mutex
+	documents []storage.Document
+}
+
+func (s *retryTimeStorage) Ping(context.Context) error {
+	return nil
+}
+
+func (s *retryTimeStorage) Read(_ context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	response := storage.ReadResponse{Results: make([]storage.ReadResult, len(req.Operations))}
+	for index := range response.Results {
+		response.Results[index] = storage.ReadResult{
+			Status:   storage.ReadStatusFound,
+			Document: storageJSONDocument(`{"value":0}`),
+			Revision: storage.Revision{Data: []byte("revision")},
+		}
+	}
+	return response, nil
+}
+
+func (s *retryTimeStorage) Write(_ context.Context, req storage.WriteRequest) (storage.WriteResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	response := storage.WriteResponse{Results: make([]storage.WriteResult, len(req.Operations))}
+	for index, operation := range req.Operations {
+		document := storage.Document{
+			JSON:          append([]byte(nil), operation.Document.JSON...),
+			DateTimePaths: append([]string(nil), operation.Document.DateTimePaths...),
+		}
+		s.documents = append(s.documents, document)
+		if len(s.documents) == 1 {
+			response.Results[index].Status = storage.WriteStatusPreconditionFailed
+			continue
+		}
+		response.Results[index].Status = storage.WriteStatusApplied
+	}
+	return response, nil
+}
+
+func (s *retryTimeStorage) Delete(_ context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	response := storage.DeleteResponse{Results: make([]storage.DeleteResult, len(req.Operations))}
+	return response, nil
+}
 
 func (conflictStorage) Ping(context.Context) error {
 	return nil
@@ -109,7 +155,7 @@ func (s *visibilityStorage) Delete(ctx context.Context, req storage.DeleteReques
 const testMergeAttempts = 1000
 
 const incrementLua = `
-return function(current, incoming, context)
+return function(current, incoming)
     current = current or {value = 0}
     current.value = current.value + incoming.value
     return current
@@ -243,6 +289,41 @@ func TestMergeConflictMetricsRecordRetriesAndExhaustion(t *testing.T) {
 	}
 	if !strings.Contains(body, "sink_merge_exhausted_total 1") {
 		t.Fatal("metrics do not contain one exhausted merge")
+	}
+}
+
+func TestMergeTimeIsStableAcrossRevisionConflictRetries(t *testing.T) {
+	store := &retryTimeStorage{}
+	luaOptions := merge.LuaOptions{}
+	luaEngine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatalf("merge.NewLuaEngine() error = %v", err)
+	}
+	options := service.Options{Storage: store, Lua: luaEngine, MaxMergeAttempts: 2}
+	server, err := service.New(options)
+	if err != nil {
+		t.Fatalf("service.New() error = %v", err)
+	}
+	source := `return function(current, incoming) current.updated_at = sink.v1.time.now() return current end`
+	request := mergeWriteRequestWithSource("retry-time", "1", source)
+	response, err := server.Write(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if response.GetResults()[0].GetStatus() != sink.WriteStatus_WRITE_STATUS_APPLIED {
+		t.Fatalf("Write() response = %+v", response)
+	}
+	if len(store.documents) != 2 {
+		t.Fatalf("write attempts = %d, want 2", len(store.documents))
+	}
+	if string(store.documents[0].JSON) != string(store.documents[1].JSON) {
+		t.Fatalf("retry documents differ: first=%s second=%s", store.documents[0].JSON, store.documents[1].JSON)
+	}
+	wantPaths := []string{"/updated_at"}
+	for index, document := range store.documents {
+		if !slices.Equal(document.DateTimePaths, wantPaths) {
+			t.Fatalf("attempt %d date-time paths = %v, want %v", index+1, document.DateTimePaths, wantPaths)
+		}
 	}
 }
 
@@ -422,21 +503,21 @@ func TestLuaMergeReturnsSpecificFailureCodes(t *testing.T) {
 		},
 		{
 			name:       "runtime error",
-			source:     `return function(current, incoming, context) error("bad rule") end`,
+			source:     `return function(current, incoming) error("bad rule") end`,
 			seed:       storageJSONDocument(`{"value":0}`),
 			failure:    sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT,
 			seedRecord: true,
 		},
 		{
 			name:       "call depth limit",
-			source:     `return function(current, incoming, context) local function recurse() return 1 + recurse() end return recurse() end`,
+			source:     `return function(current, incoming) local function recurse() return 1 + recurse() end return recurse() end`,
 			seed:       storageJSONDocument(`{"value":0}`),
 			failure:    sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED,
 			seedRecord: true,
 		},
 		{
 			name:       "invalid stored document",
-			source:     `return function(current, incoming, context) return incoming end`,
+			source:     `return function(current, incoming) return incoming end`,
 			seed:       storageDocument("bad"),
 			failure:    sink.FailureCode_FAILURE_CODE_INTERNAL,
 			seedRecord: true,

@@ -79,13 +79,7 @@ func (e *iceLuaEngine) Merge(currentJSON, incomingJSON []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	contextTable := vm.NewEmptyTable()
-	contextTable.SetString("observed_at", vm.NewString(benchmarkObservedAt))
-	arguments := []vm.Value{
-		currentValue,
-		incomingValue,
-		vm.NewTable(contextTable),
-	}
+	arguments := []vm.Value{currentValue, incomingValue}
 
 	if e.withLimits {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)

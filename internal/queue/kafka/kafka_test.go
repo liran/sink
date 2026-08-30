@@ -122,7 +122,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	}
 	waitForReadStatus(t, store, storage.ReadStatusFound)
 
-	mergeSource := []byte(`return function(current, incoming, context) current.value = current.value + incoming.value return current end`)
+	mergeSource := []byte(`return function(current, incoming) current.value = current.value + incoming.value return current end`)
 	digest := sha256.Sum256(mergeSource)
 	programReference := &sink.LuaProgram{Sha256: digest[:]}
 	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
@@ -353,7 +353,7 @@ func restartTestOperations(address *sink.RecordAddress, increments int) ([]*sink
 	putOperation := &sink.WriteOperation{Address: address, Action: putAction}
 	operations := []*sink.WriteOperation{putOperation}
 
-	mergeSource := []byte(`return function(current, incoming, context) current.value = current.value + incoming.value return current end`)
+	mergeSource := []byte(`return function(current, incoming) current.value = current.value + incoming.value return current end`)
 	digest := sha256.Sum256(mergeSource)
 	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
 	for range increments {

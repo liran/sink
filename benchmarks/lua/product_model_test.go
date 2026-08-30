@@ -177,13 +177,11 @@ func (p *benchmarkProduct) Merge(incoming *benchmarkProduct) {
 		p.RestrictedCountries = deduplicateStrings(p.RestrictedCountries, false)
 	}
 
-	now := time.Now()
-	p.LastFoundAt = &now
-	if p.FirstFoundAt == nil {
-		p.FirstFoundAt = incoming.FirstFoundAt
+	if incoming.LastFoundAt != nil {
+		p.LastFoundAt = incoming.LastFoundAt
 	}
-	if p.FirstFoundAt == nil {
-		p.FirstFoundAt = p.LastFoundAt
+	if p.FirstFoundAt == nil && incoming.FirstFoundAt != nil {
+		p.FirstFoundAt = incoming.FirstFoundAt
 	}
 	if incoming.EvictedAt != nil {
 		p.EvictedAt = incoming.EvictedAt
