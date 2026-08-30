@@ -33,6 +33,40 @@ type scriptedHandler struct {
 	next     int
 }
 
+type failingRoundTripper struct {
+	err error
+}
+
+func (f failingRoundTripper) RoundTrip(_ *http.Request) (*http.Response, error) {
+	return nil, f.err
+}
+
+type failingReadCloser struct {
+	err error
+}
+
+func (f failingReadCloser) Read(_ []byte) (int, error) {
+	return 0, f.err
+}
+
+func (f failingReadCloser) Close() error {
+	return nil
+}
+
+type responseRoundTripper struct {
+	body io.ReadCloser
+}
+
+func (r responseRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       r.body,
+		Request:    request,
+	}
+	return response, nil
+}
+
 func (h *scriptedHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -248,6 +282,68 @@ func TestStoreMapsBulkConflictsAndMissingDeletes(t *testing.T) {
 		t.Fatalf("Delete() status = %v", deleted.Results[0].Status)
 	}
 	handler.verify()
+}
+
+func TestStoreClassifiesBulkTransportFailureAsRetryableUnavailable(t *testing.T) {
+	transport := failingRoundTripper{err: io.EOF}
+	client := &http.Client{Transport: transport}
+	opts := Options{
+		Driver:     DriverOpenSearch,
+		Endpoints:  []string{"http://search.example"},
+		Store:      "primary",
+		HTTPClient: client,
+	}
+	store, err := New(opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	operation := storage.DeleteOperation{Address: testAddress("record")}
+	request := storage.DeleteRequest{
+		Operations:       []storage.DeleteOperation{operation},
+		WaitUntilVisible: true,
+	}
+	response, err := store.Delete(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	result := response.Results[0]
+	if result.Status != storage.DeleteStatusFailed {
+		t.Fatalf("Delete() status = %v", result.Status)
+	}
+	code, retryable := storage.ErrorDetails(result.Err)
+	if code != storage.ErrorCodeUnavailable || !retryable {
+		t.Fatalf("Delete() error details = %s, retryable %t, error %v", code, retryable, result.Err)
+	}
+}
+
+func TestStoreClassifiesResponseReadFailureAsRetryableUnavailable(t *testing.T) {
+	body := failingReadCloser{err: io.ErrUnexpectedEOF}
+	transport := responseRoundTripper{body: body}
+	client := &http.Client{Transport: transport}
+	opts := Options{
+		Driver:     DriverElasticsearch,
+		Endpoints:  []string{"http://search.example"},
+		Store:      "primary",
+		HTTPClient: client,
+	}
+	store, err := New(opts)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	operation := storage.DeleteOperation{Address: testAddress("record")}
+	request := storage.DeleteRequest{Operations: []storage.DeleteOperation{operation}}
+	response, err := store.Delete(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Delete() error = %v", err)
+	}
+	result := response.Results[0]
+	if result.Status != storage.DeleteStatusFailed {
+		t.Fatalf("Delete() status = %v", result.Status)
+	}
+	code, retryable := storage.ErrorDetails(result.Err)
+	if code != storage.ErrorCodeUnavailable || !retryable {
+		t.Fatalf("Delete() error details = %s, retryable %t, error %v", code, retryable, result.Err)
+	}
 }
 
 func TestStoreRejectsInvalidDocumentsWithoutSendingRequests(t *testing.T) {
