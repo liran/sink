@@ -12,8 +12,8 @@ import (
 func TestMutationCodecRoundTrip(t *testing.T) {
 	address := testQueueAddress("record-1")
 	document := &sink.Document{
-		Json:          []byte(`{"created_at":"2026-08-29T04:34:56Z","value":1}`),
-		DateTimePaths: []string{"/created_at"},
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  []byte(`{"created_at":"2026-08-29T04:34:56Z","value":1}`),
 	}
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
@@ -61,7 +61,10 @@ func TestMutationKeyIsStablePerAddress(t *testing.T) {
 
 func BenchmarkMutationPayloadMarshal(b *testing.B) {
 	address := testQueueAddress("benchmark")
-	document := &sink.Document{Json: bytes.Repeat([]byte("x"), 4096)}
+	document := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  bytes.Repeat([]byte("x"), 4096),
+	}
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 
@@ -89,7 +92,10 @@ func BenchmarkMutationPayloadMarshal(b *testing.B) {
 
 func BenchmarkMutationPayloadUnmarshal(b *testing.B) {
 	address := testQueueAddress("benchmark")
-	document := &sink.Document{Json: bytes.Repeat([]byte("x"), 4096)}
+	document := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  bytes.Repeat([]byte("x"), 4096),
+	}
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 	encoded, err := operation.MarshalVT()

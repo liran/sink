@@ -368,7 +368,7 @@ func (s *Server) prepareMergeCandidate(
 		setWriteFailure(result, code, err, false)
 		return candidate, false
 	}
-	if len(merged.Document.JSON) == 0 {
+	if len(merged.Document.Payload) == 0 {
 		err := errors.New("lua merge program returned an invalid document")
 		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
 		return candidate, false

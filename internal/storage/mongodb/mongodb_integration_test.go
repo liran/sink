@@ -5,7 +5,6 @@ package mongodb_test
 import (
 	"context"
 	"os"
-	"slices"
 	"strconv"
 	"sync"
 	"testing"
@@ -31,10 +30,12 @@ func TestMongoDBDateTimeRoundTrip(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	ctx := t.Context()
 	address := fixture.address("date-time")
-	document := storage.Document{
-		JSON:          []byte(`{"created_at":"2026-08-29T04:34:56.789Z","literal":"2026-08-29T04:34:56.789Z"}`),
-		DateTimePaths: []string{"/created_at"},
+	createdAt := time.Date(2026, time.August, 29, 4, 34, 56, 789000000, time.UTC)
+	value := bson.D{
+		{Key: "created_at", Value: createdAt},
+		{Key: "literal", Value: "2026-08-29T04:34:56.789Z"},
 	}
+	document := bsonStorageDocument(t, value)
 	operation := storage.WriteOperation{Address: address, Document: document}
 	request := storage.WriteRequest{Operations: []storage.WriteOperation{operation}}
 	written, err := fixture.store.Write(ctx, request)
@@ -64,9 +65,11 @@ func TestMongoDBDateTimeRoundTrip(t *testing.T) {
 		t.Fatalf("Read() error = %v", err)
 	}
 	result := read.Results[0]
-	wantPaths := []string{"/created_at"}
-	if result.Status != storage.ReadStatusFound || !slices.Equal(result.Document.DateTimePaths, wantPaths) {
+	if result.Status != storage.ReadStatusFound || result.Document.Encoding != storage.DocumentEncodingBSON {
 		t.Fatalf("Read() result = %#v", result)
+	}
+	if bson.Raw(result.Document.Payload).Lookup("created_at").Type != bson.TypeDateTime {
+		t.Fatalf("read created_at BSON type = %s", bson.Raw(result.Document.Payload).Lookup("created_at").Type)
 	}
 }
 
@@ -317,10 +320,10 @@ func (f *integrationFixture) address(key string) storage.Address {
 
 func bsonStorageDocument(t *testing.T, value bson.D) storage.Document {
 	t.Helper()
-	encoded, err := bson.MarshalExtJSON(value, false, false)
+	encoded, err := bson.Marshal(value)
 	if err != nil {
-		t.Fatalf("bson.MarshalExtJSON() error = %v", err)
+		t.Fatalf("bson.Marshal() error = %v", err)
 	}
-	document := storage.Document{JSON: encoded}
+	document := storage.Document{Encoding: storage.DocumentEncodingBSON, Payload: encoded}
 	return document
 }

@@ -31,7 +31,7 @@ func TestProcessorAppliesWriteAndDeleteSynchronously(t *testing.T) {
 		t.Fatalf("NewProcessor() error = %v", err)
 	}
 	address := processorAddress()
-	document := &sink.Document{Json: []byte(`{"value":"value"}`)}
+	document := processorDocument(`{"value":"value"}`)
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_CREATE}
 	writeOperation := &sink.WriteOperation{
 		Address: address,
@@ -112,7 +112,7 @@ func TestProcessorBatchPreservesMixedMutationOrderPerRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read(first) error = %v", err)
 	}
-	if got := string(firstRead.Results[0].Document.JSON); got != `{"value":"after"}` {
+	if got := string(firstRead.Results[0].Document.Payload); got != `{"value":"after"}` {
 		t.Fatalf("Read(first) document = %q, want after", got)
 	}
 	secondRequest := storage.ReadRequest{
@@ -122,7 +122,7 @@ func TestProcessorBatchPreservesMixedMutationOrderPerRecord(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read(second) error = %v", err)
 	}
-	if got := string(secondRead.Results[0].Document.JSON); got != `{"value":"independent"}` {
+	if got := string(secondRead.Results[0].Document.Payload); got != `{"value":"independent"}` {
 		t.Fatalf("Read(second) document = %q, want independent", got)
 	}
 }
@@ -157,8 +157,16 @@ func processorStorageAddressFor(value string) storage.Address {
 }
 
 func processorPut(address *sink.RecordAddress, value string) *sink.WriteOperation {
-	document := &sink.Document{Json: []byte(`{"value":"` + value + `"}`)}
+	document := processorDocument(`{"value":"` + value + `"}`)
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 	return operation
+}
+
+func processorDocument(value string) *sink.Document {
+	document := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  []byte(value),
+	}
+	return document
 }

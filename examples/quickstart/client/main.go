@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
@@ -26,10 +26,10 @@ type exampleRecord struct {
 }
 
 type demoDocument struct {
-	ID     string   `json:"_id,omitempty"`
-	Name   string   `json:"name"`
-	Stage  string   `json:"stage"`
-	Labels []string `json:"labels"`
+	ID     string   `bson:"_id,omitempty"`
+	Name   string   `bson:"name"`
+	Stage  string   `bson:"stage"`
+	Labels []string `bson:"labels"`
 }
 
 func main() {
@@ -116,7 +116,7 @@ func runScenario(ctx context.Context, client sink.SinkClient) error {
 	if err := readAndVerify(ctx, client, synchronous); err != nil {
 		return err
 	}
-	fmt.Println("PASS batch read returned both JSON documents")
+	fmt.Println("PASS batch read returned both BSON documents")
 
 	asynchronous := exampleRecord{
 		key: "async-gamma",
@@ -310,11 +310,14 @@ func recordAddress(key string) *sink.RecordAddress {
 }
 
 func encodeDocument(document demoDocument) (*sink.Document, error) {
-	data, err := json.Marshal(document)
+	data, err := bson.Marshal(document)
 	if err != nil {
-		return nil, fmt.Errorf("encode JSON document: %w", err)
+		return nil, fmt.Errorf("encode BSON document: %w", err)
 	}
-	encoded := &sink.Document{Json: data}
+	encoded := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_BSON,
+		Payload:  data,
+	}
 	return encoded, nil
 }
 
@@ -323,7 +326,10 @@ func verifyDocument(document *sink.Document, expected exampleRecord) error {
 		return fmt.Errorf("record %q returned an invalid document", expected.key)
 	}
 	var actual demoDocument
-	if err := json.Unmarshal(document.GetJson(), &actual); err != nil {
+	if document.GetEncoding() != sink.DocumentEncoding_DOCUMENT_ENCODING_BSON {
+		return fmt.Errorf("record %q returned %s encoding", expected.key, document.GetEncoding())
+	}
+	if err := bson.Unmarshal(document.GetPayload(), &actual); err != nil {
 		return fmt.Errorf("decode record %q: %w", expected.key, err)
 	}
 	if actual.ID != expected.key {

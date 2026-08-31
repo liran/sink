@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -16,9 +15,10 @@ import (
 
 	"github.com/liran/sink/internal/merge"
 	"github.com/liran/sink/internal/storage"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func TestLuaMergePreservesDateTimeMetadata(t *testing.T) {
+func TestLuaMergePreservesBSONDateTimeTypes(t *testing.T) {
 	source := []byte(`
 return function(current, incoming)
     return {
@@ -28,25 +28,85 @@ return function(current, incoming)
 end`)
 	options := merge.LuaOptions{}
 	merger := compileTestProgram(t, source, options)
-	incoming := storage.Document{
-		JSON:          []byte(`{"created_at":"2026-08-29T04:34:56.789Z","literal":"2026-08-29T04:34:56.789Z"}`),
-		DateTimePaths: []string{"/created_at"},
+	timestamp := time.Date(2026, time.August, 29, 4, 34, 56, 789000000, time.UTC)
+	incomingValue := bson.D{
+		{Key: "created_at", Value: timestamp},
+		{Key: "literal", Value: timestamp.Format(time.RFC3339Nano)},
 	}
+	incoming := bsonDocument(t, incomingValue)
 	request := merge.Request{Incoming: incoming}
 	result, err := merger.Merge(t.Context(), request)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
 	}
-	wantPaths := []string{"/created_at"}
-	if !slices.Equal(result.Document.DateTimePaths, wantPaths) {
-		t.Fatalf("merged date-time paths = %v, want %v", result.Document.DateTimePaths, wantPaths)
+	if result.Document.Encoding != storage.DocumentEncodingBSON {
+		t.Fatalf("merged encoding = %d", result.Document.Encoding)
 	}
-	var decoded map[string]string
-	if err := json.Unmarshal(result.Document.JSON, &decoded); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
+	raw := bson.Raw(result.Document.Payload)
+	if raw.Lookup("created_at").Type != bson.TypeDateTime || raw.Lookup("literal").Type != bson.TypeString {
+		t.Fatalf("merged BSON types = created_at:%s literal:%s", raw.Lookup("created_at").Type, raw.Lookup("literal").Type)
 	}
-	if decoded["created_at"] != "2026-08-29T04:34:56.789Z" || decoded["literal"] != "2026-08-29T04:34:56.789Z" {
-		t.Fatalf("merged document = %v", decoded)
+	if raw.Lookup("created_at").Time().UTC() != timestamp {
+		t.Fatalf("merged created_at = %s", raw.Lookup("created_at").Time())
+	}
+}
+
+func TestLuaMergeWritesGeneratedTimeUsingDocumentEncoding(t *testing.T) {
+	source := []byte(`
+return function(current, incoming)
+    return {updated_at = sink.v1.time.now()}
+end`)
+	options := merge.LuaOptions{}
+	merger := compileTestProgram(t, source, options)
+	observedAt := time.Date(2026, time.August, 31, 10, 20, 30, 456000000, time.UTC)
+
+	jsonRequest := merge.Request{
+		Incoming:   jsonDocument(`{}`),
+		ObservedAt: observedAt,
+	}
+	jsonResult, err := merger.Merge(t.Context(), jsonRequest)
+	if err != nil {
+		t.Fatalf("Merge(JSON) error = %v", err)
+	}
+	var jsonValue map[string]any
+	if err := json.Unmarshal(jsonResult.Document.Payload, &jsonValue); err != nil {
+		t.Fatalf("decode JSON result: %v", err)
+	}
+	if jsonValue["updated_at"] != "2026-08-31T10:20:30.456Z" {
+		t.Fatalf("JSON updated_at = %#v", jsonValue["updated_at"])
+	}
+
+	emptyBSON := bson.D{}
+	bsonRequest := merge.Request{
+		Incoming:   bsonDocument(t, emptyBSON),
+		ObservedAt: observedAt,
+	}
+	bsonResult, err := merger.Merge(t.Context(), bsonRequest)
+	if err != nil {
+		t.Fatalf("Merge(BSON) error = %v", err)
+	}
+	raw := bson.Raw(bsonResult.Document.Payload)
+	if raw.Lookup("updated_at").Type != bson.TypeDateTime {
+		t.Fatalf("BSON updated_at type = %s", raw.Lookup("updated_at").Type)
+	}
+	if raw.Lookup("updated_at").Time().UTC() != observedAt {
+		t.Fatalf("BSON updated_at = %s", raw.Lookup("updated_at").Time())
+	}
+}
+
+func TestLuaMergeRejectsMixedDocumentEncodings(t *testing.T) {
+	source := []byte(`return function(current, incoming) return incoming end`)
+	options := merge.LuaOptions{}
+	merger := compileTestProgram(t, source, options)
+	current := jsonDocument(`{"value":"current"}`)
+	incomingValue := bson.D{{Key: "value", Value: "incoming"}}
+	request := merge.Request{
+		Current:  &current,
+		Incoming: bsonDocument(t, incomingValue),
+	}
+	_, err := merger.Merge(t.Context(), request)
+	if !errors.Is(err, merge.ErrInvalidIncoming) || !strings.Contains(err.Error(), "encodings differ") {
+		t.Fatalf("Merge(mixed encodings) error = %v", err)
 	}
 }
 
@@ -72,8 +132,8 @@ end`)
 		t.Fatalf("Merge() error = %v", err)
 	}
 	want := `{"created_array":[],"created_object":{},"empty_array":[],"empty_object":{},"id":9223372036854775807,"keep":true,"null_value":null}`
-	if string(result.Document.JSON) != want {
-		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	if string(result.Document.Payload) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.Payload, want)
 	}
 }
 
@@ -96,7 +156,7 @@ func TestLuaMergeRunsProductRule(t *testing.T) {
 		Solds            []any    `json:"solds"`
 		Available        bool     `json:"available"`
 	}
-	if err := json.Unmarshal(result.Document.JSON, &product); err != nil {
+	if err := json.Unmarshal(result.Document.Payload, &product); err != nil {
 		t.Fatalf("decode merged product: %v", err)
 	}
 	if product.UID != "new" || product.Brand != "NEW BRAND" || !product.Available {
@@ -159,8 +219,8 @@ end`)
 		if err != nil {
 			t.Fatalf("Merge() error = %v", err)
 		}
-		if string(result.Document.JSON) != `{"counter":1}` {
-			t.Fatalf("Merge() document = %s", result.Document.JSON)
+		if string(result.Document.Payload) != `{"counter":1}` {
+			t.Fatalf("Merge() document = %s", result.Document.Payload)
 		}
 	}
 }
@@ -181,8 +241,8 @@ end`)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
 	}
-	if string(result.Document.JSON) != `{"keys":["a","m","z"]}` {
-		t.Fatalf("Merge() document = %s", result.Document.JSON)
+	if string(result.Document.Payload) != `{"keys":["a","m","z"]}` {
+		t.Fatalf("Merge() document = %s", result.Document.Payload)
 	}
 }
 
@@ -203,8 +263,8 @@ func TestLuaMergeSupportsConcurrentCalls(t *testing.T) {
 				t.Errorf("Merge() error = %v", err)
 				return
 			}
-			if string(result.Document.JSON) != `{"value":1}` {
-				t.Errorf("Merge() document = %s", result.Document.JSON)
+			if string(result.Document.Payload) != `{"value":1}` {
+				t.Errorf("Merge() document = %s", result.Document.Payload)
 			}
 		}()
 	}
@@ -233,8 +293,8 @@ end`)
 		t.Fatalf("Merge() error = %v", err)
 	}
 	want := `{"global":false,"io":false,"load":false,"os":false,"package":false,"random":false,"require":false,"time":false}`
-	if string(result.Document.JSON) != want {
-		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	if string(result.Document.Payload) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.Payload, want)
 	}
 }
 
@@ -251,8 +311,8 @@ end`)
 		t.Fatalf("Merge() error = %v", err)
 	}
 	want := `{"brand":"CAFÉ STRAßE 品牌"}`
-	if string(result.Document.JSON) != want {
-		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	if string(result.Document.Payload) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.Payload, want)
 	}
 }
 
@@ -295,8 +355,8 @@ end`)
 		t.Fatalf("Merge() error = %v", err)
 	}
 	want := `{"append_returns_target":true,"appended":[1,2,3,4],"deduplicated":[{"id":"a","value":1},{"id":"b","value":3}],"source_record_count":3,"tail":[3,4],"target":{"gallery":["new"],"title":"new"},"union":["a","b","c"],"v2_missing":true}`
-	if string(result.Document.JSON) != want {
-		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
+	if string(result.Document.Payload) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.Payload, want)
 	}
 }
 
@@ -316,12 +376,8 @@ end`)
 		t.Fatalf("Merge() error = %v", err)
 	}
 	want := `{"first":"2026-08-30T09:08:07.654321Z","same":true,"second":"2026-08-30T09:08:07.654321Z"}`
-	if string(result.Document.JSON) != want {
-		t.Fatalf("Merge() document = %s, want %s", result.Document.JSON, want)
-	}
-	wantPaths := []string{"/first", "/second"}
-	if !slices.Equal(result.Document.DateTimePaths, wantPaths) {
-		t.Fatalf("Merge() date-time paths = %v, want %v", result.Document.DateTimePaths, wantPaths)
+	if string(result.Document.Payload) != want {
+		t.Fatalf("Merge() document = %s, want %s", result.Document.Payload, want)
 	}
 }
 
@@ -341,9 +397,8 @@ end`)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
 	}
-	wantPaths := []string{"/copied", "/generated"}
-	if !slices.Equal(result.Document.DateTimePaths, wantPaths) {
-		t.Fatalf("Merge() date-time paths = %v, want %v", result.Document.DateTimePaths, wantPaths)
+	if result.Document.Encoding != storage.DocumentEncodingJSON {
+		t.Fatalf("Merge() encoding = %d", result.Document.Encoding)
 	}
 }
 
@@ -495,7 +550,7 @@ func TestLuaMergeClassifiesDocumentAndScriptErrors(t *testing.T) {
 		source := []byte(`return function(current, incoming) return incoming end`)
 		options := merge.LuaOptions{}
 		merger := compileTestProgram(t, source, options)
-		request := merge.Request{Incoming: storage.Document{JSON: []byte("bad")}}
+		request := merge.Request{Incoming: storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte("bad")}}
 		_, err := merger.Merge(context.Background(), request)
 		if !errors.Is(err, merge.ErrInvalidIncoming) {
 			t.Fatalf("Merge() error = %v", err)
@@ -556,6 +611,16 @@ func productMergeSource(t testing.TB) []byte {
 }
 
 func jsonDocument(value string) storage.Document {
-	document := storage.Document{JSON: []byte(value)}
+	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(value)}
+	return document
+}
+
+func bsonDocument(t testing.TB, value any) storage.Document {
+	t.Helper()
+	encoded, err := bson.Marshal(value)
+	if err != nil {
+		t.Fatalf("bson.Marshal() error = %v", err)
+	}
+	document := storage.Document{Encoding: storage.DocumentEncodingBSON, Payload: encoded}
 	return document
 }

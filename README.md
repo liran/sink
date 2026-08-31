@@ -1,9 +1,9 @@
 # Sink
 
 Sink is a database-independent gRPC service for reading, writing, merging, and
-deleting JSON records. Applications use one record API while Sink handles
-routing, database connections, batching, concurrency, synchronous or durable
-asynchronous delivery, and storage-specific behavior for MongoDB,
+deleting explicitly encoded documents. Applications use one record API while
+Sink handles routing, database connections, batching, concurrency, synchronous
+or durable asynchronous delivery, and storage-specific behavior for MongoDB,
 Elasticsearch, and OpenSearch.
 
 ![Sink routes each record operation through a synchronous or Kafka-backed path to one matching store](docs/assets/sink-overview.svg)
@@ -20,7 +20,7 @@ Sink centralizes those concerns:
 
 | Problem | What Sink provides |
 | --- | --- |
-| Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON records |
+| Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON or BSON documents |
 | Every crawler process opens its own database connections | Database connections move into the smaller Sink tier, so connection growth follows Sink replicas instead of crawler processes |
 | Many small calls overload storage | Automatic bounded batching, concurrency limits, and backpressure per store |
 | Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
@@ -68,6 +68,11 @@ key = product-42
 are the database and collection. For Elasticsearch and OpenSearch, `dataset`
 is the complete existing index or alias name. The application never sends a
 database connection string or storage-specific query through the API.
+
+Every document declares its encoding. MongoDB stores require BSON, so clients
+apply `bson` struct tags and retain native BSON values such as datetimes.
+Elasticsearch and OpenSearch stores require JSON, so clients apply `json`
+struct tags and send ordinary JSON without Extended JSON wrappers.
 
 All requests are batch-native, but a one-record request is the normal
 single-record form. Sink can combine concurrent small requests into bounded

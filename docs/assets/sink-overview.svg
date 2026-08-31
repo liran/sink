@@ -72,7 +72,7 @@
     <text x="337.5" y="342" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">WRITE</text>
     <text x="337.5" y="402" text-anchor="middle" fill="#324d5f" font-size="15" font-weight="700">DELETE</text>
     <path d="M305 435H370" stroke="#aebbc5"/>
-    <text x="337.5" y="480" text-anchor="middle" fill="#526575" font-size="14">JSON objects</text>
+    <text x="337.5" y="480" text-anchor="middle" fill="#526575" font-size="14">JSON / BSON documents</text>
     <text x="337.5" y="510" text-anchor="middle" fill="#526575" font-size="14">batch-native</text>
   </g>
 

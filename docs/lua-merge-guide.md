@@ -17,11 +17,13 @@ return function(current, incoming)
 end
 ```
 
-- `current` is the stored JSON object. It is `nil` when the record does not
+- `current` is the stored object. It is `nil` when the record does not
   exist and the Merge uses `MISSING_DOCUMENT_MODE_CREATE`.
-- `incoming` is the JSON object carried by this Merge and is always present.
-- The function must return a JSON object. It cannot return `nil`, an array, or
+- `incoming` is the object carried by this Merge and is always present.
+- `current` and `incoming` must have the same document encoding.
+- The function must return an object. It cannot return `nil`, an array, or
   a scalar.
+- The result keeps the incoming encoding: BSON for MongoDB and JSON for search.
 - A storage revision conflict makes Sink read the latest `current` document and
   run the same function again, so the script must be deterministic.
 
@@ -148,15 +150,15 @@ end
 - A synchronous Merge uses the time at which the server starts processing the
   operation. An asynchronous Merge uses the time at which the Worker starts
   processing the Kafka record, not the client submission time.
-- When the value is written to the result, Sink preserves date-time metadata so
-  MongoDB can store it as a BSON datetime.
+- In a BSON merge result the value is encoded as a native BSON datetime. In a
+  JSON merge result it remains an RFC3339Nano string.
 
 Sink does not expose `os.time`, the host clock, or mutable time zones because
 they could produce different results during a retry.
 
-## JSON and Lua types
+## Document and Lua types
 
-Inputs and outputs use the following mapping:
+JSON values and the JSON-compatible view of BSON values use this mapping:
 
 | JSON | Lua |
 | --- | --- |
@@ -240,7 +242,7 @@ if err != nil {
     return err
 }
 options := sink.MergeOptions{
-    Incoming:            incoming,
+    Incoming:            incomingDocument,
     Program:             program,
     MissingDocumentMode: sink.MissingDocumentCreate,
 }
@@ -249,6 +251,10 @@ if err != nil {
     return err
 }
 ```
+
+Create `incomingDocument` with `sink.DocumentEncodingBSON` for a MongoDB
+address or `sink.DocumentEncodingJSON` for an Elasticsearch or OpenSearch
+address. Sink rejects mixed encodings and backend/encoding mismatches.
 
 Identical source is declared only once within one Write RPC; Merge operations
 refer to it by SHA-256. An asynchronous Kafka record still carries the complete

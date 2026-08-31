@@ -74,16 +74,19 @@ affected operation.
 
 ## Documents and storage adapters
 
-The public protocol carries JSON objects. Storage-specific conversion remains
-inside each adapter. Typed date-time values stay RFC3339 strings in JSON and
-carry JSON Pointer metadata so adapters with a native date-time type can
-preserve it without guessing from the string value.
+The public protocol carries an explicit document encoding and opaque payload.
+MongoDB accepts BSON documents; Elasticsearch and OpenSearch accept JSON
+documents. The client chooses the encoding before serialization, so each
+serializer applies its own struct tags and native types. Adapters reject a
+document whose encoding does not match the selected store.
 
 ### MongoDB
 
 The MongoDB adapter maps a record address directly to database, collection, and
 `_id`. It preserves the top-level document shape and lazily adds one configurable
 metadata field for Sink's internal revision. The field is removed from reads.
+Because the adapter receives native BSON, `_id`, datetimes, ObjectIDs, binary
+values, and other BSON types do not pass through JSON or Extended JSON.
 
 Batch reads use one `$in` query per collection. Unconditional puts and creates
 use unordered bulk writes. Revision-conditional writes execute concurrently as
@@ -144,9 +147,10 @@ without failing unrelated operations in the same request.
 
 ## Lua read-modify-write
 
-A merge carries a Lua program and incoming JSON. Sink reads the current record,
-runs the program, and writes the result with the adapter's revision
-precondition. On a revision conflict, Sink reads the latest record and retries
+A merge carries a Lua program and an explicitly encoded incoming document. Sink
+reads the current record, requires both documents to use the same encoding,
+runs the program, and writes the result using that encoding with the adapter's
+revision precondition. On a revision conflict, Sink reads the latest record and retries
 up to the configured limit. Each attempt is atomic without exposing a
 database-specific compare-and-swap API to applications.
 

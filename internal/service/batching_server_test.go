@@ -742,9 +742,9 @@ func TestBatchingServerPreservesMultiOperationResponseBoundaries(t *testing.T) {
 				}
 			}
 		}
-		if string(seen[0].GetResults()[0].GetDocument().GetJson()) != `{"value":"first"}` ||
-			string(seen[0].GetResults()[1].GetDocument().GetJson()) != `{"value":"second"}` ||
-			string(seen[1].GetResults()[0].GetDocument().GetJson()) != `{"value":"third"}` {
+		if string(seen[0].GetResults()[0].GetDocument().GetPayload()) != `{"value":"first"}` ||
+			string(seen[0].GetResults()[1].GetDocument().GetPayload()) != `{"value":"second"}` ||
+			string(seen[1].GetResults()[0].GetDocument().GetPayload()) != `{"value":"third"}` {
 			t.Fatalf("Read() response mapping = %+v", seen)
 		}
 		if observed.readCalls.Load() != 1 || observed.maxReadOperations.Load() != 3 {
@@ -999,7 +999,7 @@ func TestBatchingServerPreservesConcurrentMergeUpdates(t *testing.T) {
 	var document struct {
 		Value int `json:"value"`
 	}
-	if err := json.Unmarshal(readResponse.GetResults()[0].GetDocument().GetJson(), &document); err != nil {
+	if err := json.Unmarshal(readResponse.GetResults()[0].GetDocument().GetPayload(), &document); err != nil {
 		t.Fatalf("decode counter: %v", err)
 	}
 	if document.Value != writerCount {

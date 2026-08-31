@@ -39,8 +39,8 @@ func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 		Key:       key,
 	}
 	document := &sink.Document{
-		Json:          []byte(`{"created_at":"2026-08-29T04:34:56Z","value":1}`),
-		DateTimePaths: []string{"/created_at"},
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  []byte(`{"created_at":"2026-08-29T04:34:56Z","value":1}`),
 	}
 	put := &sink.PutOperation{
 		Document: document,

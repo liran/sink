@@ -7,7 +7,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -54,10 +53,7 @@ func (s *retryTimeStorage) Write(_ context.Context, req storage.WriteRequest) (s
 	defer s.mu.Unlock()
 	response := storage.WriteResponse{Results: make([]storage.WriteResult, len(req.Operations))}
 	for index, operation := range req.Operations {
-		document := storage.Document{
-			JSON:          append([]byte(nil), operation.Document.JSON...),
-			DateTimePaths: append([]string(nil), operation.Document.DateTimePaths...),
-		}
+		document := storage.CloneDocument(operation.Document)
 		s.documents = append(s.documents, document)
 		if len(s.documents) == 1 {
 			response.Results[index].Status = storage.WriteStatusPreconditionFailed
@@ -237,7 +233,7 @@ func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 	var final struct {
 		Value int `json:"value"`
 	}
-	err = json.Unmarshal(readResponse.GetResults()[0].GetDocument().GetJson(), &final)
+	err = json.Unmarshal(readResponse.GetResults()[0].GetDocument().GetPayload(), &final)
 	if err != nil {
 		t.Fatalf("decode final counter: %v", err)
 	}
@@ -316,13 +312,12 @@ func TestMergeTimeIsStableAcrossRevisionConflictRetries(t *testing.T) {
 	if len(store.documents) != 2 {
 		t.Fatalf("write attempts = %d, want 2", len(store.documents))
 	}
-	if string(store.documents[0].JSON) != string(store.documents[1].JSON) {
-		t.Fatalf("retry documents differ: first=%s second=%s", store.documents[0].JSON, store.documents[1].JSON)
+	if string(store.documents[0].Payload) != string(store.documents[1].Payload) {
+		t.Fatalf("retry documents differ: first=%s second=%s", store.documents[0].Payload, store.documents[1].Payload)
 	}
-	wantPaths := []string{"/updated_at"}
 	for index, document := range store.documents {
-		if !slices.Equal(document.DateTimePaths, wantPaths) {
-			t.Fatalf("attempt %d date-time paths = %v, want %v", index+1, document.DateTimePaths, wantPaths)
+		if document.Encoding != storage.DocumentEncodingJSON {
+			t.Fatalf("attempt %d encoding = %d", index+1, document.Encoding)
 		}
 	}
 }
@@ -414,7 +409,7 @@ func TestWritePreservesSameRecordRequestOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Read() error = %v", err)
 	}
-	got := string(readResponse.GetResults()[0].GetDocument().GetJson())
+	got := string(readResponse.GetResults()[0].GetDocument().GetPayload())
 	if got != `{"value":"second"}` {
 		t.Fatalf("stored document = %q, want second", got)
 	}
@@ -572,13 +567,13 @@ func TestWriteRejectsInvalidLuaProgramDeclarations(t *testing.T) {
 	})
 }
 
-func TestWriteRejectsInvalidDateTimeMetadata(t *testing.T) {
+func TestWriteRejectsInvalidDocumentPayload(t *testing.T) {
 	store := memory.New()
 	server := newTestServer(t, store, nil)
 	operation := putWriteOperation("invalid-date-time", "value")
 	operation.GetPut().Document = &sink.Document{
-		Json:          []byte(`{"created_at":"not-a-date-time"}`),
-		DateTimePaths: []string{"/created_at"},
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_BSON,
+		Payload:  []byte("not-bson"),
 	}
 	request := &sink.WriteRequest{
 		CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
@@ -658,7 +653,10 @@ func mergeWriteRequest(key string, increment string) *sink.WriteRequest {
 }
 
 func mergeWriteRequestWithSource(key string, increment string, source string) *sink.WriteRequest {
-	incoming := &sink.Document{Json: []byte(`{"value":` + increment + `}`)}
+	incoming := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  []byte(`{"value":` + increment + `}`),
+	}
 	digest := sha256.Sum256([]byte(source))
 	programReference := &sink.LuaProgram{Sha256: digest[:]}
 	program := &sink.LuaProgram{Source: []byte(source), Sha256: digest[:]}
@@ -711,7 +709,10 @@ func protoAddress(key string) *sink.RecordAddress {
 }
 
 func protoDocument(value string) *sink.Document {
-	document := &sink.Document{Json: []byte(`{"value":"` + value + `"}`)}
+	document := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  []byte(`{"value":"` + value + `"}`),
+	}
 	return document
 }
 
@@ -729,11 +730,11 @@ func storageAddress(key string) storage.Address {
 }
 
 func storageJSONDocument(value string) storage.Document {
-	document := storage.Document{JSON: []byte(value)}
+	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(value)}
 	return document
 }
 
 func storageDocument(value string) storage.Document {
-	document := storage.Document{JSON: []byte(value)}
+	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(value)}
 	return document
 }

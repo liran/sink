@@ -4,13 +4,8 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/binary"
-	"encoding/json"
-	"encoding/json/jsontext"
 	"errors"
 	"fmt"
-	"sort"
-	"strconv"
-	"time"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -96,24 +91,13 @@ func (s *Store) replacement(
 	revision storage.Revision,
 ) (bson.Raw, error) {
 	var empty bson.Raw
-	if _, err := storage.DecodeDateTimeValues(document); err != nil {
-		return empty, fmt.Errorf("validate JSON document date-time metadata: %w", err)
+	if document.Encoding != storage.DocumentEncodingBSON {
+		return empty, errors.New("MongoDB storage requires BSON document encoding")
 	}
-	var decoded bson.D
-	if err := bson.UnmarshalExtJSON(document.JSON, false, &decoded); err != nil {
-		return empty, fmt.Errorf("decode JSON document for MongoDB: %w", err)
+	if err := storage.ValidateDocument(document); err != nil {
+		return empty, err
 	}
-	if err := applyDateTimePaths(decoded, document.DateTimePaths); err != nil {
-		return empty, fmt.Errorf("apply MongoDB date-time values: %w", err)
-	}
-	encoded, err := bson.Marshal(decoded)
-	if err != nil {
-		return empty, fmt.Errorf("encode MongoDB BSON document: %w", err)
-	}
-	raw := bson.Raw(encoded)
-	if err := raw.Validate(); err != nil {
-		return empty, fmt.Errorf("validate BSON document: %w", err)
-	}
+	raw := bson.Raw(document.Payload)
 	elements, err := raw.Elements()
 	if err != nil {
 		return empty, fmt.Errorf("read BSON document elements: %w", err)
@@ -152,7 +136,7 @@ func (s *Store) replacement(
 	}
 	metadataField := bson.E{Key: s.metadataField, Value: metadata}
 	replacement = append(replacement, metadataField)
-	encoded, err = bson.Marshal(replacement)
+	encoded, err := bson.Marshal(replacement)
 	if err != nil {
 		return empty, fmt.Errorf("encode MongoDB replacement document: %w", err)
 	}
@@ -198,191 +182,13 @@ func (s *Store) userDocument(raw bson.Raw) (storage.Document, storage.Revision, 
 		revision.Data = bytes.Clone(data)
 	}
 
-	document, err := jsonDocumentFromBSON(userFields)
+	encoded, err := bson.Marshal(userFields)
 	if err != nil {
-		return emptyDocument, emptyRevision, fmt.Errorf("encode user JSON document: %w", err)
+		return emptyDocument, emptyRevision, fmt.Errorf("encode user BSON document: %w", err)
+	}
+	document := storage.Document{
+		Encoding: storage.DocumentEncodingBSON,
+		Payload:  encoded,
 	}
 	return document, revision, nil
-}
-
-func applyDateTimePaths(document bson.D, paths []string) error {
-	for _, rawPath := range paths {
-		pointer := jsontext.Pointer(rawPath)
-		tokens := make([]string, 0)
-		for token := range pointer.Tokens() {
-			tokens = append(tokens, token)
-		}
-		if len(tokens) == 0 {
-			return fmt.Errorf("date-time path %q identifies the document root", rawPath)
-		}
-		if err := applyDateTimePath(document, tokens); err != nil {
-			return fmt.Errorf("date-time path %q: %w", rawPath, err)
-		}
-	}
-	return nil
-}
-
-func applyDateTimePath(value any, tokens []string) error {
-	token := tokens[0]
-	switch typed := value.(type) {
-	case bson.D:
-		for index := range typed {
-			if typed[index].Key != token {
-				continue
-			}
-			if len(tokens) > 1 {
-				return applyDateTimePath(typed[index].Value, tokens[1:])
-			}
-			converted, err := bsonDateTime(typed[index].Value)
-			if err != nil {
-				return err
-			}
-			typed[index].Value = converted
-			return nil
-		}
-		return fmt.Errorf("object member %q does not exist", token)
-	case bson.A:
-		index, err := bsonArrayIndex(token, len(typed))
-		if err != nil {
-			return err
-		}
-		if len(tokens) > 1 {
-			return applyDateTimePath(typed[index], tokens[1:])
-		}
-		converted, err := bsonDateTime(typed[index])
-		if err != nil {
-			return err
-		}
-		typed[index] = converted
-		return nil
-	default:
-		return fmt.Errorf("cannot traverse %T with token %q", value, token)
-	}
-}
-
-func bsonDateTime(value any) (bson.DateTime, error) {
-	text, ok := value.(string)
-	if !ok {
-		return 0, fmt.Errorf("date-time value has type %T, not string", value)
-	}
-	timestamp, err := time.Parse(time.RFC3339Nano, text)
-	if err != nil {
-		return 0, fmt.Errorf("parse RFC3339 date-time: %w", err)
-	}
-	return bson.NewDateTimeFromTime(timestamp), nil
-}
-
-func bsonArrayIndex(token string, length int) (int, error) {
-	if token == "" || (len(token) > 1 && token[0] == '0') {
-		return 0, fmt.Errorf("array index %q is invalid", token)
-	}
-	index, err := strconv.Atoi(token)
-	if err != nil || index < 0 {
-		return 0, fmt.Errorf("array index %q is invalid", token)
-	}
-	if index >= length {
-		return 0, fmt.Errorf("array index %d is out of bounds", index)
-	}
-	return index, nil
-}
-
-func jsonDocumentFromBSON(value bson.D) (storage.Document, error) {
-	var document storage.Document
-	extendedJSON, err := bson.MarshalExtJSON(value, false, false)
-	if err != nil {
-		return document, err
-	}
-	decoder := json.NewDecoder(bytes.NewReader(extendedJSON))
-	decoder.UseNumber()
-	var decoded any
-	if err := decoder.Decode(&decoded); err != nil {
-		return document, err
-	}
-	dateTimePaths := make([]string, 0)
-	normalized, err := normalizeExtendedJSON(decoded, "", &dateTimePaths)
-	if err != nil {
-		return document, err
-	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return document, err
-	}
-	sort.Strings(dateTimePaths)
-	document.JSON = encoded
-	document.DateTimePaths = dateTimePaths
-	return document, nil
-}
-
-func normalizeExtendedJSON(value any, pointer jsontext.Pointer, dateTimePaths *[]string) (any, error) {
-	switch typed := value.(type) {
-	case []any:
-		normalized := make([]any, len(typed))
-		for index, item := range typed {
-			child := pointer.AppendToken(strconv.Itoa(index))
-			converted, err := normalizeExtendedJSON(item, child, dateTimePaths)
-			if err != nil {
-				return nil, err
-			}
-			normalized[index] = converted
-		}
-		return normalized, nil
-	case map[string]any:
-		dateTime, isDateTime, err := extendedJSONDateTime(typed)
-		if err != nil {
-			return nil, err
-		}
-		if isDateTime {
-			*dateTimePaths = append(*dateTimePaths, string(pointer))
-			return dateTime, nil
-		}
-		normalized := make(map[string]any, len(typed))
-		for key, item := range typed {
-			child := pointer.AppendToken(key)
-			converted, err := normalizeExtendedJSON(item, child, dateTimePaths)
-			if err != nil {
-				return nil, err
-			}
-			normalized[key] = converted
-		}
-		return normalized, nil
-	default:
-		return value, nil
-	}
-}
-
-func extendedJSONDateTime(value map[string]any) (string, bool, error) {
-	raw, exists := value["$date"]
-	if !exists || len(value) != 1 {
-		return "", false, nil
-	}
-	var timestamp time.Time
-	switch typed := raw.(type) {
-	case string:
-		parsed, err := time.Parse(time.RFC3339Nano, typed)
-		if err != nil {
-			return "", false, fmt.Errorf("parse MongoDB Extended JSON date-time: %w", err)
-		}
-		timestamp = parsed
-	case map[string]any:
-		number, ok := typed["$numberLong"].(string)
-		if !ok || len(typed) != 1 {
-			return "", false, errors.New("MongoDB Extended JSON date-time has an invalid $numberLong value")
-		}
-		milliseconds, err := strconv.ParseInt(number, 10, 64)
-		if err != nil {
-			return "", false, fmt.Errorf("parse MongoDB Extended JSON date-time milliseconds: %w", err)
-		}
-		timestamp = time.UnixMilli(milliseconds)
-	default:
-		return "", false, fmt.Errorf("MongoDB Extended JSON date-time has type %T", raw)
-	}
-	encoded, err := timestamp.UTC().MarshalJSON()
-	if err != nil {
-		return "", false, fmt.Errorf("encode MongoDB date-time as RFC3339: %w", err)
-	}
-	var text string
-	if err := json.Unmarshal(encoded, &text); err != nil {
-		return "", false, err
-	}
-	return text, true, nil
 }
