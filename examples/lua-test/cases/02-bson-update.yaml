@@ -1,0 +1,6 @@
+name: update BSON product
+encoding: bson
+current: bson-update-current.extjson
+incoming: bson-update-incoming.extjson
+expected: bson-update-expected.extjson
+observed_at: 2026-08-31T10:20:30.456Z

@@ -7,9 +7,11 @@ starting the binary:
 sink --config /etc/sink/config.yaml
 ```
 
-The `--config` option is required for every runtime mode. `sink version` is the
-only command that does not load a configuration file. Environment variables
-such as `SINK_MODE` and `SINK_MONGODB_URI` are not read by the server.
+The `--config` option is required for every server and worker runtime mode.
+`sink version` does not load a configuration file. `sink lua test` does not
+require one, but accepts `--config` to apply the same `service.lua` resource
+limits without opening any configured backend. Environment variables such as
+`SINK_MODE` and `SINK_MONGODB_URI` are not read by the server.
 
 Configuration is loaded once during startup. Unknown fields, malformed YAML,
 multiple YAML documents, duplicate storage names, invalid positive-integer

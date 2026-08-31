@@ -128,6 +128,38 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  release-assets:
+    name: Build release assets
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test release-note rendering
+        run: scripts/test-render-release-notes.sh
+
+      - name: Build cross-platform archives
+        run: scripts/build-release-binaries.sh ci dist
+
+      - name: Verify archive set and checksums
+        run: |
+          test "$(find dist -maxdepth 1 -type f -name 'sink_ci_*' | wc -l)" -eq 4
+          test "$(wc -l < dist/checksums.txt)" -eq 4
+          cd dist
+          sha256sum --check checksums.txt
+
+      - name: Run documented Lua test example
+        run: |
+          go run ./cmd/sink lua test \
+            --script examples/lua-test/product.lua \
+            --cases examples/lua-test/cases
+
   quickstart:
     name: Docker Compose quickstart
     runs-on: ubuntu-latest

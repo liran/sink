@@ -41,9 +41,40 @@ Use `make quickstart` for the end-to-end public API scenario and
   adapter.
 - `cmd/sink` loads configuration and assembles the server or worker process.
 
-## Container releases
+## Release artifacts
 
 Publishing a GitHub Release triggers `.github/workflows/release-image.yml`.
 Semantic version tags such as `v0.3.2` publish `0.3.2`, `0.3`, and `0` image
 tags. A non-prerelease also publishes `latest`. Images are available for
 `linux/amd64` and `linux/arm64` at `ghcr.io/liran/sink`.
+
+The Release description is updated after publication with the complete tagged
+image address, pull command, and immutable image digest. For `v0.3.2`, the
+primary image is:
+
+```text
+ghcr.io/liran/sink:0.3.2
+```
+
+Every Release also includes `checksums.txt` and standalone archives for these
+targets:
+
+| Platform | Architecture | Asset format |
+| --- | --- | --- |
+| Linux | amd64 | `sink_v0.3.2_linux_amd64.tar.gz` |
+| Linux | arm64 | `sink_v0.3.2_linux_arm64.tar.gz` |
+| macOS | amd64 | `sink_v0.3.2_darwin_amd64.tar.gz` |
+| macOS | arm64 | `sink_v0.3.2_darwin_arm64.tar.gz` |
+
+`amd64` means 64-bit x86 and `arm64` means 64-bit ARM. Archives contain the
+Sink binary, `LICENSE`, and `README.md`. CI builds all four targets before a
+Release can rely on the packaging script. To reproduce the assets locally in
+an empty output directory:
+
+```shell
+scripts/build-release-binaries.sh v0.3.2 dist
+```
+
+Windows archives are not currently published because the pinned Lua runtime
+does not compile for Windows. The workflow deliberately excludes Windows
+instead of attaching an untested binary.

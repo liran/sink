@@ -223,6 +223,11 @@ Before rollout, business tests should cover at least:
 5. Final state after concurrent updates cause a storage revision conflict.
 6. Real Sink integration tests for both synchronous and Kafka modes.
 
+Use [`sink lua test`](lua-testing.md) for fast local and CI contract tests. It
+executes this production Lua engine directly, supports JSON and BSON fixtures,
+fixes the observation time, and compares type-aware results without starting a
+Sink server or backend.
+
 ## Using the Go client
 
 Keep the script with the business application's source and create one reusable
