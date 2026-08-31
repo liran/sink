@@ -50,7 +50,10 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 	if err != nil {
 		return empty, err
 	}
-	if err := validateJSONDocument(operation.Document); err != nil {
+	if operation.Document.Encoding != storage.DocumentEncodingJSON {
+		return empty, storage.InvalidArgumentError(errors.New("search storage requires JSON document encoding"))
+	}
+	if err := storage.ValidateDocument(operation.Document); err != nil {
 		return empty, storage.InvalidArgumentError(err)
 	}
 	if err := validatePrecondition(operation.Precondition); err != nil {
@@ -60,18 +63,10 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 		resultIndex:  index,
 		routingKey:   operation.Address.RoutingKey(),
 		document:     document,
-		source:       bytes.Clone(operation.Document.JSON),
+		source:       bytes.Clone(operation.Document.Payload),
 		precondition: operation.Precondition,
 	}
 	return work, nil
-}
-
-func validateJSONDocument(document storage.Document) error {
-	trimmed := bytes.TrimSpace(document.JSON)
-	if len(trimmed) < 2 || trimmed[0] != '{' || trimmed[len(trimmed)-1] != '}' || !json.Valid(trimmed) {
-		return errors.New("search storage requires a valid JSON object")
-	}
-	return nil
 }
 
 func validatePrecondition(precondition storage.Precondition) error {

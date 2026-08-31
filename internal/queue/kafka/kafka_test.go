@@ -106,7 +106,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	}()
 
 	address := kafkaAddress("record-1")
-	document := &sink.Document{Json: []byte(`{"value":1}`)}
+	document := kafkaJSONDocument(`{"value":1}`)
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 	writeRequest := &sink.WriteRequest{
@@ -126,7 +126,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	digest := sha256.Sum256(mergeSource)
 	programReference := &sink.LuaProgram{Sha256: digest[:]}
 	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
-	incoming := &sink.Document{Json: []byte(`{"value":1}`)}
+	incoming := kafkaJSONDocument(`{"value":1}`)
 	merge := &sink.MergeOperation{
 		IncomingDocument:    incoming,
 		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
@@ -171,7 +171,7 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 
 	crossStoreAddress := kafkaAddress("wrong-store")
 	crossStoreAddress.Store = "archive"
-	crossStoreDocument := &sink.Document{Json: []byte(`{"value":3}`)}
+	crossStoreDocument := kafkaJSONDocument(`{"value":3}`)
 	crossStorePut := &sink.PutOperation{Document: crossStoreDocument, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	crossStoreOperation := &sink.WriteOperation{
 		Address: crossStoreAddress,
@@ -347,7 +347,7 @@ func TestKafkaWorkerReplaysUncommittedMutationsAfterRestart(t *testing.T) {
 }
 
 func restartTestOperations(address *sink.RecordAddress, increments int) ([]*sink.WriteOperation, []*sink.LuaProgram) {
-	document := &sink.Document{Json: []byte(`{"value":0}`)}
+	document := kafkaJSONDocument(`{"value":0}`)
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	putAction := &sink.WriteOperation_Put{Put: put}
 	putOperation := &sink.WriteOperation{Address: address, Action: putAction}
@@ -357,7 +357,7 @@ func restartTestOperations(address *sink.RecordAddress, increments int) ([]*sink
 	digest := sha256.Sum256(mergeSource)
 	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
 	for range increments {
-		incoming := &sink.Document{Json: []byte(`{"value":1}`)}
+		incoming := kafkaJSONDocument(`{"value":1}`)
 		programReference := &sink.LuaProgram{Sha256: digest[:]}
 		mergeOperation := &sink.MergeOperation{
 			IncomingDocument:    incoming,
@@ -391,15 +391,23 @@ func waitForDocumentAt(t *testing.T, store *memory.Store, key string, want strin
 		if err != nil {
 			t.Fatalf("Store.Read() error = %v", err)
 		}
-		if response.Results[0].Status == storage.ReadStatusFound && string(response.Results[0].Document.JSON) == want {
+		if response.Results[0].Status == storage.ReadStatusFound && string(response.Results[0].Document.Payload) == want {
 			return
 		}
 		select {
 		case <-ctx.Done():
-			t.Fatalf("Store.Read() document = %s, want %s", response.Results[0].Document.JSON, want)
+			t.Fatalf("Store.Read() document = %s, want %s", response.Results[0].Document.Payload, want)
 		case <-ticker.C:
 		}
 	}
+}
+
+func kafkaJSONDocument(value string) *sink.Document {
+	document := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  []byte(value),
+	}
+	return document
 }
 
 func waitForDeadLetterValue(t *testing.T, client *kgo.Client, want []byte) {

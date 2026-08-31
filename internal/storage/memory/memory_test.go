@@ -104,6 +104,6 @@ func testAddress() storage.Address {
 }
 
 func testDocument(value string) storage.Document {
-	document := storage.Document{JSON: []byte(value)}
+	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(value)}
 	return document
 }

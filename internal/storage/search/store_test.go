@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/liran/sink/internal/storage"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type expectedRequest struct {
@@ -135,6 +136,28 @@ func TestDocumentIDPreservesLegacyStringsAndSeparatesTypedKeys(t *testing.T) {
 	}
 }
 
+func TestPrepareWriteRejectsBSONEncoding(t *testing.T) {
+	store, handler := newScriptedStore(t, nil)
+	value := bson.D{{Key: "value", Value: "native"}}
+	encoded, err := bson.Marshal(value)
+	if err != nil {
+		t.Fatalf("bson.Marshal() error = %v", err)
+	}
+	document := storage.Document{
+		Encoding: storage.DocumentEncodingBSON,
+		Payload:  encoded,
+	}
+	operation := storage.WriteOperation{
+		Address:  testAddress("record-1"),
+		Document: document,
+	}
+	_, err = store.prepareWrite(0, operation)
+	if err == nil || !strings.Contains(err.Error(), "requires JSON") {
+		t.Fatalf("prepareWrite(BSON) error = %v", err)
+	}
+	handler.verify()
+}
+
 func TestStoreReadsExistingAndMissingDocuments(t *testing.T) {
 	requests := []expectedRequest{
 		{
@@ -161,8 +184,8 @@ func TestStoreReadsExistingAndMissingDocuments(t *testing.T) {
 	if response.Results[0].Status != storage.ReadStatusFound || response.Results[1].Status != storage.ReadStatusNotFound {
 		t.Fatalf("Read() statuses = %v, %v", response.Results[0].Status, response.Results[1].Status)
 	}
-	if string(response.Results[0].Document.JSON) != `{"name":"legacy"}` {
-		t.Fatalf("Read() document = %s", response.Results[0].Document.JSON)
+	if string(response.Results[0].Document.Payload) != `{"name":"legacy"}` {
+		t.Fatalf("Read() document = %s", response.Results[0].Document.Payload)
 	}
 	revision, err := decodeRevision(response.Results[0].Revision)
 	if err != nil || revision.sequenceNumber != 7 || revision.primaryTerm != 2 {
@@ -444,7 +467,7 @@ func testAddress(id string) storage.Address {
 }
 
 func testDocument(raw string) storage.Document {
-	document := storage.Document{JSON: []byte(raw)}
+	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(raw)}
 	return document
 }
 

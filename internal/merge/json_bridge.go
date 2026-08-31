@@ -10,9 +10,11 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"time"
 
 	"github.com/iceisfun/golua/vm"
 	"github.com/liran/sink/internal/storage"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 type luaJSONBridge struct {
@@ -27,6 +29,7 @@ type luaJSONBridge struct {
 }
 
 type decodedJSONObject struct {
+	encoding        storage.DocumentEncoding
 	value           map[string]any
 	dateTimeValues  map[string]struct{}
 	typedPathValues map[string]map[string]struct{}
@@ -91,34 +94,249 @@ func protectedMetatable(label string) *vm.Table {
 
 func decodeJSONObject(document storage.Document) (decodedJSONObject, error) {
 	var result decodedJSONObject
-	decoder := json.NewDecoder(bytes.NewReader(document.JSON))
-	decoder.UseNumber()
-	var decoded any
-	if err := decoder.Decode(&decoded); err != nil {
-		return result, fmt.Errorf("decode JSON: %w", err)
+	if err := storage.ValidateDocument(document); err != nil {
+		return result, err
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return result, errors.New("decode JSON: unexpected trailing content")
+	encoded := document.Payload
+	dateTimePaths := make([]string, 0)
+	if document.Encoding == storage.DocumentEncodingBSON {
+		extendedJSON, err := bson.MarshalExtJSON(bson.Raw(document.Payload), false, false)
+		if err != nil {
+			return result, fmt.Errorf("encode BSON as Extended JSON: %w", err)
+		}
+		decoded, err := decodeJSONValue(extendedJSON)
+		if err != nil {
+			return result, err
+		}
+		normalized, err := normalizeExtendedJSON(decoded, "", &dateTimePaths)
+		if err != nil {
+			return result, err
+		}
+		encoded, err = json.Marshal(normalized)
+		if err != nil {
+			return result, fmt.Errorf("encode normalized BSON document: %w", err)
+		}
+	}
+	decoded, err := decodeJSONValue(encoded)
+	if err != nil {
+		return result, err
 	}
 	object, ok := decoded.(map[string]any)
 	if !ok {
-		return result, errors.New("JSON document must be an object")
+		return result, errors.New("document must be an object")
 	}
-	dateTimeValues, err := storage.DateTimeValues(decoded, document.DateTimePaths)
-	if err != nil {
-		return result, fmt.Errorf("decode date-time metadata: %w", err)
+	dateTimeValues := make(map[string]struct{}, len(dateTimePaths))
+	typedPaths := make(map[string]struct{}, len(dateTimePaths))
+	for _, path := range dateTimePaths {
+		typedPaths[path] = struct{}{}
+		value, valueErr := valueAtJSONPointer(decoded, jsontext.Pointer(path))
+		if valueErr != nil {
+			return result, fmt.Errorf("decode BSON date-time path %q: %w", path, valueErr)
+		}
+		text, textOK := value.(string)
+		if !textOK {
+			return result, fmt.Errorf("decode BSON date-time path %q: value has type %T", path, value)
+		}
+		dateTimeValues[text] = struct{}{}
 	}
+	result.encoding = document.Encoding
 	result.value = object
 	result.dateTimeValues = dateTimeValues
-	result.typedPathValues = make(map[string]map[string]struct{}, len(document.DateTimePaths))
+	result.typedPathValues = make(map[string]map[string]struct{}, len(dateTimePaths))
 	result.untypedValues = make(map[string]struct{})
-	typedPaths := make(map[string]struct{}, len(document.DateTimePaths))
-	for _, path := range document.DateTimePaths {
-		typedPaths[path] = struct{}{}
-	}
 	classifyDateTimeStrings(decoded, "", typedPaths, result.typedPathValues, result.untypedValues)
 	return result, nil
+}
+
+func decodeJSONValue(encoded []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(encoded))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, fmt.Errorf("decode JSON: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return nil, errors.New("decode JSON: unexpected trailing content")
+	}
+	return decoded, nil
+}
+
+func normalizeExtendedJSON(value any, pointer jsontext.Pointer, dateTimePaths *[]string) (any, error) {
+	switch typed := value.(type) {
+	case []any:
+		normalized := make([]any, len(typed))
+		for index, item := range typed {
+			child := pointer.AppendToken(strconv.Itoa(index))
+			converted, err := normalizeExtendedJSON(item, child, dateTimePaths)
+			if err != nil {
+				return nil, err
+			}
+			normalized[index] = converted
+		}
+		return normalized, nil
+	case map[string]any:
+		dateTime, isDateTime, err := extendedJSONDateTime(typed)
+		if err != nil {
+			return nil, err
+		}
+		if isDateTime {
+			*dateTimePaths = append(*dateTimePaths, string(pointer))
+			return dateTime, nil
+		}
+		normalized := make(map[string]any, len(typed))
+		for key, item := range typed {
+			child := pointer.AppendToken(key)
+			converted, err := normalizeExtendedJSON(item, child, dateTimePaths)
+			if err != nil {
+				return nil, err
+			}
+			normalized[key] = converted
+		}
+		return normalized, nil
+	default:
+		return value, nil
+	}
+}
+
+func extendedJSONDateTime(value map[string]any) (string, bool, error) {
+	raw, exists := value["$date"]
+	if !exists || len(value) != 1 {
+		return "", false, nil
+	}
+	var timestamp time.Time
+	switch typed := raw.(type) {
+	case string:
+		parsed, err := time.Parse(time.RFC3339Nano, typed)
+		if err != nil {
+			return "", false, fmt.Errorf("parse BSON date-time: %w", err)
+		}
+		timestamp = parsed
+	case map[string]any:
+		number, ok := typed["$numberLong"].(string)
+		if !ok || len(typed) != 1 {
+			return "", false, errors.New("BSON date-time has an invalid $numberLong value")
+		}
+		milliseconds, err := strconv.ParseInt(number, 10, 64)
+		if err != nil {
+			return "", false, fmt.Errorf("parse BSON date-time milliseconds: %w", err)
+		}
+		timestamp = time.UnixMilli(milliseconds)
+	default:
+		return "", false, fmt.Errorf("BSON date-time has type %T", raw)
+	}
+	encoded, err := timestamp.UTC().MarshalJSON()
+	if err != nil {
+		return "", false, fmt.Errorf("encode BSON date-time: %w", err)
+	}
+	var text string
+	if err := json.Unmarshal(encoded, &text); err != nil {
+		return "", false, err
+	}
+	return text, true, nil
+}
+
+func valueAtJSONPointer(value any, pointer jsontext.Pointer) (any, error) {
+	current := value
+	for token := range pointer.Tokens() {
+		switch typed := current.(type) {
+		case map[string]any:
+			next, exists := typed[token]
+			if !exists {
+				return nil, fmt.Errorf("object member %q does not exist", token)
+			}
+			current = next
+		case []any:
+			index, err := jsonArrayIndex(token, len(typed))
+			if err != nil {
+				return nil, err
+			}
+			current = typed[index]
+		default:
+			return nil, fmt.Errorf("cannot traverse %T with token %q", current, token)
+		}
+	}
+	return current, nil
+}
+
+func jsonArrayIndex(token string, length int) (int, error) {
+	if token == "" || (len(token) > 1 && token[0] == '0') {
+		return 0, fmt.Errorf("array index %q is invalid", token)
+	}
+	index, err := strconv.Atoi(token)
+	if err != nil || index < 0 {
+		return 0, fmt.Errorf("array index %q is invalid", token)
+	}
+	if index >= length {
+		return 0, fmt.Errorf("array index %d is out of bounds", index)
+	}
+	return index, nil
+}
+
+func cloneJSONValue(value any) any {
+	switch typed := value.(type) {
+	case []any:
+		cloned := make([]any, len(typed))
+		for index, item := range typed {
+			cloned[index] = cloneJSONValue(item)
+		}
+		return cloned
+	case map[string]any:
+		cloned := make(map[string]any, len(typed))
+		for key, item := range typed {
+			cloned[key] = cloneJSONValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
+}
+
+func setExtendedJSONDateTime(value any, pointer jsontext.Pointer) error {
+	tokens := make([]string, 0)
+	for token := range pointer.Tokens() {
+		tokens = append(tokens, token)
+	}
+	if len(tokens) == 0 {
+		return errors.New("BSON date-time cannot identify the document root")
+	}
+	return setExtendedJSONDateTimeAt(value, tokens)
+}
+
+func setExtendedJSONDateTimeAt(value any, tokens []string) error {
+	token := tokens[0]
+	switch typed := value.(type) {
+	case map[string]any:
+		current, exists := typed[token]
+		if !exists {
+			return fmt.Errorf("object member %q does not exist", token)
+		}
+		if len(tokens) > 1 {
+			return setExtendedJSONDateTimeAt(current, tokens[1:])
+		}
+		text, ok := current.(string)
+		if !ok {
+			return fmt.Errorf("BSON date-time value has type %T", current)
+		}
+		typed[token] = map[string]any{"$date": text}
+		return nil
+	case []any:
+		index, err := jsonArrayIndex(token, len(typed))
+		if err != nil {
+			return err
+		}
+		if len(tokens) > 1 {
+			return setExtendedJSONDateTimeAt(typed[index], tokens[1:])
+		}
+		text, ok := typed[index].(string)
+		if !ok {
+			return fmt.Errorf("BSON date-time value has type %T", typed[index])
+		}
+		typed[index] = map[string]any{"$date": text}
+		return nil
+	default:
+		return fmt.Errorf("cannot traverse %T with token %q", value, token)
+	}
 }
 
 func (b *luaJSONBridge) addDateTimeDocument(document decodedJSONObject) {
@@ -191,7 +409,10 @@ func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
 	}
 }
 
-func (b *luaJSONBridge) encodeJSONObject(value vm.Value) (storage.Document, error) {
+func (b *luaJSONBridge) encodeJSONObject(
+	value vm.Value,
+	encoding storage.DocumentEncoding,
+) (storage.Document, error) {
 	var document storage.Document
 	decoded, err := b.luaToGo(value, make(map[*vm.Table]bool))
 	if err != nil {
@@ -200,12 +421,38 @@ func (b *luaJSONBridge) encodeJSONObject(value vm.Value) (storage.Document, erro
 	if _, ok := decoded.(map[string]any); !ok {
 		return document, errors.New("merge result must be a JSON object")
 	}
-	encoded, err := json.Marshal(decoded)
-	if err != nil {
-		return document, fmt.Errorf("encode JSON: %w", err)
+	dateTimePaths := b.dateTimePaths(decoded)
+	var encoded []byte
+	switch encoding {
+	case storage.DocumentEncodingJSON:
+		encoded, err = json.Marshal(decoded)
+		if err != nil {
+			return document, fmt.Errorf("encode JSON: %w", err)
+		}
+	case storage.DocumentEncodingBSON:
+		extended := cloneJSONValue(decoded)
+		for _, path := range dateTimePaths {
+			if err := setExtendedJSONDateTime(extended, jsontext.Pointer(path)); err != nil {
+				return document, err
+			}
+		}
+		extendedJSON, marshalErr := json.Marshal(extended)
+		if marshalErr != nil {
+			return document, fmt.Errorf("encode BSON Extended JSON: %w", marshalErr)
+		}
+		var bsonDocument bson.D
+		if unmarshalErr := bson.UnmarshalExtJSON(extendedJSON, false, &bsonDocument); unmarshalErr != nil {
+			return document, fmt.Errorf("decode BSON Extended JSON: %w", unmarshalErr)
+		}
+		encoded, err = bson.Marshal(bsonDocument)
+		if err != nil {
+			return document, fmt.Errorf("encode BSON: %w", err)
+		}
+	default:
+		return document, errors.New("merge result encoding is required")
 	}
-	document.JSON = encoded
-	document.DateTimePaths = b.dateTimePaths(decoded)
+	document.Encoding = encoding
+	document.Payload = encoded
 	return document, nil
 }
 

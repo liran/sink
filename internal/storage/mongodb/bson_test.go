@@ -3,8 +3,6 @@ package mongodb
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,10 +13,14 @@ import (
 
 func TestReplacementPreservesDateTimeTypes(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}
-	document := storage.Document{
-		JSON:          []byte(`{"created_at":"2026-08-29T04:34:56.789Z","events":[{"at":"2026-08-30T04:34:56Z"}],"literal":"2026-08-31T04:34:56Z"}`),
-		DateTimePaths: []string{"/created_at", "/events/0/at"},
+	createdAt := time.Date(2026, time.August, 29, 4, 34, 56, 789000000, time.UTC)
+	eventAt := time.Date(2026, time.August, 30, 4, 34, 56, 0, time.UTC)
+	value := bson.D{
+		{Key: "created_at", Value: createdAt},
+		{Key: "events", Value: bson.A{bson.D{{Key: "at", Value: eventAt}}}},
+		{Key: "literal", Value: "2026-08-31T04:34:56Z"},
 	}
+	document := bsonTestDocument(t, value)
 	revision := storage.Revision{Data: []byte("revision-date-time")}
 	replacement, err := store.replacement(document, "record-date-time", revision)
 	if err != nil {
@@ -42,19 +44,15 @@ func TestReplacementPreservesDateTimeTypes(t *testing.T) {
 	if !bytes.Equal(decodedRevision.Data, revision.Data) {
 		t.Fatalf("decoded revision = %x", decodedRevision.Data)
 	}
-	wantPaths := []string{"/created_at", "/events/0/at"}
-	if !slices.Equal(decoded.DateTimePaths, wantPaths) {
-		t.Fatalf("decoded date-time paths = %v, want %v", decoded.DateTimePaths, wantPaths)
-	}
 	var values struct {
-		CreatedAt time.Time `json:"created_at"`
+		CreatedAt time.Time `bson:"created_at"`
 		Events    []struct {
-			At time.Time `json:"at"`
-		} `json:"events"`
-		Literal string `json:"literal"`
+			At time.Time `bson:"at"`
+		} `bson:"events"`
+		Literal string `bson:"literal"`
 	}
-	if err := json.Unmarshal(decoded.JSON, &values); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
+	if err := bson.Unmarshal(decoded.Payload, &values); err != nil {
+		t.Fatalf("bson.Unmarshal() error = %v", err)
 	}
 	if values.CreatedAt.Format(time.RFC3339Nano) != "2026-08-29T04:34:56.789Z" ||
 		values.Events[0].At.Format(time.RFC3339Nano) != "2026-08-30T04:34:56Z" {
@@ -67,7 +65,11 @@ func TestReplacementPreservesDateTimeTypes(t *testing.T) {
 
 func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}
-	document := storage.Document{JSON: []byte(`{"name":"legacy","tags":["a","b"]}`)}
+	value := bson.D{
+		{Key: "name", Value: "legacy"},
+		{Key: "tags", Value: bson.A{"a", "b"}},
+	}
+	document := bsonTestDocument(t, value)
 	revision := storage.Revision{Data: []byte("revision-1")}
 	replacement, err := store.replacement(document, "record-1", revision)
 	if err != nil {
@@ -93,9 +95,9 @@ func TestReplacementPreservesShapeAndAddsRevision(t *testing.T) {
 	if !bytes.Equal(decodedRevision.Data, revision.Data) {
 		t.Fatalf("decoded revision = %x", decodedRevision.Data)
 	}
-	var user map[string]any
-	if err := json.Unmarshal(decoded.JSON, &user); err != nil {
-		t.Fatalf("json.Unmarshal() error = %v", err)
+	var user bson.M
+	if err := bson.Unmarshal(decoded.Payload, &user); err != nil {
+		t.Fatalf("bson.Unmarshal() error = %v", err)
 	}
 	if got := user["name"]; got != "legacy" {
 		t.Fatalf("decoded name = %#v", got)
@@ -119,8 +121,11 @@ func TestUserDocumentAcceptsLegacyDocumentWithoutRevision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userDocument() error = %v", err)
 	}
-	if !json.Valid(document.JSON) {
-		t.Fatalf("document JSON = %q", document.JSON)
+	if document.Encoding != storage.DocumentEncodingBSON {
+		t.Fatalf("document encoding = %d", document.Encoding)
+	}
+	if err := bson.Raw(document.Payload).Validate(); err != nil {
+		t.Fatalf("document BSON error = %v", err)
 	}
 	if len(revision.Data) != 0 {
 		t.Fatalf("legacy revision = %x, want empty", revision.Data)
@@ -131,22 +136,38 @@ func TestReplacementRejectsReservedFieldAndMismatchedID(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}
 	revision := storage.Revision{Data: []byte("revision")}
 
-	reservedDocument := storage.Document{JSON: []byte(`{"__sink":{}}`)}
+	reservedValue := bson.D{{Key: "__sink", Value: bson.D{}}}
+	reservedDocument := bsonTestDocument(t, reservedValue)
 	_, err := store.replacement(reservedDocument, "record-1", revision)
 	if err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("replacement(reserved) error = %v", err)
 	}
 
-	mismatchedDocument := storage.Document{JSON: []byte(`{"_id":"other"}`)}
+	mismatchedValue := bson.D{{Key: "_id", Value: "other"}}
+	mismatchedDocument := bsonTestDocument(t, mismatchedValue)
 	_, err = store.replacement(mismatchedDocument, "record-1", revision)
 	if err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("replacement(mismatched) error = %v", err)
 	}
 }
 
+func TestReplacementRejectsJSONEncoding(t *testing.T) {
+	store := &Store{metadataField: defaultMetadataField}
+	document := storage.Document{
+		Encoding: storage.DocumentEncodingJSON,
+		Payload:  []byte(`{"_id":"record-1"}`),
+	}
+	revision := storage.Revision{Data: []byte("revision")}
+	_, err := store.replacement(document, "record-1", revision)
+	if err == nil || !strings.Contains(err.Error(), "requires BSON") {
+		t.Fatalf("replacement(JSON) error = %v", err)
+	}
+}
+
 func TestReplacementAcceptsEquivalentInt32ID(t *testing.T) {
 	store := &Store{metadataField: defaultMetadataField}
-	document := storage.Document{JSON: []byte(`{"_id":{"$numberInt":"42"}}`)}
+	value := bson.D{{Key: "_id", Value: int32(42)}}
+	document := bsonTestDocument(t, value)
 	revision := storage.Revision{Data: []byte("revision")}
 	_, err := store.replacement(document, int64(42), revision)
 	if err != nil {
@@ -178,4 +199,17 @@ func TestMongoIDDecodesInt64Key(t *testing.T) {
 	if got != int64(42) {
 		t.Fatalf("mongoID() = %#v", got)
 	}
+}
+
+func bsonTestDocument(t *testing.T, value any) storage.Document {
+	t.Helper()
+	encoded, err := bson.Marshal(value)
+	if err != nil {
+		t.Fatalf("bson.Marshal() error = %v", err)
+	}
+	document := storage.Document{
+		Encoding: storage.DocumentEncodingBSON,
+		Payload:  encoded,
+	}
+	return document
 }

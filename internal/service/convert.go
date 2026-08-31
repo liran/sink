@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -74,16 +73,21 @@ func convertDocument(document *sink.Document) (storage.Document, error) {
 	if document == nil {
 		return emptyDocument, errors.New("document is required")
 	}
-	encoded := bytes.TrimSpace(document.GetJson())
-	if len(encoded) < 2 || encoded[0] != '{' || encoded[len(encoded)-1] != '}' || !json.Valid(encoded) {
-		return emptyDocument, errors.New("document must contain a valid JSON object")
+	var encoding storage.DocumentEncoding
+	switch document.GetEncoding() {
+	case sink.DocumentEncoding_DOCUMENT_ENCODING_JSON:
+		encoding = storage.DocumentEncodingJSON
+	case sink.DocumentEncoding_DOCUMENT_ENCODING_BSON:
+		encoding = storage.DocumentEncodingBSON
+	default:
+		return emptyDocument, errors.New("document encoding is required")
 	}
 	converted := storage.Document{
-		JSON:          bytes.Clone(encoded),
-		DateTimePaths: append([]string(nil), document.GetDateTimePaths()...),
+		Encoding: encoding,
+		Payload:  bytes.Clone(document.GetPayload()),
 	}
-	if _, err := storage.DecodeDateTimeValues(converted); err != nil {
-		return emptyDocument, fmt.Errorf("document date-time metadata: %w", err)
+	if err := storage.ValidateDocument(converted); err != nil {
+		return emptyDocument, err
 	}
 	return converted, nil
 }
@@ -92,9 +96,20 @@ func applyReadResult(result *sink.ReadResult, stored storage.ReadResult) {
 	switch stored.Status {
 	case storage.ReadStatusFound:
 		result.Status = sink.ReadStatus_READ_STATUS_FOUND
+		var encoding sink.DocumentEncoding
+		switch stored.Document.Encoding {
+		case storage.DocumentEncodingJSON:
+			encoding = sink.DocumentEncoding_DOCUMENT_ENCODING_JSON
+		case storage.DocumentEncodingBSON:
+			encoding = sink.DocumentEncoding_DOCUMENT_ENCODING_BSON
+		default:
+			err := errors.New("storage returned a document without an encoding")
+			setReadFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
+			return
+		}
 		document := &sink.Document{
-			Json:          bytes.Clone(stored.Document.JSON),
-			DateTimePaths: append([]string(nil), stored.Document.DateTimePaths...),
+			Encoding: encoding,
+			Payload:  bytes.Clone(stored.Document.Payload),
 		}
 		result.Document = document
 		result.Revision = &sink.RevisionToken{Data: bytes.Clone(stored.Revision.Data)}

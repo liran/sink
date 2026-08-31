@@ -166,7 +166,10 @@ func routingMutation(store string, key string) queue.Mutation {
 		Dataset:   "products",
 		Key:       recordKey,
 	}
-	document := &sink.Document{Json: []byte(`{"value":1}`)}
+	document := &sink.Document{
+		Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON,
+		Payload:  []byte(`{"value":1}`),
+	}
 	put := &sink.PutOperation{Document: document, Mode: sink.WriteMode_WRITE_MODE_UPSERT}
 	operation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Put{Put: put}}
 	mutation := queue.Mutation{Write: operation}

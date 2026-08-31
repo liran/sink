@@ -41,15 +41,17 @@ message OpaqueValue {
   bytes data = 2;
 }
 
-// Document contains a JSON-encoded user object. Storage-specific encodings are
-// private implementation details of storage adapters.
+// Document contains one explicitly encoded user object. Callers select JSON
+// for search storage and BSON for MongoDB storage.
 message Document {
-  bytes json = 1;
+  DocumentEncoding encoding = 1;
+  bytes payload = 2;
+}
 
-  // RFC 6901 JSON Pointers identifying strings that originated as typed
-  // date-time values. Adapters that support a native date-time type may use
-  // this metadata without changing the JSON representation.
-  repeated string date_time_paths = 2;
+enum DocumentEncoding {
+  DOCUMENT_ENCODING_UNSPECIFIED = 0;
+  DOCUMENT_ENCODING_JSON = 1;
+  DOCUMENT_ENCODING_BSON = 2;
 }
 
 // RevisionToken is interpreted only by the selected storage adapter.

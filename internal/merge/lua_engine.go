@@ -187,6 +187,9 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 		if err != nil {
 			return empty, fmt.Errorf("%w: %v", ErrInvalidCurrent, err)
 		}
+		if current.encoding != incoming.encoding {
+			return empty, fmt.Errorf("%w: current and incoming document encodings differ", ErrInvalidIncoming)
+		}
 	}
 
 	executionContext, cancel := context.WithTimeout(ctx, m.engine.options.Timeout)
@@ -223,12 +226,12 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	if len(merged) != 1 {
 		return empty, fmt.Errorf("%w: function returned %d values; expected one", ErrInvalidResult, len(merged))
 	}
-	document, err := bridge.encodeJSONObject(merged[0])
+	document, err := bridge.encodeJSONObject(merged[0], incoming.encoding)
 	if err != nil {
 		return empty, fmt.Errorf("%w: %v", ErrInvalidResult, err)
 	}
-	if len(document.JSON) > m.engine.options.MaxResultBytes {
-		return empty, fmt.Errorf("%w: result is %d bytes; maximum is %d", ErrExecutionExhausted, len(document.JSON), m.engine.options.MaxResultBytes)
+	if len(document.Payload) > m.engine.options.MaxResultBytes {
+		return empty, fmt.Errorf("%w: result is %d bytes; maximum is %d", ErrExecutionExhausted, len(document.Payload), m.engine.options.MaxResultBytes)
 	}
 	result := Result{Document: document}
 	return result, nil

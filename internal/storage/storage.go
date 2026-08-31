@@ -137,9 +137,17 @@ func appendPart(destination []byte, part []byte) []byte {
 	return destination
 }
 
+type DocumentEncoding uint8
+
+const (
+	DocumentEncodingUnspecified DocumentEncoding = iota
+	DocumentEncodingJSON
+	DocumentEncodingBSON
+)
+
 type Document struct {
-	JSON          []byte
-	DateTimePaths []string
+	Encoding DocumentEncoding
+	Payload  []byte
 }
 
 type Revision struct {

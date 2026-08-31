@@ -275,7 +275,7 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `service.batching.max_queued_bytes` | positive integer | No | max(`134217728`, `grpc.max_receive_message_bytes`) | Integer at least `grpc.max_receive_message_bytes` and `service.batching.max_bytes` | Maximum encoded request bytes waiting in each store and method queue. |
 | `service.lua.timeout_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Maximum wall-clock duration of one Lua execution. |
 | `service.lua.max_source_bytes` | positive integer | No | `65536` | Integer greater than `0` | Maximum Lua source size per merge operation. |
-| `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum encoded JSON merge result size. |
+| `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum encoded JSON or BSON merge result size. |
 | `service.lua.max_cached_programs` | positive integer | No | `256` | Integer greater than `0` | Maximum compiled Lua programs retained in the process-local LRU cache. |
 | `service.lua.max_instructions` | positive integer | No | `1000000` | Integer greater than `0` | Maximum VM instruction checkpoints per execution. |
 | `storages[].kafka` | object | No | absent | A store-specific Kafka configuration | Holds the asynchronous delivery and Topic-management policy. Kafka remains disabled unless `enabled` is `true`. |
@@ -305,9 +305,9 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 
 | Value | Behavior | Required driver-specific configuration |
 | --- | --- | --- |
-| `mongodb` | Converts protocol JSON to BSON inside the adapter and stores it in MongoDB. | `storages[].mongodb.uri` |
-| `elasticsearch` | Stores JSON documents in Elasticsearch. | At least one `storages[].search.endpoints` entry |
-| `opensearch` | Stores JSON documents in OpenSearch. | At least one `storages[].search.endpoints` entry |
+| `mongodb` | Requires and stores BSON documents. | `storages[].mongodb.uri` |
+| `elasticsearch` | Requires and stores JSON documents in Elasticsearch. | At least one `storages[].search.endpoints` entry |
+| `opensearch` | Requires and stores JSON documents in OpenSearch. | At least one `storages[].search.endpoints` entry |
 
 ## Kafka mode combinations
 
@@ -355,9 +355,9 @@ end
 ```
 
 `current` is `nil` when `MISSING_DOCUMENT_MODE_CREATE` creates a missing record.
-`incoming` is the operation's incoming JSON object. The returned value must be a
-JSON object. All documents use the protocol's JSON representation;
-storage-specific conversion happens after the merge. The versioned `sink.v1`
+`incoming` is the operation's incoming object. Current and incoming documents
+must use the same encoding. The returned value must be an object and is encoded
+as JSON or BSON to match the incoming document. The versioned `sink.v1`
 helpers provide common operations and a stable merge observation time. See the
 [Lua merge developer guide](lua-merge-guide.md) for the complete API, examples,
 retry semantics, and testing checklist.
