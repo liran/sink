@@ -1,4 +1,4 @@
-name: Release container image
+name: Release artifacts
 
 on:
   release:
@@ -6,11 +6,11 @@ on:
       - published
 
 permissions:
-  contents: read
+  contents: write
   packages: write
 
 concurrency:
-  group: release-image-${{ github.event.release.tag_name }}
+  group: release-artifacts-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 env:
@@ -25,11 +25,43 @@ jobs:
       suite_ref: 2c2e0637bfc9eafd856bb8d686a9c36a7a89cf1e
       sink_ref: ${{ github.event.release.tag_name }}
 
+  binaries:
+    name: Attach standalone binaries
+    needs:
+      - qualify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build release binaries
+        run: scripts/build-release-binaries.sh "${{ github.event.release.tag_name }}" dist
+
+      - name: Verify Linux amd64 binary version
+        run: |
+          mkdir -p /tmp/sink-release-verify
+          tar -C /tmp/sink-release-verify -xzf "dist/sink_${{ github.event.release.tag_name }}_linux_amd64.tar.gz"
+          test "$(/tmp/sink-release-verify/sink version)" = "${{ github.event.release.tag_name }}"
+
+      - name: Attach binaries and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "${RELEASE_TAG}" dist/* --clobber
+
   publish:
     name: Publish multi-platform image
     needs:
       - qualify
     runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,6 +88,7 @@ jobs:
             type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
 
       - name: Build and publish image
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
@@ -68,3 +101,29 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: mode=max
           sbom: true
+
+  describe:
+    name: Update release installation details
+    needs:
+      - binaries
+      - publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Add tagged image and binary details to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          image_tag="${RELEASE_TAG#v}"
+          tagged_image="${REGISTRY}/${IMAGE_NAME}:${image_tag}"
+          gh release view "${RELEASE_TAG}" --json body --jq .body > /tmp/sink-release-body.md
+          scripts/render-release-notes.sh \
+            /tmp/sink-release-body.md \
+            /tmp/sink-release-body-updated.md \
+            "${tagged_image}" \
+            "${IMAGE_DIGEST}"
+          gh release edit "${RELEASE_TAG}" --notes-file /tmp/sink-release-body-updated.md
