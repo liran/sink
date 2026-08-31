@@ -1,0 +1,5 @@
+name: create JSON product
+encoding: json
+incoming: json-create-incoming.json
+expected: json-create-expected.json
+observed_at: 2026-08-31T10:20:30.456Z

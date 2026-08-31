@@ -136,6 +136,21 @@ docker run --rm -p 8080:8080 -p 9090:9090 \
 The server validates the complete configuration and connects to every required
 dependency before becoming ready.
 
+## Test Lua merge programs
+
+Business applications can validate merge rules locally with the exact Lua
+runtime used by Sink, without starting a server or storage backend:
+
+```shell
+sink lua test \
+  --script merge/product.lua \
+  --cases merge/testdata
+```
+
+The command supports JSON fixtures and type-aware BSON fixtures written as
+Extended JSON. See [Testing Lua merge programs](docs/lua-testing.md) for the
+case format, direct flags, BSON examples, CI usage, and coverage guidance.
+
 ## Important guarantees and boundaries
 
 - Atomicity is per record; a multi-record request is not a transaction.
@@ -157,6 +172,8 @@ dependency before becoming ready.
   batching, Lua merges, asynchronous delivery, and reliability boundaries
 - [Lua merge developer guide](docs/lua-merge-guide.md) — script contract,
   built-in `sink.v1` tools, examples, retry semantics, and testing guidance
+- [Testing Lua merge programs](docs/lua-testing.md) — local production-parity
+  runner, JSON/BSON fixtures, case suites, and CI integration
 - [Configuration reference](docs/configuration.md) — every field, default,
   allowed value, validation rule, routing rule, and deployment mode
 - [Docker Compose quickstart](examples/quickstart/README.md) — local environment

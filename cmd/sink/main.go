@@ -41,18 +41,31 @@ const (
 )
 
 func main() {
-	if len(os.Args) == 2 && os.Args[1] == "version" {
-		fmt.Println(version)
-		return
-	}
-	configPath, err := parseConfigPath(os.Args[1:])
-	if err == nil {
-		err = run(configPath)
-	}
+	err := executeCommand(os.Args[1:], os.Stdout, os.Stderr)
 	if err != nil {
 		slog.Error("sink stopped", "error", err)
 		os.Exit(1)
 	}
+}
+
+func executeCommand(args []string, stdout io.Writer, stderr io.Writer) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "version":
+			if len(args) != 1 {
+				return errors.New("sink version does not accept arguments")
+			}
+			_, err := fmt.Fprintln(stdout, version)
+			return err
+		case "lua":
+			return runLuaCommand(args[1:], stdout, stderr)
+		}
+	}
+	configPath, err := parseConfigPath(args)
+	if err != nil {
+		return err
+	}
+	return run(configPath)
 }
 
 func parseConfigPath(args []string) (string, error) {

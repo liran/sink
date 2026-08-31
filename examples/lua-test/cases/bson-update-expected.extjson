@@ -1,0 +1,7 @@
+{
+  "_id": "product-42",
+  "title": "Updated product",
+  "tags": ["existing", "featured"],
+  "created_at": {"$date": "2026-08-29T04:34:56.789Z"},
+  "updated_at": {"$date": "2026-08-31T10:20:30.456Z"}
+}
