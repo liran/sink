@@ -129,15 +129,22 @@ func (s *Store) writeWave(ctx context.Context, wave []writeWork, results []stora
 		group.operations = append(group.operations, operation)
 	}
 
-	limit := make(chan struct{}, s.maxConcurrentGroups)
 	var bulkWrites sync.WaitGroup
 	bulkWrites.Add(len(bulkGroups))
 	for _, group := range bulkGroups {
+		select {
+		case s.groups <- struct{}{}:
+		case <-ctx.Done():
+			for _, operation := range group.operations {
+				setWriteError(&results[operation.index], storage.BackendError(ctx.Err()))
+			}
+			bulkWrites.Done()
+			continue
+		}
 		go func() {
 			defer bulkWrites.Done()
-			limit <- struct{}{}
 			defer func() {
-				<-limit
+				<-s.groups
 			}()
 			s.bulkWrite(ctx, group, results)
 		}()
@@ -254,6 +261,13 @@ func (s *Store) writeConditional(
 }
 
 func (s *Store) writeOne(ctx context.Context, operation writeWork, result *storage.WriteResult) {
+	select {
+	case s.writes <- struct{}{}:
+		defer func() { <-s.writes }()
+	case <-ctx.Done():
+		setWriteError(result, storage.BackendError(ctx.Err()))
+		return
+	}
 	filter, err := s.preconditionFilter(operation)
 	if err != nil {
 		setWriteError(result, err)

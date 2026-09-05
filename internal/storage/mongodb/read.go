@@ -23,6 +23,9 @@ type readGroup struct {
 }
 
 func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	if req.Budget == nil {
+		req.Budget = storage.NewReadBudget(storage.DefaultMaxReadBytes)
+	}
 	response := storage.ReadResponse{
 		Results: make([]storage.ReadResult, len(req.Operations)),
 	}
@@ -57,24 +60,29 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 		group.operations = append(group.operations, work)
 	}
 
-	limit := make(chan struct{}, s.maxConcurrentGroups)
 	var reads sync.WaitGroup
 	reads.Add(len(groups))
 	for _, group := range groups {
+		select {
+		case s.groups <- struct{}{}:
+		case <-ctx.Done():
+			s.setReadGroupError(group, response.Results, storage.BackendError(ctx.Err()))
+			reads.Done()
+			continue
+		}
 		go func() {
 			defer reads.Done()
-			limit <- struct{}{}
 			defer func() {
-				<-limit
+				<-s.groups
 			}()
-			s.readGroup(ctx, group, response.Results)
+			s.readGroup(ctx, group, response.Results, req.Budget)
 		}()
 	}
 	reads.Wait()
 	return response, nil
 }
 
-func (s *Store) readGroup(ctx context.Context, group *readGroup, results []storage.ReadResult) {
+func (s *Store) readGroup(ctx context.Context, group *readGroup, results []storage.ReadResult, budget *storage.ReadBudget) {
 	ids := make([]any, 0, len(group.operations))
 	indexesByID := make(map[string][]int, len(group.operations))
 	for _, operation := range group.operations {
@@ -94,7 +102,7 @@ func (s *Store) readGroup(ctx context.Context, group *readGroup, results []stora
 
 	found := make(map[string]bool, len(group.operations))
 	for cursor.Next(ctx) {
-		raw := bson.Raw(bytes.Clone(cursor.Current))
+		raw := cursor.Current
 		id, lookupErr := raw.LookupErr("_id")
 		if lookupErr != nil {
 			s.setReadGroupError(group, results, fmt.Errorf("read MongoDB _id: %w", lookupErr))
@@ -105,6 +113,18 @@ func (s *Store) readGroup(ctx context.Context, group *readGroup, results []stora
 		if len(indexes) == 0 {
 			continue
 		}
+		admitted := make([]int, 0, len(indexes))
+		for _, index := range indexes {
+			if err := budget.Reserve(len(raw)); err != nil {
+				setReadError(&results[index], err)
+			} else {
+				admitted = append(admitted, index)
+			}
+		}
+		if len(admitted) == 0 {
+			continue
+		}
+		indexes = admitted
 		document, revision, decodeErr := s.userDocument(raw)
 		if decodeErr != nil {
 			for _, index := range indexes {

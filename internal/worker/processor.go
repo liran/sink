@@ -71,7 +71,8 @@ func (p *Processor) HandleBatch(ctx context.Context, mutations []queue.Mutation)
 		p.applyWrites(ctx, writes, results)
 		p.applyDeletes(ctx, deletes, results)
 		for _, work := range wave {
-			if results[work.index] != nil {
+			var failure *ApplyError
+			if errors.As(results[work.index], &failure) && failure.Retryable() {
 				blocked[work.routing] = results[work.index]
 			}
 		}
@@ -124,6 +125,10 @@ func (p *Processor) applyWrites(ctx context.Context, operations []mutationWork, 
 			continue
 		}
 		operation := operations[index]
+		if err := ctx.Err(); err != nil {
+			results[operation.index] = NewApplyError("apply queued write", true, err)
+			continue
+		}
 		results[operation.index] = resultApplyError("apply queued write", result.GetFailure())
 	}
 }
@@ -159,6 +164,10 @@ func (p *Processor) applyDeletes(ctx context.Context, operations []mutationWork,
 			continue
 		}
 		operation := operations[index]
+		if err := ctx.Err(); err != nil {
+			results[operation.index] = NewApplyError("apply queued delete", true, err)
+			continue
+		}
 		results[operation.index] = resultApplyError("apply queued delete", result.GetFailure())
 	}
 }

@@ -59,7 +59,7 @@ func run() error {
 	if err := waitForSink(ctx, healthClient); err != nil {
 		return err
 	}
-	fmt.Println("PASS Sink gRPC health check is serving")
+	fmt.Println("PASS Sink and its storage, Kafka, and worker dependencies are ready")
 
 	client := sink.NewSinkClient(connection)
 	return runScenario(ctx, client)
@@ -68,26 +68,30 @@ func run() error {
 func waitForSink(ctx context.Context, client healthpb.HealthClient) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
-	request := &healthpb.HealthCheckRequest{}
-	var lastErr error
-	for {
-		attemptContext, cancel := context.WithTimeout(ctx, time.Second)
-		response, err := client.Check(attemptContext, request)
-		cancel()
-		if err == nil && response.GetStatus() == healthpb.HealthCheckResponse_SERVING {
-			return nil
-		}
-		if err != nil {
-			lastErr = err
-		} else {
-			lastErr = fmt.Errorf("health status is %s", response.GetStatus())
-		}
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("wait for Sink: %w", errors.Join(ctx.Err(), lastErr))
-		case <-ticker.C:
+	services := []string{"", "sink.storage.primary", "sink.kafka.primary", "sink.worker.primary"}
+	for _, name := range services {
+		request := &healthpb.HealthCheckRequest{Service: name}
+		var lastErr error
+		for {
+			attemptContext, cancel := context.WithTimeout(ctx, time.Second)
+			response, err := client.Check(attemptContext, request)
+			cancel()
+			if err == nil && response.GetStatus() == healthpb.HealthCheckResponse_SERVING {
+				break
+			}
+			if err != nil {
+				lastErr = err
+			} else {
+				lastErr = fmt.Errorf("health status is %s", response.GetStatus())
+			}
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("wait for Sink service %q: %w", name, errors.Join(ctx.Err(), lastErr))
+			case <-ticker.C:
+			}
 		}
 	}
+	return nil
 }
 
 func runScenario(ctx context.Context, client sink.SinkClient) error {

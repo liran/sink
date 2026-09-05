@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
@@ -212,6 +213,11 @@ func TestConcurrentMergeDoesNotLoseSuccessfulUpdates(t *testing.T) {
 			defer waitGroup.Done()
 			request := mergeWriteRequest("counter", "1")
 			response, err := server.Write(ctx, request)
+			// Admission rejects before execution; retrying this result is safe.
+			for attempt := 0; status.Code(err) == codes.ResourceExhausted && attempt < 1000; attempt++ {
+				time.Sleep(time.Millisecond)
+				response, err = server.Write(ctx, request)
+			}
 			if err != nil {
 				t.Errorf("Write(merge) error = %v", err)
 				return

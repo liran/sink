@@ -26,7 +26,7 @@ Sink centralizes those concerns:
 | Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
 | Concurrent updates lose data | Atomic per-record Lua merges with storage revision checks |
 | A service needs more than one cluster or engine | Named stores selected by the record address, even within one batch |
-| Failures are hard to operate | Per-dependency health, bounded-cardinality metrics, bounded worker retries, and dead letters |
+| Failures are hard to operate | Per-dependency health, bounded-cardinality metrics, recoverable worker retries, and dead letters |
 
 Sink is a good fit when several workers or services need consistent record
 semantics across shared storage. It is deliberately not an ORM, a schema or
@@ -157,16 +157,21 @@ case format, direct flags, BSON examples, CI usage, and coverage guidance.
 - Operations for one record retain request order. Independent records and
   stores may execute concurrently.
 - Kafka delivery is at least once. A mutation can run again after a worker
-  crashes between applying it and committing its offset.
+  crashes between applying it and committing its offset. Applications must
+  guarantee business idempotence for every retried or replayed mutation; Sink
+  does not deduplicate business operations. A timeout can leave the outcome unknown.
 - Kafka is disabled by default per store. When enabled, Sink owns creation and
   reconciliation of that store's source and dead-letter Topics at startup.
 - Sink does not create Elasticsearch or OpenSearch indexes, mappings, or
   aliases.
-- Every configured store must be reachable at startup. In `server` and `all`
-  modes, each configured Kafka publisher is checked too. Runtime health is
-  reported separately so an unrelated healthy store can continue serving.
+- Dependencies recover independently at startup and runtime. Kafka publication
+  and consumption remain gated until that store's Topic policy is established.
+  Temporary processing failures retain source offsets for automatic recovery.
 
 ## Documentation
+
+- [Reliability and recovery](docs/reliability.md) — idempotence responsibility,
+  fault handling, capacity, durability baselines, alerting, and DLQ replay
 
 - [Architecture and behavior](docs/architecture.md) — request flow, adapters,
   batching, Lua merges, asynchronous delivery, and reliability boundaries

@@ -624,3 +624,18 @@ func bsonDocument(t testing.TB, value any) storage.Document {
 	document := storage.Document{Encoding: storage.DocumentEncodingBSON, Payload: encoded}
 	return document
 }
+
+func TestLuaResultAliasExpansionIsBoundedBeforeEncoding(t *testing.T) {
+	opts := merge.LuaOptions{MaxResultBytes: 4096}
+	source := []byte(`return function(current, incoming)
+		local t = {value = "x"}
+		for i = 1, 50 do t = {left=t, right=t} end
+		return t
+	end`)
+	merger := compileTestProgram(t, source, opts)
+	req := merge.Request{Incoming: jsonDocument(`{}`)}
+	_, err := merger.Merge(t.Context(), req)
+	if !errors.Is(err, merge.ErrExecutionExhausted) {
+		t.Fatalf("exponential alias expansion was not bounded: %v", err)
+	}
+}

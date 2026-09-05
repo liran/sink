@@ -52,6 +52,9 @@ func (s *Store) Seed(req SeedRequest) {
 }
 
 func (s *Store) Read(_ context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	if req.Budget == nil {
+		req.Budget = storage.NewReadBudget(storage.DefaultMaxReadBytes)
+	}
 	response := storage.ReadResponse{
 		Results: make([]storage.ReadResult, len(req.Operations)),
 	}
@@ -63,6 +66,10 @@ func (s *Store) Read(_ context.Context, req storage.ReadRequest) (storage.ReadRe
 		stored, exists := s.records[operation.Address.RoutingKey()]
 		if !exists {
 			response.Results[index].Status = storage.ReadStatusNotFound
+			continue
+		}
+		if err := req.Budget.Reserve(len(stored.document.Payload)); err != nil {
+			response.Results[index] = storage.ReadResult{Status: storage.ReadStatusFailed, Err: err}
 			continue
 		}
 		response.Results[index] = storage.ReadResult{

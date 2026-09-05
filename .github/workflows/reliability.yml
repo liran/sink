@@ -1,0 +1,49 @@
+name: Sustained reliability
+
+on:
+  schedule:
+    - cron: '37 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sustained-reliability
+  cancel-in-progress: false
+
+jobs:
+  soak:
+    runs-on: ubuntu-latest
+    timeout-minutes: 175
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: sink
+      - name: Check out pinned qualification suite
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: liran/sink-production-suite
+          ref: 2bf65a0bcdcc12f9c8043556b19c4b6f92a51478
+          path: suite
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: sink/go.mod
+          cache-dependency-path: |
+            sink/go.sum
+            suite/go.sum
+      - name: Run two-hour soak with active faults
+        id: soak
+        env:
+          TMPDIR: ${{ runner.temp }}
+          SINK_SUITE_DIR: ${{ github.workspace }}/suite
+        run: bash sink/scripts/test-reliability-soak.sh
+      - name: Upload fault and resource evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: reliability-evidence
+          path: ${{ runner.temp }}/sink-soak.*
+          retention-days: 14

@@ -273,7 +273,7 @@ func (s *Server) executeMergeAttempt(
 		readOperation := storage.ReadOperation{Address: operation.address}
 		readOperations = append(readOperations, readOperation)
 	}
-	readRequest := storage.ReadRequest{Operations: readOperations}
+	readRequest := storage.ReadRequest{Operations: readOperations, Budget: storage.NewReadBudget(s.maxReadBytes)}
 	readResponse, err := s.storage.Read(ctx, readRequest)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "read records for merge: %v", err)
@@ -283,10 +283,16 @@ func (s *Server) executeMergeAttempt(
 	}
 
 	candidates := make([]mergeCandidate, 0, len(operations))
+	outputBudget := storage.NewReadBudget(s.maxReadBytes)
 	for index, stored := range readResponse.Results {
 		operation := operations[index]
 		candidate, include := s.prepareMergeCandidate(ctx, operation, stored, results[operation.index])
 		if include {
+			if err := outputBudget.Reserve(len(candidate.operation.Document.Payload)); err != nil {
+				code, retryable := storageFailureDetails(err)
+				setWriteFailure(results[operation.index], code, err, retryable)
+				continue
+			}
 			candidates = append(candidates, candidate)
 		}
 	}
@@ -365,7 +371,7 @@ func (s *Server) prepareMergeCandidate(
 	merged, err := operation.merge.merger.Merge(ctx, mergeRequest)
 	if err != nil {
 		code := mergeFailureCode(err)
-		setWriteFailure(result, code, err, false)
+		setWriteFailure(result, code, err, ctx.Err() != nil)
 		return candidate, false
 	}
 	if len(merged.Document.Payload) == 0 {

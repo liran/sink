@@ -299,6 +299,9 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 		Storage:          fixture.store,
 		Lua:              luaEngine,
 		MaxMergeAttempts: 200,
+		// Counter documents are tiny; reserve enough output for all 32
+		// concurrent requests without testing admission instead of CAS.
+		MaxReadBytes: 1 << 20,
 	}
 	server, err := service.New(serverOptions)
 	if err != nil {

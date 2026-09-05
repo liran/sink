@@ -63,6 +63,9 @@ type routedRead struct {
 }
 
 func (r *Router) Read(ctx context.Context, req ReadRequest) (ReadResponse, error) {
+	if req.Budget == nil {
+		req.Budget = NewReadBudget(DefaultMaxReadBytes)
+	}
 	response := ReadResponse{Results: make([]ReadResult, len(req.Operations))}
 	groups := make(map[string]*routedRead)
 	for index, operation := range req.Operations {
@@ -85,7 +88,7 @@ func (r *Router) Read(ctx context.Context, req ReadRequest) (ReadResponse, error
 	for name, group := range groups {
 		go func() {
 			defer reads.Done()
-			request := ReadRequest{Operations: group.operations}
+			request := ReadRequest{Operations: group.operations, Budget: req.Budget}
 			routed, err := group.backend.Read(ctx, request)
 			if err != nil {
 				backendErr := BackendError(fmt.Errorf("read storage %q: %w", name, err))

@@ -156,6 +156,7 @@ type Revision struct {
 
 type ReadRequest struct {
 	Operations []ReadOperation
+	Budget     *ReadBudget
 }
 
 type ReadOperation struct {

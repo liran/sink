@@ -524,3 +524,40 @@ func TestReadFailsOverFromUnavailableEndpoint(t *testing.T) {
 		t.Fatalf("endpoint calls = first %d, second %d", firstCalls.Load(), secondCalls.Load())
 	}
 }
+
+func TestReadSplitsOversizedMultiGetResponses(t *testing.T) {
+	var calls atomic.Int32
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		var request multiGetRequest
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if len(request.Documents) > 1 {
+			_, _ = io.WriteString(w, strings.Repeat("x", 513))
+			return
+		}
+		_, _ = io.WriteString(w, `{"docs":[{"found":true,"_source":{"value":1},"_seq_no":0,"_primary_term":1}]}`)
+	}))
+	defer backend.Close()
+	opts := Options{Driver: DriverOpenSearch, Store: "primary", Endpoints: []string{backend.URL}, MaxResponseSize: 512}
+	store, err := New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, b := testAddress("a"), testAddress("b")
+	req := storage.ReadRequest{Operations: []storage.ReadOperation{{Address: a}, {Address: b}}}
+	response, err := store.Read(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range response.Results {
+		if result.Status != storage.ReadStatusFound {
+			t.Fatalf("valid split result failed: %+v", result)
+		}
+	}
+	if calls.Load() != 3 {
+		t.Fatalf("calls=%d; expected initial request and two halves", calls.Load())
+	}
+}

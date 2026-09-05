@@ -78,3 +78,28 @@ scripts/build-release-binaries.sh v0.3.2 dist
 Windows archives are not currently published because the pinned Lua runtime
 does not compile for Windows. The workflow deliberately excludes Windows
 instead of attaching an untested binary.
+
+## Reliability regression and sustained validation
+
+Default race tests include fake-broker outage recovery beyond the retry budget,
+DLQ publication failure, CREATE replay continuation, partition-prefix commits,
+rebalance cancellation, admission/cancellation, and read/Lua output budgets.
+CI also fuzzes mutation envelopes for 20 seconds on each change.
+
+`.github/workflows/reliability.yml` runs a two-hour nightly/manual soak using the
+pinned public production suite and the selected server revision. The test uses a
+unique disposable Compose project, generates a worker configuration with the
+product retry default, and injects an active-worker SIGKILL, a 45-second backend
+outage, and broker restart. It retains revision IDs, fault timeline, test output,
+container resource samples and Prometheus samples. Run it locally only with a
+working Docker engine and available qualification ports:
+
+```sh
+SINK_SUITE_DIR=/path/to/sink-production-suite bash scripts/test-reliability-soak.sh
+```
+
+The suite's business counter is explicitly idempotent. It verifies recovery and
+reconciliation, not automatic deduplication of arbitrary Lua. Scheduled runs
+become active after the workflow reaches the default branch. Real multi-node
+failover, disk pressure and backup restoration remain deployment qualification;
+see [the reliability runbook](reliability.md).

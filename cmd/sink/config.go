@@ -57,6 +57,11 @@ type config struct {
 	batchingMaxQueuedBytes int
 	luaOptions             merge.LuaOptions
 	shutdownTimeout        time.Duration
+	requestTimeout         time.Duration
+	maxInFlightRequests    int
+	maxInFlightBytes       int
+	maxStoreRequests       int
+	maxReadBytes           int
 }
 
 type backendConfig struct {
@@ -87,6 +92,11 @@ type backendKafkaConfig struct {
 	maxRetryAttempts       int
 	retryBackoff           time.Duration
 	maxRetryBackoff        time.Duration
+	deadLetterRetention    time.Duration
+	minInSyncReplicas      int
+	maxRecordBytes         int
+	maxBufferedBytes       int
+	processingTimeout      time.Duration
 }
 
 type configFile struct {
@@ -131,10 +141,15 @@ type searchConfigFile struct {
 }
 
 type serviceConfigFile struct {
-	MaxOperations    *int               `yaml:"max_operations"`
-	MaxMergeAttempts *int               `yaml:"max_merge_attempts"`
-	Batching         batchingConfigFile `yaml:"batching"`
-	Lua              luaConfigFile      `yaml:"lua"`
+	RequestTimeoutSeconds *int               `yaml:"request_timeout_seconds"`
+	MaxInFlightRequests   *int               `yaml:"max_in_flight_requests"`
+	MaxInFlightBytes      *int               `yaml:"max_in_flight_bytes"`
+	MaxStoreRequests      *int               `yaml:"max_store_requests"`
+	MaxReadBytes          *int               `yaml:"max_read_bytes"`
+	MaxOperations         *int               `yaml:"max_operations"`
+	MaxMergeAttempts      *int               `yaml:"max_merge_attempts"`
+	Batching              batchingConfigFile `yaml:"batching"`
+	Lua                   luaConfigFile      `yaml:"lua"`
 }
 
 type batchingConfigFile struct {
@@ -155,18 +170,23 @@ type luaConfigFile struct {
 }
 
 type kafkaConfigFile struct {
-	Enabled                     *bool    `yaml:"enabled"`
-	Brokers                     []string `yaml:"brokers"`
-	Topic                       string   `yaml:"topic"`
-	GroupID                     string   `yaml:"group_id"`
-	DeadLetterTopic             string   `yaml:"dead_letter_topic"`
-	TopicPartitions             *int     `yaml:"topic_partitions"`
-	TopicReplicationFactor      *int     `yaml:"topic_replication_factor"`
-	TopicRetentionHours         *int     `yaml:"topic_retention_hours"`
-	MaxPollRecords              *int     `yaml:"max_poll_records"`
-	MaxRetryAttempts            *int     `yaml:"max_retry_attempts"`
-	RetryBackoffMilliseconds    *int     `yaml:"retry_backoff_milliseconds"`
-	MaxRetryBackoffMilliseconds *int     `yaml:"max_retry_backoff_milliseconds"`
+	DeadLetterRetentionHours      *int     `yaml:"dead_letter_retention_hours"`
+	MinInSyncReplicas             *int     `yaml:"min_insync_replicas"`
+	MaxRecordBytes                *int     `yaml:"max_record_bytes"`
+	MaxBufferedBytes              *int     `yaml:"max_buffered_bytes"`
+	ProcessingTimeoutMilliseconds *int     `yaml:"processing_timeout_milliseconds"`
+	Enabled                       *bool    `yaml:"enabled"`
+	Brokers                       []string `yaml:"brokers"`
+	Topic                         string   `yaml:"topic"`
+	GroupID                       string   `yaml:"group_id"`
+	DeadLetterTopic               string   `yaml:"dead_letter_topic"`
+	TopicPartitions               *int     `yaml:"topic_partitions"`
+	TopicReplicationFactor        *int     `yaml:"topic_replication_factor"`
+	TopicRetentionHours           *int     `yaml:"topic_retention_hours"`
+	MaxPollRecords                *int     `yaml:"max_poll_records"`
+	MaxRetryAttempts              *int     `yaml:"max_retry_attempts"`
+	RetryBackoffMilliseconds      *int     `yaml:"retry_backoff_milliseconds"`
+	MaxRetryBackoffMilliseconds   *int     `yaml:"max_retry_backoff_milliseconds"`
 }
 
 func loadConfig(path string) (config, error) {
@@ -215,6 +235,9 @@ func loadConfig(path string) (config, error) {
 	}
 	loaded.maxMergeAttempts, err = positiveIntOrDefault("service.max_merge_attempts", file.Service.MaxMergeAttempts, 3)
 	if err != nil {
+		return loaded, err
+	}
+	if err := loaded.loadReliabilityConfig(file.Service); err != nil {
 		return loaded, err
 	}
 	loaded.batchingEnabled = boolOrDefault(file.Service.Batching.Enabled, true)
@@ -311,6 +334,9 @@ func loadKafkaConfig(prefix string, file kafkaConfigFile) (backendKafkaConfig, e
 		return loaded, fmt.Errorf("%s.topic_retention_hours is too large", prefix)
 	}
 	loaded.topicRetention = time.Duration(topicRetentionHours) * time.Hour
+	if err := loaded.loadReliabilityConfig(prefix, file); err != nil {
+		return loaded, err
+	}
 	loaded.maxPollRecords, err = positiveIntOrDefault(prefix+".max_poll_records", file.MaxPollRecords, 500)
 	if err != nil {
 		return loaded, err

@@ -176,6 +176,9 @@ func (e *LuaEngine) store(digest [sha256.Size]byte, compiled *compiler.Proto) *c
 
 func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	var empty Result
+	if len(req.Incoming.Payload) > m.engine.options.MaxResultBytes || (req.Current != nil && len(req.Current.Payload) > m.engine.options.MaxResultBytes) {
+		return empty, fmt.Errorf("%w: merge input exceeds the document byte limit", ErrExecutionExhausted)
+	}
 	incoming, err := decodeJSONObject(req.Incoming)
 	if err != nil {
 		return empty, fmt.Errorf("%w: %v", ErrInvalidIncoming, err)
@@ -225,6 +228,9 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	}
 	if len(merged) != 1 {
 		return empty, fmt.Errorf("%w: function returned %d values; expected one", ErrInvalidResult, len(merged))
+	}
+	if err := validateResultBudget(executionContext, merged[0], m.engine.options.MaxResultBytes); err != nil {
+		return empty, err
 	}
 	document, err := bridge.encodeJSONObject(merged[0], incoming.encoding)
 	if err != nil {

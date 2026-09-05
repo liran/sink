@@ -15,6 +15,8 @@ import (
 	"github.com/liran/sink/internal/storage"
 )
 
+var errResponseTooLarge = errors.New("search response exceeds configured byte limit")
+
 type requestOptions struct {
 	method      string
 	path        string
@@ -111,7 +113,7 @@ func (s *Store) performOnce(ctx context.Context, opts requestOptions, endpoint *
 		return empty, storage.BackendError(err)
 	}
 	if int64(len(body)) > s.maxResponseSize {
-		return empty, fmt.Errorf("%s response exceeds %d bytes", s.driver, s.maxResponseSize)
+		return empty, fmt.Errorf("%w: %s maximum is %d bytes", errResponseTooLarge, s.driver, s.maxResponseSize)
 	}
 	response := apiResponse{statusCode: httpResponse.StatusCode, body: body}
 	return response, nil

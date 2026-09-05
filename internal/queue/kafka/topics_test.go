@@ -31,7 +31,7 @@ func TestEnsureTopicsCreatesAndReconcilesTopicSettings(t *testing.T) {
 	admin := kadm.NewClient(client)
 	initialRetention := strconv.FormatInt(time.Hour.Milliseconds(), 10)
 	configs := map[string]*string{"retention.ms": &initialRetention}
-	_, err = admin.CreateTopic(t.Context(), 2, 2, configs, sourceTopic)
+	_, err = admin.CreateTopic(t.Context(), 4, 2, configs, sourceTopic)
 	if err != nil {
 		t.Fatalf("CreateTopic() error = %v", err)
 	}
@@ -43,6 +43,7 @@ func TestEnsureTopicsCreatesAndReconcilesTopicSettings(t *testing.T) {
 		Partitions:        4,
 		ReplicationFactor: 2,
 		Retention:         72 * time.Hour,
+		DeadLetterTopic:   deadLetterTopic,
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
@@ -75,9 +76,17 @@ func TestEnsureTopicsCreatesAndReconcilesTopicSettings(t *testing.T) {
 	}
 	expectedRetention := strconv.FormatInt((72 * time.Hour).Milliseconds(), 10)
 	for _, topic := range topics {
+		if topic == deadLetterTopic {
+			expectedRetention = strconv.FormatInt((30 * 24 * time.Hour).Milliseconds(), 10)
+		}
 		resource, resourceErr := resources.On(topic, nil)
 		if resourceErr != nil {
 			t.Fatalf("DescribeTopicConfigs(%q) error = %v", topic, resourceErr)
+		}
+		for key, expected := range map[string]string{"min.insync.replicas": "2", "unclean.leader.election.enable": "false", "cleanup.policy": "delete"} {
+			if actual := topicConfig(resource, key); actual != expected {
+				t.Fatalf("%s %s=%s, want %s", topic, key, actual, expected)
+			}
 		}
 		if actual := topicConfig(resource, "retention.ms"); actual != expectedRetention {
 			t.Fatalf("topic %q retention.ms = %q", topic, actual)
@@ -138,7 +147,7 @@ func TestEnsureTopicsRejectsPartitionDecrease(t *testing.T) {
 		Retention:         72 * time.Hour,
 	}
 	err = kafka.EnsureTopics(t.Context(), topicOptions)
-	if err == nil || !strings.Contains(err.Error(), "cannot decrease partition count") {
+	if err == nil || !strings.Contains(err.Error(), "online partition changes are refused") {
 		t.Fatalf("EnsureTopics() error = %v", err)
 	}
 }
@@ -169,4 +178,26 @@ func topicConfig(resource kadm.ResourceConfig, name string) string {
 		}
 	}
 	return ""
+}
+
+func TestEnsureTopicsRejectsOnlinePartitionIncrease(t *testing.T) {
+	cluster, err := kfake.NewCluster(kfake.NumBrokers(1), kfake.SeedTopics(1, "ordered"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(cluster.Close)
+	opts := kafka.TopicOptions{Brokers: cluster.ListenAddrs(), Topics: []string{"ordered"}, Partitions: 2, ReplicationFactor: 1, Retention: time.Hour}
+	if err := kafka.EnsureTopics(t.Context(), opts); err == nil {
+		t.Fatal("online partition increase was allowed")
+	}
+	clientOptions := []kgo.Opt{kgo.SeedBrokers(cluster.ListenAddrs()...)}
+	client, err := kgo.NewClient(clientOptions...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	details, err := kadm.NewClient(client).ListTopics(t.Context(), "ordered")
+	if err != nil || len(details["ordered"].Partitions) != 1 {
+		t.Fatalf("ordered topic was changed: %v %v", details, err)
+	}
 }

@@ -30,6 +30,8 @@ type Store struct {
 	metadataField       string
 	maxConcurrentWrites int
 	maxConcurrentGroups int
+	groups              chan struct{}
+	writes              chan struct{}
 }
 
 func New(client *mongo.Client, opts Options) (*Store, error) {
@@ -65,6 +67,8 @@ func New(client *mongo.Client, opts Options) (*Store, error) {
 		metadataField:       metadataField,
 		maxConcurrentWrites: maxConcurrentWrites,
 		maxConcurrentGroups: maxConcurrentGroups,
+		groups:              make(chan struct{}, maxConcurrentGroups),
+		writes:              make(chan struct{}, maxConcurrentWrites),
 	}
 	return store, nil
 }

@@ -65,6 +65,9 @@ jobs:
       - name: Run race tests
         run: go test -race ./... -count=1
 
+      - name: Fuzz mutation envelopes
+        run: go test ./internal/queue -run='^$' -fuzz=FuzzMutationEnvelope -fuzztime=20s -parallel=2
+
       - name: Run vet
         run: go vet ./...
 

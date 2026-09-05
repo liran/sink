@@ -7,6 +7,8 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/merge"
@@ -24,23 +26,38 @@ const (
 )
 
 type Options struct {
-	Storage          storage.Storage
-	Lua              *merge.LuaEngine
-	Publisher        queue.Publisher
-	MaxOperations    int
-	MaxMergeAttempts int
-	Metrics          *sinkmetrics.Metrics
+	Storage             storage.Storage
+	Lua                 *merge.LuaEngine
+	Publisher           queue.Publisher
+	MaxOperations       int
+	MaxMergeAttempts    int
+	Metrics             *sinkmetrics.Metrics
+	RequestTimeout      time.Duration
+	MaxInFlightRequests int
+	MaxInFlightBytes    int
+	MaxStoreRequests    int
+	MaxReadBytes        int
+	StoreNames          []string
 }
 
 type Server struct {
 	sink.UnimplementedSinkServer
 
-	storage          storage.Storage
-	lua              *merge.LuaEngine
-	publisher        queue.Publisher
-	maxOperations    int
-	maxMergeAttempts int
-	metrics          *sinkmetrics.Metrics
+	storage             storage.Storage
+	lua                 *merge.LuaEngine
+	publisher           queue.Publisher
+	maxOperations       int
+	maxMergeAttempts    int
+	metrics             *sinkmetrics.Metrics
+	requestTimeout      time.Duration
+	maxInFlightRequests int
+	maxInFlightBytes    int
+	maxStoreRequests    int
+	maxReadBytes        int
+	admissionMu         sync.Mutex
+	inFlightRequests    int
+	inFlightBytes       int
+	storeRequests       map[string]int
 }
 
 func New(opts Options) (*Server, error) {
@@ -56,6 +73,28 @@ func New(opts Options) (*Server, error) {
 	if opts.MaxMergeAttempts < 0 {
 		return nil, errors.New("create Sink server: max merge attempts cannot be negative")
 	}
+	if opts.RequestTimeout < 0 || opts.MaxInFlightRequests < 0 || opts.MaxInFlightBytes < 0 || opts.MaxStoreRequests < 0 || opts.MaxReadBytes < 0 {
+		return nil, errors.New("create Sink server: resource limits cannot be negative")
+	}
+	if opts.RequestTimeout == 0 {
+		opts.RequestTimeout = defaultRequestTimeout
+	}
+	if opts.MaxInFlightRequests == 0 {
+		opts.MaxInFlightRequests = 128
+	}
+	if opts.MaxInFlightBytes == 0 {
+		opts.MaxInFlightBytes = 256 << 20
+	}
+	if opts.MaxStoreRequests == 0 {
+		opts.MaxStoreRequests = 32
+	}
+	if opts.MaxReadBytes == 0 {
+		opts.MaxReadBytes = storage.DefaultMaxReadBytes
+	}
+	storeRequests := make(map[string]int, len(opts.StoreNames))
+	for _, name := range opts.StoreNames {
+		storeRequests[name] = 0
+	}
 
 	maxOperations := opts.MaxOperations
 	if maxOperations == 0 {
@@ -67,12 +106,18 @@ func New(opts Options) (*Server, error) {
 	}
 
 	server := &Server{
-		storage:          opts.Storage,
-		lua:              opts.Lua,
-		publisher:        opts.Publisher,
-		maxOperations:    maxOperations,
-		maxMergeAttempts: maxMergeAttempts,
-		metrics:          opts.Metrics,
+		storage:             opts.Storage,
+		lua:                 opts.Lua,
+		publisher:           opts.Publisher,
+		maxOperations:       maxOperations,
+		maxMergeAttempts:    maxMergeAttempts,
+		metrics:             opts.Metrics,
+		requestTimeout:      opts.RequestTimeout,
+		maxInFlightRequests: opts.MaxInFlightRequests,
+		maxInFlightBytes:    opts.MaxInFlightBytes,
+		maxStoreRequests:    opts.MaxStoreRequests,
+		maxReadBytes:        opts.MaxReadBytes,
+		storeRequests:       storeRequests,
 	}
 	return server, nil
 }
@@ -84,6 +129,11 @@ func (s *Server) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadRes
 	if err := s.validateOperationCount(len(req.GetOperations())); err != nil {
 		return nil, err
 	}
+	ctx, release, err := s.beginRequest(ctx, req.SizeVT()+s.maxReadBytes, operationStores(req.GetOperations()))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	response := &sink.ReadResponse{
 		Results: make([]*sink.ReadResult, len(req.GetOperations())),
@@ -108,7 +158,7 @@ func (s *Server) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadRes
 	if len(storageOperations) == 0 {
 		return response, nil
 	}
-	storageRequest := storage.ReadRequest{Operations: storageOperations}
+	storageRequest := storage.ReadRequest{Operations: storageOperations, Budget: storage.NewReadBudget(s.maxReadBytes)}
 	storageResponse, err := s.storage.Read(ctx, storageRequest)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "read records: %v", err)
@@ -134,6 +184,11 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 	if !validCompletionMode(req.GetCompletionMode()) {
 		return nil, status.Error(codes.InvalidArgument, "write request has an invalid completion mode")
 	}
+	ctx, release, err := s.beginRequest(ctx, s.writeExecutionBytes(req), operationStores(req.GetOperations()))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	luaPrograms, err := parseLuaPrograms(req.GetLuaPrograms())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "write request Lua programs: %v", err)
@@ -147,6 +202,9 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 		result := &sink.WriteResult{OperationIndex: uint32(index)}
 		response.Results[index] = result
 
+		if err := contextError(ctx); err != nil {
+			return nil, err
+		}
 		parsed, err := s.parseWrite(index, operation, luaPrograms)
 		if err != nil {
 			setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, err, false)
@@ -208,6 +266,11 @@ func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.Del
 	if !validCompletionMode(req.GetCompletionMode()) {
 		return nil, status.Error(codes.InvalidArgument, "delete request has an invalid completion mode")
 	}
+	ctx, release, err := s.beginRequest(ctx, req.SizeVT(), operationStores(req.GetOperations()))
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	response := &sink.DeleteResponse{
 		Results: make([]*sink.DeleteResult, len(req.GetOperations())),

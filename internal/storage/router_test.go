@@ -191,3 +191,43 @@ func routerTestAddress(store string, key string) storage.Address {
 	}
 	return address
 }
+
+func TestRouterReadBudgetIncludesRepeatedKeysAcrossStores(t *testing.T) {
+	first, second := memory.New(), memory.New()
+	backends := map[string]storage.Storage{"a": first, "b": second}
+	router, err := storage.NewRouter(backends)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := routerTestAddress("a", "same")
+	b := routerTestAddress("b", "same")
+	doc := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(`{"value":"x"}`)}
+	write := storage.WriteRequest{Operations: []storage.WriteOperation{{Address: a, Document: doc}, {Address: b, Document: doc}}}
+	if _, err := router.Write(t.Context(), write); err != nil {
+		t.Fatal(err)
+	}
+	// Enough for exactly one copied result, even though each store sees a subrequest.
+	budget := storage.NewReadBudget(len(doc.Payload) + 128)
+	read := storage.ReadRequest{Budget: budget, Operations: []storage.ReadOperation{{Address: a}, {Address: a}, {Address: b}}}
+	response, err := router.Read(t.Context(), read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found, failed := 0, 0
+	for _, result := range response.Results {
+		switch result.Status {
+		case storage.ReadStatusFound:
+			found++
+		case storage.ReadStatusFailed:
+			failed++
+			if len(result.Document.Payload) != 0 {
+				t.Fatal("rejected result retained a payload")
+			}
+		default:
+			t.Fatalf("unexpected result: %v", result)
+		}
+	}
+	if found != 1 || failed != 2 {
+		t.Fatalf("budget was not shared: found=%d failed=%d", found, failed)
+	}
+}
