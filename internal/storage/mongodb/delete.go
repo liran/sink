@@ -48,15 +48,22 @@ func (s *Store) Delete(ctx context.Context, req storage.DeleteRequest) (storage.
 		group.operations = append(group.operations, work)
 	}
 
-	limit := make(chan struct{}, s.maxConcurrentGroups)
 	var deletes sync.WaitGroup
 	deletes.Add(len(groups))
 	for _, group := range groups {
+		select {
+		case s.groups <- struct{}{}:
+		case <-ctx.Done():
+			for _, operation := range group.operations {
+				setDeleteError(&response.Results[operation.index], storage.BackendError(ctx.Err()))
+			}
+			deletes.Done()
+			continue
+		}
 		go func() {
 			defer deletes.Done()
-			limit <- struct{}{}
 			defer func() {
-				<-limit
+				<-s.groups
 			}()
 			s.deleteGroup(ctx, group, response.Results)
 		}()

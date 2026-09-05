@@ -33,6 +33,7 @@ type requestBatcherOptions[Request any, Response any] struct {
 	MaxQueuedBytes      int
 	Execute             func(context.Context, []*batchCall[Request, Response])
 	Metrics             *sinkmetrics.Metrics
+	ExecutionTimeout    time.Duration
 }
 
 type requestBatcher[Request any, Response any] struct {
@@ -44,6 +45,7 @@ type requestBatcher[Request any, Response any] struct {
 	maxQueuedBytes      int
 	execute             func(context.Context, []*batchCall[Request, Response])
 	metrics             *sinkmetrics.Metrics
+	executionTimeout    time.Duration
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	input               chan *batchCall[Request, Response]
@@ -65,9 +67,13 @@ func newRequestBatcher[Request any, Response any](opts requestBatcherOptions[Req
 		maxQueuedBytes:      opts.MaxQueuedBytes,
 		execute:             opts.Execute,
 		metrics:             opts.Metrics,
+		executionTimeout:    opts.ExecutionTimeout,
 		ctx:                 ctx,
 		cancel:              cancel,
 		input:               make(chan *batchCall[Request, Response], opts.MaxQueuedOperations),
+	}
+	if batcher.executionTimeout == 0 {
+		batcher.executionTimeout = defaultRequestTimeout
 	}
 	batcher.waitGroup.Add(1)
 	go batcher.run()
@@ -341,20 +347,45 @@ func (b *requestBatcher[Request, Response]) executeBatch(
 func (b *requestBatcher[Request, Response]) executionContext(
 	calls []*batchCall[Request, Response],
 ) (context.Context, context.CancelFunc) {
-	// One caller timing out must not cancel work still required by another
-	// caller in the same batch. The latest deadline bounds shared execution;
-	// any caller without a deadline leaves it bounded only by shutdown.
+	// Keep shared work alive while at least one caller still needs it, but
+	// never extend execution beyond the server's own time budget.
+	limit := time.Now().Add(b.executionTimeout)
 	var latest time.Time
 	for _, call := range calls {
 		deadline, ok := call.ctx.Deadline()
 		if !ok {
-			return context.WithCancel(b.ctx)
+			deadline = limit
 		}
 		if deadline.After(latest) {
 			latest = deadline
 		}
 	}
-	return context.WithDeadline(b.ctx, latest)
+	if latest.IsZero() || latest.After(limit) {
+		latest = limit
+	}
+	ctx, cancel := context.WithDeadline(b.ctx, latest)
+	var mu sync.Mutex
+	remaining := len(calls)
+	stops := make([]func() bool, 0, len(calls))
+	for _, call := range calls {
+		stop := context.AfterFunc(call.ctx, func() {
+			mu.Lock()
+			remaining--
+			last := remaining == 0
+			mu.Unlock()
+			if last {
+				cancel()
+			}
+		})
+		stops = append(stops, stop)
+	}
+	cleanup := func() {
+		for _, stop := range stops {
+			stop()
+		}
+		cancel()
+	}
+	return ctx, cleanup
 }
 
 func (b *requestBatcher[Request, Response]) failCalls(calls []*batchCall[Request, Response]) {

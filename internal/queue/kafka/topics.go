@@ -16,21 +16,35 @@ import (
 )
 
 const (
-	topicRetentionConfig      = "retention.ms"
 	topicPollInterval         = 250 * time.Millisecond
 	maxTopicPartitions        = int(1<<31 - 1)
 	maxTopicReplicationFactor = int(1<<15 - 1)
 )
 
 type TopicOptions struct {
-	Brokers           []string
-	Topics            []string
-	Partitions        int
-	ReplicationFactor int
-	Retention         time.Duration
+	Brokers             []string
+	Topics              []string
+	Partitions          int
+	ReplicationFactor   int
+	Retention           time.Duration
+	DeadLetterTopic     string
+	DeadLetterRetention time.Duration
+	MinInSyncReplicas   int
+	MaxRecordBytes      int
 }
 
 func EnsureTopics(ctx context.Context, opts TopicOptions) error {
+	if opts.DeadLetterRetention == 0 {
+		opts.DeadLetterRetention = 30 * 24 * time.Hour
+	}
+	if opts.MinInSyncReplicas == 0 {
+		opts.MinInSyncReplicas = min(2, opts.ReplicationFactor)
+	}
+	if opts.MaxRecordBytes == 0 {
+		opts.MaxRecordBytes = defaultMaxRecordBytes
+	}
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
 	if err := validateTopicOptions(opts); err != nil {
 		return err
 	}
@@ -76,6 +90,15 @@ func validateTopicOptions(opts TopicOptions) error {
 	if opts.ReplicationFactor > maxTopicReplicationFactor {
 		return fmt.Errorf("configure Kafka topics: replication factor must not exceed %d", maxTopicReplicationFactor)
 	}
+	if opts.MinInSyncReplicas < 1 || opts.MinInSyncReplicas > opts.ReplicationFactor {
+		return errors.New("configure Kafka topics: min ISR must be between 1 and the replication factor")
+	}
+	if opts.MaxRecordBytes < 1 || opts.MaxRecordBytes > 64<<20 {
+		return errors.New("configure Kafka topics: record limit must not exceed 64 MiB")
+	}
+	if opts.DeadLetterRetention < time.Millisecond {
+		return errors.New("configure Kafka topics: dead-letter retention must be positive")
+	}
 	if opts.Retention < time.Millisecond {
 		return errors.New("configure Kafka topics: retention must be at least one millisecond")
 	}
@@ -119,7 +142,10 @@ func ensureTopics(ctx context.Context, admin *kadm.Client, opts TopicOptions) er
 	if replicationErr != nil {
 		return replicationErr
 	}
-	return reconcileRetention(ctx, admin, opts)
+	if err := reconcileTopicPolicy(ctx, admin, opts); err != nil {
+		return err
+	}
+	return verifyTopicPolicy(ctx, admin, opts)
 }
 
 func loadBrokerIDs(ctx context.Context, admin *kadm.Client) ([]int32, error) {
@@ -180,31 +206,15 @@ func waitForTopics(ctx context.Context, admin *kadm.Client, topics []string) (ka
 }
 
 func createTopics(ctx context.Context, admin *kadm.Client, opts TopicOptions, topics []string) error {
-	retentionMilliseconds := strconv.FormatInt(opts.Retention.Milliseconds(), 10)
-	configs := map[string]*string{
-		topicRetentionConfig: &retentionMilliseconds,
-	}
-	slog.Info(
-		"creating Kafka topics",
-		"topics", topics,
-		"partitions", opts.Partitions,
-		"replication_factor", opts.ReplicationFactor,
-		"retention", opts.Retention,
-	)
-	responses, err := admin.CreateTopics(
-		ctx,
-		int32(opts.Partitions),
-		int16(opts.ReplicationFactor),
-		configs,
-		topics...,
-	)
-	if err != nil {
-		return fmt.Errorf("create Kafka topics: %w", err)
-	}
 	for _, topic := range topics {
-		response, exists := responses[topic]
-		if !exists {
-			return fmt.Errorf("create Kafka topic %q: response is missing", topic)
+		policy := topicPolicy(opts, topic)
+		configs := make(map[string]*string, len(policy))
+		for name, value := range policy {
+			configs[name] = &value
+		}
+		response, err := admin.CreateTopic(ctx, int32(opts.Partitions), int16(opts.ReplicationFactor), configs, topic)
+		if err != nil {
+			return fmt.Errorf("create Kafka topic %q: %w", topic, err)
 		}
 		if response.Err != nil && !errors.Is(response.Err, kerr.TopicAlreadyExists) {
 			return fmt.Errorf("create Kafka topic %q: %w", topic, response.Err)
@@ -213,52 +223,29 @@ func createTopics(ctx context.Context, admin *kadm.Client, opts TopicOptions, to
 	return nil
 }
 
-func reconcilePartitionCounts(
-	ctx context.Context,
-	admin *kadm.Client,
-	opts TopicOptions,
-	details kadm.TopicDetails,
-) error {
+func topicPolicy(opts TopicOptions, topic string) map[string]string {
+	retention := opts.Retention
+	if topic == opts.DeadLetterTopic {
+		retention = opts.DeadLetterRetention
+	}
+	policy := map[string]string{
+		"retention.ms":                   strconv.FormatInt(retention.Milliseconds(), 10),
+		"min.insync.replicas":            strconv.Itoa(opts.MinInSyncReplicas),
+		"cleanup.policy":                 "delete",
+		"unclean.leader.election.enable": "false",
+		"max.message.bytes":              strconv.Itoa(opts.MaxRecordBytes + kafkaRecordOverhead),
+	}
+	return policy
+}
+
+func reconcilePartitionCounts(_ context.Context, _ *kadm.Client, opts TopicOptions, details kadm.TopicDetails) error {
 	for _, topic := range opts.Topics {
-		detail := details[topic]
-		partitions := len(detail.Partitions)
-		if partitions > opts.Partitions {
-			return fmt.Errorf(
-				"kafka topic %q has %d partitions, configured %d; Kafka cannot decrease partition count without recreating the topic",
-				topic,
-				partitions,
-				opts.Partitions,
-			)
-		}
-		if partitions == opts.Partitions {
-			continue
-		}
-		slog.Info(
-			"increasing Kafka topic partitions",
-			"topic", topic,
-			"current_partitions", partitions,
-			"target_partitions", opts.Partitions,
-		)
-		responses, err := admin.UpdatePartitions(ctx, opts.Partitions, topic)
-		if err != nil {
-			return fmt.Errorf("increase Kafka topic %q to %d partitions: %w", topic, opts.Partitions, err)
-		}
-		response, exists := responses[topic]
-		if !exists {
-			return fmt.Errorf("increase Kafka topic %q partitions: response is missing", topic)
-		}
-		if response.Err != nil {
-			if errors.Is(response.Err, kerr.InvalidPartitions) {
-				waitErr := waitForPartitionCount(ctx, admin, topic, opts.Partitions)
-				if waitErr == nil {
-					continue
-				}
-				return waitErr
-			}
-			return fmt.Errorf("increase Kafka topic %q to %d partitions: %w", topic, opts.Partitions, response.Err)
+		partitions := len(details[topic].Partitions)
+		if partitions != opts.Partitions {
+			return fmt.Errorf("kafka topic %q has %d partitions, configured %d; online partition changes are refused to preserve record ordering; pause all publishers, drain consumers, and migrate the topic explicitly", topic, partitions, opts.Partitions)
 		}
 	}
-	return waitForPartitionCounts(ctx, admin, opts)
+	return nil
 }
 
 func reconcileReplicationFactors(
@@ -400,68 +387,6 @@ func waitForReplicationFactors(ctx context.Context, admin *kadm.Client, opts Top
 	}
 }
 
-func waitForPartitionCounts(ctx context.Context, admin *kadm.Client, opts TopicOptions) error {
-	for {
-		details, err := loadTopicDetails(ctx, admin, opts.Topics)
-		if err != nil {
-			return err
-		}
-		missing := missingTopics(details, opts.Topics)
-		if len(missing) > 0 {
-			return fmt.Errorf("configure Kafka topics: topics disappeared while waiting for partition counts: %s", strings.Join(missing, ", "))
-		}
-		matched := true
-		for _, topic := range opts.Topics {
-			partitions := len(details[topic].Partitions)
-			if partitions > opts.Partitions {
-				return fmt.Errorf(
-					"kafka topic %q has %d partitions, configured %d; Kafka cannot decrease partition count without recreating the topic",
-					topic,
-					partitions,
-					opts.Partitions,
-				)
-			}
-			if partitions != opts.Partitions {
-				matched = false
-				break
-			}
-		}
-		if matched {
-			return nil
-		}
-		if err := waitForTopicPoll(ctx); err != nil {
-			return err
-		}
-	}
-}
-
-func waitForPartitionCount(ctx context.Context, admin *kadm.Client, topic string, expected int) error {
-	for {
-		details, err := loadTopicDetails(ctx, admin, []string{topic})
-		if err != nil {
-			return err
-		}
-		if !details.Has(topic) {
-			return fmt.Errorf("configure Kafka topic %q: topic disappeared while waiting for partition count", topic)
-		}
-		partitions := len(details[topic].Partitions)
-		if partitions > expected {
-			return fmt.Errorf(
-				"kafka topic %q has %d partitions, configured %d; Kafka cannot decrease partition count without recreating the topic",
-				topic,
-				partitions,
-				expected,
-			)
-		}
-		if partitions == expected {
-			return nil
-		}
-		if err := waitForTopicPoll(ctx); err != nil {
-			return err
-		}
-	}
-}
-
 func waitForTopicPoll(ctx context.Context) error {
 	timer := time.NewTimer(topicPollInterval)
 	defer timer.Stop()
@@ -473,76 +398,68 @@ func waitForTopicPoll(ctx context.Context) error {
 	}
 }
 
-func reconcileRetention(ctx context.Context, admin *kadm.Client, opts TopicOptions) error {
-	retentionMilliseconds := strconv.FormatInt(opts.Retention.Milliseconds(), 10)
+func reconcileTopicPolicy(ctx context.Context, admin *kadm.Client, opts TopicOptions) error {
 	resources, err := admin.DescribeTopicConfigs(ctx, opts.Topics...)
 	if err != nil {
-		return fmt.Errorf("describe Kafka topic retention: %w", err)
+		return fmt.Errorf("describe Kafka topic policy: %w", err)
 	}
 	for _, topic := range opts.Topics {
-		resource, resourceErr := resources.On(topic, nil)
-		if resourceErr != nil {
-			return fmt.Errorf("describe Kafka topic %q retention: %w", topic, resourceErr)
+		resource, err := resources.On(topic, nil)
+		if err != nil {
+			return err
 		}
-		if resource.Err != nil {
-			return fmt.Errorf("describe Kafka topic %q retention: %w", topic, resource.Err)
+		current := make(map[string]string)
+		for _, config := range resource.Configs {
+			if config.Value != nil {
+				current[config.Key] = *config.Value
+			}
 		}
-		if topicConfigValue(resource, topicRetentionConfig) == retentionMilliseconds {
+		changes := make([]kadm.AlterConfig, 0)
+		for name, value := range topicPolicy(opts, topic) {
+			if current[name] == value {
+				continue
+			}
+			change := kadm.AlterConfig{Name: name, Value: &value, Op: kadm.SetConfig}
+			changes = append(changes, change)
+		}
+		if len(changes) == 0 {
 			continue
 		}
-		alterConfig := kadm.AlterConfig{
-			Op:    kadm.SetConfig,
-			Name:  topicRetentionConfig,
-			Value: &retentionMilliseconds,
-		}
-		configs := []kadm.AlterConfig{alterConfig}
-		slog.Info(
-			"updating Kafka topic retention",
-			"topic", topic,
-			"retention", opts.Retention,
-		)
-		responses, alterErr := admin.AlterTopicConfigs(ctx, configs, topic)
-		if alterErr != nil {
-			return fmt.Errorf("set Kafka topic %q retention: %w", topic, alterErr)
-		}
-		response, responseErr := responses.On(topic, nil)
-		if responseErr != nil {
-			return fmt.Errorf("set Kafka topic %q retention: %w", topic, responseErr)
-		}
-		if response.Err != nil {
-			return fmt.Errorf("set Kafka topic %q retention: %w", topic, response.Err)
-		}
-	}
-	return waitForRetention(ctx, admin, opts.Topics, retentionMilliseconds)
-}
-
-func topicConfigValue(resource kadm.ResourceConfig, name string) string {
-	for _, configured := range resource.Configs {
-		if configured.Key == name && configured.Value != nil {
-			return *configured.Value
-		}
-	}
-	return ""
-}
-
-func waitForRetention(ctx context.Context, admin *kadm.Client, topics []string, expected string) error {
-	for {
-		resources, err := admin.DescribeTopicConfigs(ctx, topics...)
+		responses, err := admin.AlterTopicConfigs(ctx, changes, topic)
 		if err != nil {
-			return fmt.Errorf("verify Kafka topic retention: %w", err)
+			return fmt.Errorf("configure Kafka topic %q: %w", topic, err)
+		}
+		if response, err := responses.On(topic, nil); err != nil {
+			return err
+		} else if response.Err != nil {
+			return response.Err
+		}
+	}
+	return nil
+}
+
+func verifyTopicPolicy(ctx context.Context, admin *kadm.Client, opts TopicOptions) error {
+	for {
+		resources, err := admin.DescribeTopicConfigs(ctx, opts.Topics...)
+		if err != nil {
+			return err
 		}
 		matched := true
-		for _, topic := range topics {
-			resource, resourceErr := resources.On(topic, nil)
-			if resourceErr != nil {
-				return fmt.Errorf("verify Kafka topic %q retention: %w", topic, resourceErr)
+		for _, topic := range opts.Topics {
+			resource, err := resources.On(topic, nil)
+			if err != nil {
+				return err
 			}
-			if resource.Err != nil {
-				return fmt.Errorf("verify Kafka topic %q retention: %w", topic, resource.Err)
+			current := make(map[string]string)
+			for _, configured := range resource.Configs {
+				if configured.Value != nil {
+					current[configured.Key] = *configured.Value
+				}
 			}
-			if topicConfigValue(resource, topicRetentionConfig) != expected {
-				matched = false
-				break
+			for key, expected := range topicPolicy(opts, topic) {
+				if current[key] != expected {
+					matched = false
+				}
 			}
 		}
 		if matched {

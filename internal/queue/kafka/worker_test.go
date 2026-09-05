@@ -80,7 +80,7 @@ func TestHandleFetchesContinuesAfterRecoverableFetchError(t *testing.T) {
 	topic := kgo.FetchTopic{Topic: "mutations", Partitions: []kgo.FetchPartition{partition}}
 	fetch := kgo.Fetch{Topics: []kgo.FetchTopic{topic}}
 	fetches := kgo.Fetches{fetch}
-	if err := worker.handleFetches(t.Context(), fetches); err != nil {
+	if _, err := worker.handleFetches(t.Context(), fetches); err != nil {
 		t.Fatalf("handleFetches() error = %v", err)
 	}
 }
@@ -91,7 +91,7 @@ func TestHandleFetchesRejectsClosedClient(t *testing.T) {
 	topic := kgo.FetchTopic{Partitions: []kgo.FetchPartition{partition}}
 	fetch := kgo.Fetch{Topics: []kgo.FetchTopic{topic}}
 	fetches := kgo.Fetches{fetch}
-	if err := worker.handleFetches(t.Context(), fetches); err == nil {
+	if _, err := worker.handleFetches(t.Context(), fetches); err == nil {
 		t.Fatal("handleFetches() error = nil")
 	}
 }

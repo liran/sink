@@ -7,6 +7,7 @@ import (
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/queue"
+	"github.com/liran/sink/internal/storage"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -97,7 +98,8 @@ func applyPublishWriteResult(result *sink.WriteResult, published queue.PublishRe
 	case queue.PublishStatusAccepted:
 		result.Status = sink.WriteStatus_WRITE_STATUS_ACCEPTED
 	case queue.PublishStatusFailed:
-		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_UNAVAILABLE, published.Err, true)
+		code, retryable := storageFailureDetails(storage.BackendError(published.Err))
+		setWriteFailure(result, code, published.Err, retryable)
 	default:
 		err := errors.New("publisher returned an unsupported status")
 		setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)
@@ -109,7 +111,8 @@ func applyPublishDeleteResult(result *sink.DeleteResult, published queue.Publish
 	case queue.PublishStatusAccepted:
 		result.Status = sink.DeleteStatus_DELETE_STATUS_ACCEPTED
 	case queue.PublishStatusFailed:
-		setDeleteFailure(result, sink.FailureCode_FAILURE_CODE_UNAVAILABLE, published.Err, true)
+		code, retryable := storageFailureDetails(storage.BackendError(published.Err))
+		setDeleteFailure(result, code, published.Err, retryable)
 	default:
 		err := errors.New("publisher returned an unsupported status")
 		setDeleteFailure(result, sink.FailureCode_FAILURE_CODE_INTERNAL, err, false)

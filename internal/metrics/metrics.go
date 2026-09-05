@@ -37,6 +37,18 @@ type Metrics struct {
 	kafkaWorkerMutations   *prometheus.CounterVec
 	kafkaWorkerRetries     prometheus.Counter
 	kafkaWorkerDeadLetters prometheus.Counter
+	admissionRequests      prometheus.Gauge
+	admissionBytes         prometheus.Gauge
+	admissionRejected      prometheus.Counter
+	workerLastPoll         *prometheus.GaugeVec
+	workerLastCommit       *prometheus.GaugeVec
+	workerOldest           *prometheus.GaugeVec
+	workerPending          *prometheus.GaugeVec
+	workerRecoveries       *prometheus.CounterVec
+	workerFetchErrors      *prometheus.CounterVec
+	workerDelivery         *prometheus.HistogramVec
+	workerQuarantined      *prometheus.CounterVec
+	workerOffsetGap        *prometheus.GaugeVec
 }
 
 type BatchObservation struct {
@@ -189,7 +201,32 @@ func New(version string) (*Metrics, error) {
 	buildInfo := prometheus.NewGaugeVec(buildOptions, []string{"version"})
 	buildInfo.WithLabelValues(version).Set(1)
 
+	offsetGapOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "kafka_worker_offset_gap", Help: "A committed source offset fell outside retention; explicit recovery is required."}
+	workerOffsetGap := prometheus.NewGaugeVec(offsetGapOptions, []string{"store"})
+	quarantineOptions := prometheus.CounterOpts{Namespace: namespace, Name: "kafka_worker_quarantined_total", Help: "Records durably quarantined by configured store."}
+	workerQuarantined := prometheus.NewCounterVec(quarantineOptions, []string{"store"})
 	registry := prometheus.NewRegistry()
+	registry.MustRegister(workerQuarantined, workerOffsetGap)
+	admissionRequestsOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "in_flight_requests", Help: "Core requests currently executing, including cross-store and asynchronous requests."}
+	admissionRequests := prometheus.NewGauge(admissionRequestsOptions)
+	admissionBytesOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "in_flight_bytes", Help: "Request and output bytes reserved by executing core requests."}
+	admissionBytes := prometheus.NewGauge(admissionBytesOptions)
+	admissionRejectedOptions := prometheus.CounterOpts{Namespace: namespace, Name: "admission_rejected_total", Help: "Requests rejected by global or configured-store execution limits."}
+	admissionRejected := prometheus.NewCounter(admissionRejectedOptions)
+	lastPollOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "kafka_worker_last_poll_timestamp_seconds", Help: "Last completed Kafka poll by configured store."}
+	workerLastPoll := prometheus.NewGaugeVec(lastPollOptions, []string{"store"})
+	lastCommitOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "kafka_worker_last_commit_timestamp_seconds", Help: "Last successful source offset commit by configured store."}
+	workerLastCommit := prometheus.NewGaugeVec(lastCommitOptions, []string{"store"})
+	oldestOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "kafka_worker_oldest_pending_timestamp_seconds", Help: "Oldest timestamp in the current uncommitted fetch, zero after commit; use Kafka lag monitoring for unpolled backlog."}
+	workerOldest := prometheus.NewGaugeVec(oldestOptions, []string{"store"})
+	pendingOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "kafka_worker_pending_records", Help: "Records in the current uncommitted fetch, including records retained for retry."}
+	workerPending := prometheus.NewGaugeVec(pendingOptions, []string{"store"})
+	recoveryOptions := prometheus.CounterOpts{Namespace: namespace, Name: "kafka_worker_recoveries_total", Help: "Batches retained for retry without advancing source offsets."}
+	workerRecoveries := prometheus.NewCounterVec(recoveryOptions, []string{"store"})
+	fetchErrorOptions := prometheus.CounterOpts{Namespace: namespace, Name: "kafka_worker_fetch_errors_total", Help: "Kafka fetch errors by configured store, including offset retention gaps."}
+	workerFetchErrors := prometheus.NewCounterVec(fetchErrorOptions, []string{"store"})
+	deliveryOptions := prometheus.HistogramOpts{Namespace: namespace, Name: "kafka_worker_delivery_seconds", Help: "Age of the oldest record when a batch is resolved and its source offsets commit.", Buckets: []float64{0.1, 1, 5, 10, 30, 60, 300, 1800, 3600, 86400}}
+	workerDelivery := prometheus.NewHistogramVec(deliveryOptions, []string{"store"})
 	processOptions := collectors.ProcessCollectorOpts{}
 	registeredCollectors := []prometheus.Collector{
 		collectors.NewGoCollector(),
@@ -213,6 +250,10 @@ func New(version string) (*Metrics, error) {
 		kafkaWorkerMutations,
 		kafkaWorkerRetries,
 		kafkaWorkerDeadLetters,
+		admissionRequests,
+		admissionBytes,
+		admissionRejected,
+		workerLastPoll, workerLastCommit, workerOldest, workerPending, workerRecoveries, workerFetchErrors, workerDelivery,
 	}
 	for _, collector := range registeredCollectors {
 		if err := registry.Register(collector); err != nil {
@@ -220,6 +261,8 @@ func New(version string) (*Metrics, error) {
 		}
 	}
 	metrics := &Metrics{
+		workerOffsetGap:        workerOffsetGap,
+		workerQuarantined:      workerQuarantined,
 		registry:               registry,
 		requests:               requests,
 		requestDuration:        requestDuration,
@@ -239,8 +282,67 @@ func New(version string) (*Metrics, error) {
 		kafkaWorkerMutations:   kafkaWorkerMutations,
 		kafkaWorkerRetries:     kafkaWorkerRetries,
 		kafkaWorkerDeadLetters: kafkaWorkerDeadLetters,
+		admissionRequests:      admissionRequests,
+		admissionBytes:         admissionBytes,
+		admissionRejected:      admissionRejected,
+		workerLastPoll:         workerLastPoll, workerLastCommit: workerLastCommit, workerOldest: workerOldest,
+		workerPending: workerPending, workerRecoveries: workerRecoveries, workerFetchErrors: workerFetchErrors, workerDelivery: workerDelivery,
 	}
 	return metrics, nil
+}
+
+func (m *Metrics) AdjustAdmission(requests int, bytes int) {
+	if m == nil {
+		return
+	}
+	m.admissionRequests.Add(float64(requests))
+	m.admissionBytes.Add(float64(bytes))
+}
+
+func (m *Metrics) ObserveAdmissionRejected() {
+	if m == nil {
+		return
+	}
+	m.admissionRejected.Inc()
+}
+
+func (m *Metrics) ObserveWorkerPoll(store string, errors int) {
+	if m == nil {
+		return
+	}
+	m.workerLastPoll.WithLabelValues(store).SetToCurrentTime()
+	m.workerFetchErrors.WithLabelValues(store).Add(float64(errors))
+}
+
+func (m *Metrics) SetWorkerPending(store string, oldest time.Time, count int) {
+	if m == nil {
+		return
+	}
+	timestamp := float64(0)
+	if !oldest.IsZero() {
+		timestamp = float64(oldest.UnixMilli()) / 1000
+	}
+	m.workerOldest.WithLabelValues(store).Set(timestamp)
+	m.workerPending.WithLabelValues(store).Set(float64(count))
+}
+
+func (m *Metrics) ObserveWorkerRecovery(store string) {
+	if m == nil {
+		return
+	}
+	m.workerRecoveries.WithLabelValues(store).Inc()
+}
+
+func (m *Metrics) ObserveWorkerCommitted(store string, oldest time.Time) {
+	if m == nil {
+		return
+	}
+	m.workerLastCommit.WithLabelValues(store).SetToCurrentTime()
+	if !oldest.IsZero() {
+		m.workerDelivery.WithLabelValues(store).Observe(max(0, time.Since(oldest).Seconds()))
+	}
+	var cleared time.Time
+	m.SetWorkerPending(store, cleared, 0)
 }
 
 func (m *Metrics) ObserveMergeConflict(count int) {
@@ -416,4 +518,21 @@ func deleteStatus(value sink.DeleteStatus) string {
 	default:
 		return "unspecified"
 	}
+}
+
+func (m *Metrics) ObserveQuarantined(store string) {
+	if m != nil {
+		m.workerQuarantined.WithLabelValues(store).Inc()
+	}
+}
+
+func (m *Metrics) SetWorkerOffsetGap(store string, gap bool) {
+	if m == nil {
+		return
+	}
+	value := 0.0
+	if gap {
+		value = 1
+	}
+	m.workerOffsetGap.WithLabelValues(store).Set(value)
 }

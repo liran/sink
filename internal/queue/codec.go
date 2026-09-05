@@ -18,6 +18,16 @@ const (
 
 type marshalVTMessage interface {
 	MarshalVT() ([]byte, error)
+	SizeVT() int
+}
+
+// MutationSize includes the queue envelope without allocating its payload.
+func MutationSize(mutation Mutation) int {
+	_, message, err := mutationMessage(mutation)
+	if err != nil {
+		return 0
+	}
+	return len(envelopeMagic) + 2 + message.SizeVT()
 }
 
 func MarshalMutation(mutation Mutation) ([]byte, error) {

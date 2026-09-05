@@ -60,6 +60,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 		MaxQueuedBytes:      normalized.MaxQueuedBytes,
 		Execute:             batching.executeReads,
 		Metrics:             normalized.Metrics,
+		ExecutionTimeout:    server.requestTimeout,
 	}
 	batching.reads = newStoreRequestBatchers(normalized.StoreNames, readOptions)
 
@@ -72,6 +73,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 		MaxQueuedBytes:      normalized.MaxQueuedBytes,
 		Execute:             batching.executeWrites,
 		Metrics:             normalized.Metrics,
+		ExecutionTimeout:    server.requestTimeout,
 	}
 	batching.writes = newStoreRequestBatchers(normalized.StoreNames, writeOptions)
 
@@ -84,6 +86,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 		MaxQueuedBytes:      normalized.MaxQueuedBytes,
 		Execute:             batching.executeDeletes,
 		Metrics:             normalized.Metrics,
+		ExecutionTimeout:    server.requestTimeout,
 	}
 	batching.deletes = newStoreRequestBatchers(normalized.StoreNames, deleteOptions)
 	return batching, nil
@@ -188,6 +191,8 @@ func waitStoreRequestBatchers[Request any, Response any](
 }
 
 func (s *BatchingServer) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.server.requestTimeout)
+	defer cancel()
 	if req == nil || len(req.GetOperations()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "read request must contain operations")
 	}
@@ -203,6 +208,8 @@ func (s *BatchingServer) Read(ctx context.Context, req *sink.ReadRequest) (*sink
 }
 
 func (s *BatchingServer) Write(ctx context.Context, req *sink.WriteRequest) (*sink.WriteResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.server.requestTimeout)
+	defer cancel()
 	if req == nil || len(req.GetOperations()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "write request must contain operations")
 	}
@@ -225,7 +232,7 @@ func (s *BatchingServer) Write(ctx context.Context, req *sink.WriteRequest) (*si
 		return nil, status.Errorf(codes.InvalidArgument, "write request Lua programs: %v", err)
 	}
 	normalized := normalizeSynchronousWriteRequest(req, programs)
-	return batcher.Submit(ctx, normalized, len(normalized.GetOperations()), req.SizeVT())
+	return batcher.Submit(ctx, normalized, len(normalized.GetOperations()), normalized.SizeVT())
 }
 
 func normalizeSynchronousWriteRequest(req *sink.WriteRequest, programs luaPrograms) *sink.WriteRequest {
@@ -271,6 +278,8 @@ func normalizeSynchronousWriteOperation(operation *sink.WriteOperation, programs
 }
 
 func (s *BatchingServer) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.DeleteResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, s.server.requestTimeout)
+	defer cancel()
 	if req == nil || len(req.GetOperations()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "delete request must contain operations")
 	}

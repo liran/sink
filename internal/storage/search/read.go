@@ -40,6 +40,9 @@ type multiGetResponse struct {
 }
 
 func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	if req.Budget == nil {
+		req.Budget = storage.NewReadBudget(storage.DefaultMaxReadBytes)
+	}
 	response := storage.ReadResponse{Results: make([]storage.ReadResult, len(req.Operations))}
 	works := make([]readWork, 0, len(req.Operations))
 	for index, operation := range req.Operations {
@@ -55,16 +58,35 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 		return response, nil
 	}
 
-	documents, err := s.multiGet(ctx, works)
-	if err != nil {
-		for _, work := range works {
-			setReadError(&response.Results[work.resultIndex], err)
+	pending := [][]readWork{works}
+	for len(pending) > 0 {
+		batch := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		documents, err := s.multiGet(ctx, batch)
+		if errors.Is(err, errResponseTooLarge) && len(batch) > 1 && ctx.Err() == nil {
+			middle := len(batch) / 2
+			pending = append(pending, batch[middle:], batch[:middle])
+			continue
 		}
-		return response, nil
-	}
-	for index, document := range documents {
-		result := &response.Results[works[index].resultIndex]
-		applyMultiGetDocument(result, document)
+		if err != nil {
+			if errors.Is(err, errResponseTooLarge) {
+				err = storage.NewOperationError(storage.ErrorCodeResourceExhausted, false, err)
+			}
+			for _, work := range batch {
+				setReadError(&response.Results[work.resultIndex], err)
+			}
+			continue
+		}
+		for index, document := range documents {
+			result := &response.Results[batch[index].resultIndex]
+			if document.Found {
+				if err := req.Budget.Reserve(len(document.Source)); err != nil {
+					setReadError(result, err)
+					continue
+				}
+			}
+			applyMultiGetDocument(result, document)
+		}
 	}
 	return response, nil
 }
