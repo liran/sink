@@ -86,20 +86,27 @@ DLQ publication failure, CREATE replay continuation, partition-prefix commits,
 rebalance cancellation, admission/cancellation, and read/Lua output budgets.
 CI also fuzzes mutation envelopes for 20 seconds on each change.
 
-`.github/workflows/reliability.yml` runs a two-hour nightly/manual soak using the
-pinned public production suite and the selected server revision. The test uses a
-unique disposable Compose project, generates a worker configuration with the
-product retry default, and injects an active-worker SIGKILL, a 45-second backend
-outage, and broker restart. It retains revision IDs, fault timeline, test output,
-container resource samples and Prometheus samples. Run it locally only with a
-working Docker engine and available qualification ports:
+The public [production suite](https://github.com/liran/sink-production-suite)
+owns release and sustained qualification. Sink's release workflow pins both the
+reusable workflow and suite source to the same immutable commit. The manual
+`.github/workflows/reliability.yml` entry point invokes that suite's two-hour
+workflow against the selected Sink revision; the nightly schedule lives in the
+suite repository.
+
+The shared runner uses a unique disposable Compose project, product worker retry
+defaults, an active-worker SIGKILL, a 45-second backend outage, and a broker
+restart. It checks dependency readiness, API size/read/Lua-output limits, lag,
+and DLQ inspection/repair/replay, retaining revisions, fault timelines, test
+output, container resource samples and Prometheus samples. With a working Docker
+engine and available qualification ports, run it from the suite checkout:
 
 ```sh
-SINK_SUITE_DIR=/path/to/sink-production-suite bash scripts/test-reliability-soak.sh
+SINK_SERVER_DIR=/path/to/sink make test-production
+SINK_SERVER_DIR=/path/to/sink make test-reliability
 ```
 
-The suite's business counter is explicitly idempotent. It verifies recovery and
-reconciliation, not automatic deduplication of arbitrary Lua. Scheduled runs
-become active after the workflow reaches the default branch. Real multi-node
-failover, disk pressure and backup restoration remain deployment qualification;
-see [the reliability runbook](reliability.md).
+The first command includes a three-minute fault workload; the second uses two
+hours. The business counter implements application idempotence and reconciles
+stored results. Passing the short gate does not establish a completed two-hour
+run. Real multi-node failover, disk pressure and backup restoration remain
+deployment qualification; see [the reliability runbook](reliability.md).
