@@ -75,7 +75,7 @@ done
 
 (
   while true; do
-        "${compose[@]}" stats --no-stream --format json >> "${artifacts}/resources.jsonl" || true
+    "${compose[@]}" stats --no-stream --format json >> "${artifacts}/resources.jsonl" || true
     for port in 19090 19091 19092; do
       date -u +%FT%TZ >> "${artifacts}/metrics-${port}.txt"
       curl --max-time 3 --silent "http://127.0.0.1:${port}/metrics" >> "${artifacts}/metrics-${port}.txt" || true
