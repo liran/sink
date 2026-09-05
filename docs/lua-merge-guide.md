@@ -206,6 +206,12 @@ tenant's data.
   revision retries. Consuming a Kafka record again is a new execution, so the
   business rule must still provide its required idempotency.
 
+Business idempotence is an application requirement for **all** retries and
+replays. Sink performs no business-operation deduplication. An ambiguous write
+acknowledgement may be followed by another execution of the same Lua, even in
+the same worker. Use business identifiers and atomic document updates where
+repeat effects are unsafe. CAS alone does not provide this guarantee.
+
 ## Resource limits and errors
 
 Each execution has limits for wall-clock time, instructions, call depth, VM
@@ -272,3 +278,16 @@ Scripts must select `sink.v1` explicitly. The names and semantics of v1
 functions remain stable; a future incompatible contract will use a new version
 namespace. Do not probe or call undocumented globals, internal fields, or a
 higher API version.
+
+Result conversion first checks the expanded table graph, including each use of
+a shared table. The limit includes a maximum depth of 256 and at most
+`max(64, min(max_result_bytes / 8, 1000000))` visited values/keys, followed by the
+encoded byte check. This prevents small alias graphs from creating exponential
+Go maps, slices, or serialized output. Current/incoming payloads are also limited
+by `max_result_bytes`.
+
+The embedded VM still has no strict allocation-byte quota during execution.
+These limits do not make arbitrary Lua safe to run in a shared trusted process.
+Use reviewed business scripts, isolate stores/workers into containers with
+memory limits, and test the largest permitted documents. See
+[reliability boundaries](reliability.md) for deployment acceptance criteria.

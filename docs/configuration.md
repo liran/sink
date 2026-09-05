@@ -16,12 +16,10 @@ limits without opening any configured backend. Environment variables such as
 Configuration is loaded once during startup. Unknown fields, malformed YAML,
 multiple YAML documents, duplicate storage names, invalid positive-integer
 values, and incompatible option combinations prevent the process from
-starting. Sink connects to and pings every configured storage before becoming
-ready. For every Kafka-enabled store, Sink creates or verifies the source and
-dead-letter topics and reconciles their partition count, replication factor,
-and retention. In `server` and `all` modes it then creates and pings one Kafka
-publisher per enabled store. Failure of any required dependency or Topic
-reconciliation prevents startup. Restart Sink after changing the file.
+starting. Backend connections are lazy and dependency recovery is independent
+per store. A Kafka store remains unavailable for publication and consumption
+until its Topic policy has been reconciled and verified. This does not prevent
+healthy stores from starting. Restart Sink after changing the file.
 
 ## Multiple storage instances
 
@@ -173,7 +171,9 @@ multiplied by the fixed number of configured stores and the three methods. A
 new single-store request that would cross its queue's limit fails with gRPC
 `RESOURCE_EXHAUSTED` and is not applied. Requests canceled before dispatch are
 omitted. Once a batch is dispatched, other live callers in that batch continue
-even if one caller cancels. Graceful shutdown first drains active gRPC calls,
+even if one caller cancels. Once all callers cancel, execution is cancelled too.
+Execution is capped by the server request timeout even without caller deadlines.
+Core admission limits also cover requests that bypass batching. Graceful shutdown first drains active gRPC calls,
 then stops every store's batch dispatchers.
 
 Batching happens only among requests for the same store reaching the same Sink
@@ -217,6 +217,18 @@ Sink metrics:
 | `sink_kafka_worker_mutations_total` | counter | `status` | Mutations applied or failed by workers. |
 | `sink_kafka_worker_retries_total` | counter | none | Retried Kafka mutations. |
 | `sink_kafka_worker_dead_letters_total` | counter | none | Mutations copied to the dead-letter topic. |
+| `sink_in_flight_requests` | gauge | none | Executing core calls across all routes. |
+| `sink_in_flight_bytes` | gauge | none | Request/output reservations; not RSS. |
+| `sink_admission_rejected_total` | counter | none | Global/per-store execution admission rejections. |
+| `sink_kafka_worker_last_poll_timestamp_seconds` | gauge | `store` | Last completed poll, not an idle-worker heartbeat. |
+| `sink_kafka_worker_last_commit_timestamp_seconds` | gauge | `store` | Last successful offset commit. |
+| `sink_kafka_worker_pending_records` | gauge | `store` | Unresolved records from the last fetch; excludes unpolled backlog. |
+| `sink_kafka_worker_oldest_pending_timestamp_seconds` | gauge | `store` | Oldest timestamp in that pending fetch, zero after full settlement. |
+| `sink_kafka_worker_recoveries_total` | counter | `store` | Processing rounds with retained source records. |
+| `sink_kafka_worker_offset_gap` | gauge | `store` | Committed source offset expired; remains 1 until explicit recovery and restart. |
+| `sink_kafka_worker_fetch_errors_total` | counter | `store` | Fetch failures including offset retention gaps. |
+| `sink_kafka_worker_delivery_seconds` | histogram | `store` | Oldest fetched-record age at source commit, including quarantined outcomes. |
+| `sink_kafka_worker_quarantined_total` | counter | `store` | Acknowledged DLQ publications, including replayed quarantine attempts. |
 
 Labels intentionally exclude storage names, namespaces, datasets, record keys,
 and error messages to keep metric cardinality bounded. The endpoint has no
@@ -229,8 +241,12 @@ store dependency, allowing unrelated stores to continue serving traffic. Sink
 checks dependencies every five seconds with a three-second timeout and exposes
 their status under `sink.storage.<store>` and, when Kafka is enabled,
 `sink.kafka.<store>`. A dependency-specific service reports `NOT_SERVING` until
-that dependency recovers. Startup remains strict: Sink must initialize and ping
-every configured dependency before opening the gRPC service.
+that dependency recovers. Dependency-specific health begins as `NOT_SERVING`.
+When Prometheus is enabled, `/livez` reports process liveness and `/readyz` checks
+all configured dependencies, including workers. Use
+`/readyz?service=sink.worker.<store>` for one worker or the existing storage/Kafka
+service name for one dependency. Keep liveness independent from dependency
+readiness to avoid restart loops during an outage.
 
 ### Migrating a single-storage configuration
 
@@ -277,7 +293,7 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `service.batching.max_queued_bytes` | positive integer | No | max(`134217728`, `grpc.max_receive_message_bytes`) | Integer at least `grpc.max_receive_message_bytes` and `service.batching.max_bytes` | Maximum encoded request bytes waiting in each store and method queue. |
 | `service.lua.timeout_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Maximum wall-clock duration of one Lua execution. |
 | `service.lua.max_source_bytes` | positive integer | No | `65536` | Integer greater than `0` | Maximum Lua source size per merge operation. |
-| `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum encoded JSON or BSON merge result size. |
+| `service.lua.max_result_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Maximum input/current document and encoded result bytes; expanded output is also bounded before conversion. |
 | `service.lua.max_cached_programs` | positive integer | No | `256` | Integer greater than `0` | Maximum compiled Lua programs retained in the process-local LRU cache. |
 | `service.lua.max_instructions` | positive integer | No | `1000000` | Integer greater than `0` | Maximum VM instruction checkpoints per execution. |
 | `storages[].kafka` | object | No | absent | A store-specific Kafka configuration | Holds the asynchronous delivery and Topic-management policy. Kafka remains disabled unless `enabled` is `true`. |
@@ -285,15 +301,43 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].kafka.brokers` | list of strings | Conditionally | none | One or more Kafka bootstrap addresses | Required when Kafka is enabled. Each store may use a different Kafka cluster. |
 | `storages[].kafka.topic` | string | Conditionally | none | Any valid Kafka topic name | Required when Kafka is enabled. The server publishes only mutations whose `address.store` selects this store. |
 | `storages[].kafka.group_id` | string | Conditionally | empty | Any valid Kafka consumer group ID | Required for every Kafka-enabled store in `worker` and `all` modes; optional and unused in `server` mode. |
-| `storages[].kafka.dead_letter_topic` | string | No | `<storages[].kafka.topic>.dlq` | Non-empty Kafka topic different from the source topic | Destination for malformed, cross-store, permanent, and retry-exhausted records for this store. |
-| `storages[].kafka.topic_partitions` | positive integer | No | `4` | Integer from `1` through `2147483647` | Required partition count for both Topics. Sink increases a lower count; a higher existing count fails startup because Kafka cannot safely decrease it. |
+| `storages[].kafka.dead_letter_topic` | string | No | `<storages[].kafka.topic>.dlq` | Non-empty Kafka topic different from the source topic | Destination for malformed, cross-store, and permanent failures. Temporary failures remain in the source Topic. |
+| `storages[].kafka.topic_partitions` | positive integer | No | `4` | Integer from `1` through `2147483647` | Required partition count for both Topics. Any mismatch gates this store; changes require an explicit drained migration. |
 | `storages[].kafka.topic_replication_factor` | positive integer | No | `2` | Integer from `1` through `32767`, not exceeding available brokers | Required replica count for every partition of both Topics. Sink submits and waits for partition reassignment when it differs. |
-| `storages[].kafka.topic_retention_hours` | positive integer | No | `72` (3 days) | Integer greater than `0` within Go duration range | Required retention for both Topics. Sink sets Kafka `retention.ms` to this value. |
+| `storages[].kafka.topic_retention_hours` | positive integer | No | `72` (3 days) | Integer greater than `0` within Go duration range | Source Topic retention. DLQ retention is configured separately. |
 | `storages[].kafka.max_poll_records` | positive integer | No | `500` | Integer greater than `0` | Maximum number of this store's mutations handled in one consumer fetch batch. |
-| `storages[].kafka.max_retry_attempts` | positive integer | No | `10` | Integer greater than `0` | Maximum total handler attempts before this store's mutation is dead-lettered. |
+| `storages[].kafka.max_retry_attempts` | positive integer | No | `10` | Integer greater than `0` | Maximum attempts per processing round. Temporary failures are retained and retried in later rounds. |
 | `storages[].kafka.retry_backoff_milliseconds` | positive integer | No | `100` | Integer greater than `0` | Initial worker retry backoff before jitter for this store. |
 | `storages[].kafka.max_retry_backoff_milliseconds` | positive integer | No | `10000` | Integer at least this store's initial backoff | Maximum worker retry backoff before jitter for this store. |
 | `shutdown_timeout_seconds` | positive integer | No | `15` | Integer greater than `0` | Maximum graceful-shutdown time for gRPC and MongoDB disconnect operations. |
+
+### Reliability limits
+
+All settings in this table are optional; values are positive integers. Limits are process-local; replica
+counts multiply capacity. Configure the same Kafka policy on servers and workers.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `service.request_timeout_seconds` | `30` | Request timeout including batching queue wait, at most 300 seconds; a shorter caller deadline wins. |
+| `service.max_in_flight_requests` | `128` | Core request count, at most 10000; all completion modes and cross-store calls count. |
+| `service.max_in_flight_bytes` | `268435456` | Admitted request/output reservation bytes, at most 16 GiB. Reads reserve their output budget; synchronous merges reserve current and output budgets; Lua source expansion is charged. This is not an RSS or VM heap limit. |
+| `service.max_store_requests` | `32` | Core requests per configured store, at most 10000. |
+| `service.max_read_bytes` | min(`33554432`, half gRPC send limit) | Aggregate copied read results or merged output per wave, including repeated keys and all stores; cannot exceed half the gRPC send limit. |
+| `storages[].kafka.dead_letter_retention_hours` | `720` | Independent DLQ retention, 30 days; bounded by Go duration range. |
+| `storages[].kafka.min_insync_replicas` | min(`2`, replication factor) | Minimum ISR, at most replication factor. Publishers require all ISR acknowledgements. |
+| `storages[].kafka.max_record_bytes` | `921600` | Encoded mutation envelope plus key, including expanded Lua source; at most 64 MiB and no larger than the producer buffer. Topic/producer batch limits include an extra 16 KiB for framing and DLQ headers. Broker/replica fetch limits must also support increases. |
+| `storages[].kafka.max_buffered_bytes` | `67108864` | Producer buffer capacity, at most 1 GiB. Full buffers return retryable resource exhaustion. |
+| `storages[].kafka.processing_timeout_milliseconds` | `20000` | Backend work per fetched batch, at most 20 seconds, followed by at most 5 seconds of offset/DLQ settlement. |
+
+MongoDB group concurrency is shared across concurrent calls. Sink sets
+`w=majority` and `journal=true` on its client, overriding weaker URI concerns;
+server selection is bounded to five seconds. Verify the deployment supports
+these settings before upgrading. The service deadline bounds the whole request.
+
+A response budget can yield partial results: an individual oversized document
+is a permanent resource failure; exhaustion caused by other records in the batch
+is retryable. Retry only failed operations or reduce the batch. Successful
+mutation results must not be retried without business idempotence.
 
 ### Mode values
 
@@ -326,14 +370,16 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
   that use the same normalized broker list. The same names may be reused on
   different Kafka clusters.
 
-Before publishers or consumers start, Sink reconciles both the source Topic and
-dead-letter Topic. Missing Topics are created automatically. Partition counts
-can increase but cannot decrease without destructive Topic recreation, so an
-excessive existing count fails startup. Replication-factor changes use Kafka
-partition reassignment and may move substantial data; Sink waits for Kafka
-metadata to report the target factor. Retention differences are updated through
-`retention.ms`. The Kafka principal therefore needs the corresponding describe,
-create, alter, describe-config, and alter-config permissions.
+Before publishers or consumers start for a store, Sink reconciles and verifies
+its source and DLQ policies. Missing Topics are created automatically. Partition
+counts must match exactly. Replica changes use Kafka partition reassignment;
+retention, `min.insync.replicas`, `cleanup.policy=delete`,
+`unclean.leader.election.enable=false`, and `max.message.bytes` are reconciled.
+The principal needs describe/create/alter/describe-config/alter-config rights.
+Transient failures retry in the background while this store remains gated.
+A committed offset outside source retention stops consumption of that partition
+and keeps worker health failing; it is never silently reset to the latest offset.
+See the [recovery runbook](reliability.md) before resetting positions.
 
 Each consumer rejects a record whose embedded `address.store` does not match
 the store that owns its source Topic. A source record is committed only after

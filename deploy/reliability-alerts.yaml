@@ -1,0 +1,41 @@
+groups:
+  - name: sink-reliability
+    rules:
+      - alert: SinkWorkerNotAdvancing
+        expr: sink_kafka_worker_pending_records > 0 and on(instance, store) (time() - sink_kafka_worker_oldest_pending_timestamp_seconds > 300)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sink has unresolved fetched records for store {{ $labels.store }}"
+          description: "Check worker readiness, backend errors, DLQ publication and source retention headroom. This metric excludes unpolled Kafka backlog."
+      - alert: SinkDeadLetters
+        expr: increase(sink_kafka_worker_quarantined_total[5m]) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sink quarantined mutations for store {{ $labels.store }}"
+          description: "Inspect exact DLQ positions, repair the cause, and reconcile business state before replay."
+      - alert: SinkSourceOffsetExpired
+        expr: sink_kafka_worker_offset_gap > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Sink source retention gap for store {{ $labels.store }}"
+          description: "The worker stopped this partition. Preserve positions and recover business state before choosing an explicit offset and restarting."
+      - alert: SinkFetchErrors
+        expr: increase(sink_kafka_worker_fetch_errors_total[5m]) > 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sink Kafka fetch errors for store {{ $labels.store }}"
+          description: "Check broker reachability and offset retention gaps; never reset offsets blindly."
+      - alert: SinkAdmissionSaturated
+        expr: rate(sink_admission_rejected_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sink execution capacity is saturated"
+          description: "Inspect backend latency, input/output reservations and queue limits before adding replicas."

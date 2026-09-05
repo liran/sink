@@ -174,32 +174,40 @@ topics, consumer groups, retry policies, and dead-letter topics. The publisher
 uses a deterministic encoded record address as the Kafka key, keeping mutations
 for one record in a single partition and in submission order.
 
-Kafka is disabled by default. For an enabled store, startup reconciles the
-source and dead-letter Topics before creating its publisher or worker. Sink can
-create missing Topics, increase partition counts, reassign replicas, and set
-retention according to the Store configuration. It refuses to reduce a
-partition count because doing so requires destructive Topic recreation.
+Kafka is disabled by default. Each enabled store establishes its source and
+DLQ policy independently before publication or consumption. Sink creates missing
+Topics, reconciles replicas and durability settings, and refuses any partition
+count mismatch. Increasing partitions requires pausing all publishers, draining
+old work, and explicitly migrating the Topic; key routing can otherwise change.
 
-Workers disable auto-commit and apply queued mutations through the same service
-path as synchronous writes. Retryable failures use bounded exponential backoff
-with jitter. Malformed records, permanent failures, and exhausted retries are
-copied to the configured dead-letter topic before their source offsets are
-committed.
+Workers disable auto-commit. Temporary backend, DLQ publication, and offset
+commit failures retain unresolved records and retry with bounded backoff. The
+attempt count limits each processing round, not message lifetime. Permanent
+failures are copied to DLQ before committing their source offsets. A permanent
+CREATE failure does not prevent a later valid update to the same key; a temporary
+failure blocks following work for that key. Each partition commits only its
+resolved contiguous prefix.
 
-Delivery is at least once. If a worker crashes after storage applies a mutation
-but before Kafka commits its offset, Kafka can redeliver and execute the
-mutation again. Applications must make retryable mutation intent safe for that
-possibility.
+Processing has a 20-second default deadline and is cancelled when a rebalance
+callback is waiting. A separate settlement window of at most five seconds allows
+DLQ acknowledgement and offset commits before releasing blocked rebalances.
+Adapters must honor cancellation. This is not a storage fencing token: a write
+whose acknowledgement was lost can still complete. Concurrent producers,
+synchronous writes, and DLQ replay do not form a single global ordering domain.
+
+Delivery is at least once. **Applications own business idempotence**, including
+client retries, worker retries, crashes after storage commit, lost responses,
+and manual replay. CAS prevents conflicting revisions from overwriting each
+other; it does not identify repeated business intent. Use a business operation
+identifier and an atomic check-and-apply rule where repeat effects are unsafe.
+An increment without such a rule can execute more than once.
 
 ## Health and observability
 
-Startup is strict: Sink opens and pings every configured store before becoming
-ready. It reconciles Topics for every Kafka-enabled store in all modes. In
-`server` and `all` modes, it also creates and pings a publisher for each enabled
-store. Configuration, Topic-policy, or dependency errors fail startup instead
-of producing a partially initialized service. A standalone `worker` has no
-gRPC readiness endpoint; Kafka consumer connection errors are handled and
-reported by its polling loop.
+Invalid configuration fails startup. Unavailable stores are connected lazily,
+and each Kafka store retries its Topic setup independently. Healthy stores can
+serve while another dependency is recovering. Only Kafka clients for a store
+whose policy has been established can accept or consume asynchronous work.
 
 At runtime in `server` and `all` modes, the standard gRPC health service reports
 process readiness. Each storage and configured Kafka publisher also has its own
@@ -207,8 +215,8 @@ health service name. A failed dependency becomes `NOT_SERVING` without marking
 unrelated stores unavailable.
 
 The optional Prometheus listener exports build, gRPC, operation, batching,
-merge, publisher, and worker metrics. Labels intentionally exclude store names,
-namespaces, datasets, keys, and error text to keep cardinality bounded. See
+merge, publisher, and worker metrics. Worker progress metrics label only configured store names. Labels exclude
+client-provided namespaces, datasets, keys, and error text. See
 [Prometheus metrics](configuration.md#prometheus-metrics) for the metric list
 and network exposure guidance.
 
@@ -222,8 +230,8 @@ and network exposure guidance.
   responsibilities of the backing systems.
 - Batching and queues are local to one Sink process; replicas do not share
   in-memory state.
-- Startup requires every configured dependency. Runtime dependency failures
-  are isolated where possible and reported separately.
+- Dependency failures are reported separately; shared-process resource
+  exhaustion still requires deployment isolation and capacity planning.
 
 These boundaries keep the record contract portable without hiding guarantees
 that only a specific database or deployment can provide.
