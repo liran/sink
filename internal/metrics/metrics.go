@@ -32,6 +32,8 @@ type Metrics struct {
 	batcherRejected        *prometheus.CounterVec
 	mergeConflicts         prometheus.Counter
 	mergeExhausted         prometheus.Counter
+	mergeFoldedChains      prometheus.Counter
+	mergeFoldedOperations  prometheus.Counter
 	kafkaPublished         *prometheus.CounterVec
 	kafkaPublishDuration   prometheus.Histogram
 	kafkaWorkerMutations   *prometheus.CounterVec
@@ -157,6 +159,10 @@ func New(version string) (*Metrics, error) {
 		Help:      "Total number of Lua merges that exhausted the configured revision-conflict attempts.",
 	}
 	mergeExhausted := prometheus.NewCounter(mergeExhaustedOptions)
+	foldedChainOptions := prometheus.CounterOpts{Namespace: namespace, Subsystem: "merge", Name: "folded_chains_total", Help: "Ordered merge runs with multiple operations planned for one conditional commit, excluding retries."}
+	mergeFoldedChains := prometheus.NewCounter(foldedChainOptions)
+	foldedOperationOptions := prometheus.CounterOpts{Namespace: namespace, Subsystem: "merge", Name: "folded_operations_total", Help: "Logical operations in folded merge runs, excluding retries; not a commit success count."}
+	mergeFoldedOperations := prometheus.NewCounter(foldedOperationOptions)
 	publishedOptions := prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: "kafka_publisher",
@@ -245,6 +251,8 @@ func New(version string) (*Metrics, error) {
 		batcherRejected,
 		mergeConflicts,
 		mergeExhausted,
+		mergeFoldedChains,
+		mergeFoldedOperations,
 		kafkaPublished,
 		kafkaPublishDuration,
 		kafkaWorkerMutations,
@@ -277,6 +285,8 @@ func New(version string) (*Metrics, error) {
 		batcherRejected:        batcherRejected,
 		mergeConflicts:         mergeConflicts,
 		mergeExhausted:         mergeExhausted,
+		mergeFoldedChains:      mergeFoldedChains,
+		mergeFoldedOperations:  mergeFoldedOperations,
 		kafkaPublished:         kafkaPublished,
 		kafkaPublishDuration:   kafkaPublishDuration,
 		kafkaWorkerMutations:   kafkaWorkerMutations,
@@ -350,6 +360,14 @@ func (m *Metrics) ObserveMergeConflict(count int) {
 		return
 	}
 	m.mergeConflicts.Add(float64(count))
+}
+
+func (m *Metrics) ObserveMergeFold(operations int) {
+	if m == nil || operations < 2 {
+		return
+	}
+	m.mergeFoldedChains.Inc()
+	m.mergeFoldedOperations.Add(float64(operations))
 }
 
 func (m *Metrics) ObserveMergeExhausted(count int) {

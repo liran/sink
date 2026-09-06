@@ -324,7 +324,7 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 		t.Fatalf("Write(initial counter) result = %#v", putResponse.Results[0])
 	}
 
-	const mutations = 32
+	const mutations, operationsPerWrite = 32, 4
 	incoming := sinkDocument(`{"delta":1}`)
 	statuses := make(chan sink.WriteStatus, mutations)
 	errorsChannel := make(chan error, mutations)
@@ -343,16 +343,20 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 			operation := &sink.WriteOperation{Address: address, Action: mergeAction}
 			request := &sink.WriteRequest{
 				CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
-				Operations:     []*sink.WriteOperation{operation},
+			}
+			for range operationsPerWrite {
+				request.Operations = append(request.Operations, operation)
 			}
 			response, writeErr := server.Write(context.Background(), request)
 			if writeErr != nil {
 				errorsChannel <- writeErr
 				return
 			}
-			if response.Results[0].Failure != nil {
-				errorsChannel <- fmt.Errorf("merge failed: %s", response.Results[0].Failure.Message)
-				return
+			for _, result := range response.Results {
+				if result.Status != sink.WriteStatus_WRITE_STATUS_APPLIED {
+					errorsChannel <- fmt.Errorf("merge failed: %v", result)
+					return
+				}
 			}
 			statuses <- response.Results[0].Status
 		}()
@@ -382,8 +386,8 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 	if err := json.Unmarshal(read.Results[0].Document.Payload, &final); err != nil {
 		t.Fatalf("json.Unmarshal(final counter) error = %v", err)
 	}
-	if final.Counter != mutations {
-		t.Fatalf("final counter = %d, want %d", final.Counter, mutations)
+	if final.Counter != mutations*operationsPerWrite {
+		t.Fatalf("final counter = %d, want %d", final.Counter, mutations*operationsPerWrite)
 	}
 }
 

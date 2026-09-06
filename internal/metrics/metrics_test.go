@@ -91,6 +91,9 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 	observed.ObserveBatchRejected("Read", "queue_full")
 	observed.ObserveMergeConflict(4)
 	observed.ObserveMergeExhausted(1)
+	observed.ObserveMergeFold(1)
+	observed.ObserveMergeFold(16)
+	observed.ObserveMergeFold(4)
 
 	body := scrape(t, observed)
 	wanted := []string{
@@ -125,6 +128,8 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 		`sink_batcher_rejected_total{method="Read",reason="queue_full"} 1`,
 		`sink_merge_conflicts_total 4`,
 		`sink_merge_exhausted_total 1`,
+		`sink_merge_folded_chains_total 2`,
+		`sink_merge_folded_operations_total 20`,
 	}
 	for _, value := range wanted {
 		if !strings.Contains(body, value) {

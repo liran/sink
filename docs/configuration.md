@@ -211,6 +211,8 @@ Sink metrics:
 | `sink_batcher_queued_bytes` | gauge | `method` | Encoded request bytes currently waiting for dispatch. |
 | `sink_batcher_rejected_total` | counter | `method`, `reason` | Requests rejected before dispatch, including queue exhaustion. |
 | `sink_merge_conflicts_total` | counter | none | Revision conflicts retried by Lua merge operations. |
+| `sink_merge_folded_chains_total` | counter | none | Multi-operation merge runs planned for one conditional commit, excluding retries. |
+| `sink_merge_folded_operations_total` | counter | none | Logical operations in those runs, excluding retries; not a successful commit count. |
 | `sink_merge_exhausted_total` | counter | none | Lua merges that exhausted the configured revision-conflict attempt budget. |
 | `sink_kafka_publisher_records_total` | counter | `status` | Mutation records accepted or rejected by Kafka. |
 | `sink_kafka_publisher_duration_seconds` | histogram | none | Synchronous Kafka publish batch latency. |

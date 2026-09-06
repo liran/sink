@@ -110,6 +110,12 @@ Atomicity is per record, never per request. Operations for the same address run
 in request order. Operations for different records or stores may run
 concurrently.
 
+Consecutive synchronous merges for one address execute in memory and share one
+conditional commit and revision. Puts split these runs. Intermediate documents
+are not individually persisted or validated by the backend; see the
+[merge folding contract](merge-folding.md) for result, visibility, and failure
+semantics.
+
 In `server` and `all` modes, Sink automatically coalesces concurrent
 one-operation RPCs into bounded, process-local batches for each store. Reads
 always use this path when batching is enabled. Synchronous writes and deletes
