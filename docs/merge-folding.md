@@ -104,3 +104,29 @@ benchmark and test helpers into a detached baseline worktree. Race tests separat
 cover concurrent servers, whole-run conflict retries, cancellation, failed commits,
 and lost acknowledgements. Tagged integration tests check real backend visibility,
 concurrent folded updates, shared revisions, and BSON types.
+
+### Contended commits
+
+`BenchmarkMergeFoldingContention` runs four concurrent callers directly against
+the core service, each submitting 64 merges to the same key (100 batches total,
+GOMAXPROCS=4, 1 ms per storage call). Both versions use 1,000 maximum conflict
+attempts to measure recomputation rather than attempt-budget exhaustion; this is
+**not** the production default of three. The benchmark verifies all 6,400 increments
+persist exactly once in this run. This does not change the delivery guarantee.
+
+| Measurement | Before | After |
+| --- | --- | --- |
+| Amortized wall time per batch | 120.15 ms | 6.74 ms |
+| Request latency P50 / P99 | 481.59 / 740.04 ms | 7.11 / 160.94 ms |
+| Document reads and write attempts per batch | 197.1 | 3.75 |
+| Conflicts per batch | 133.1 | 2.75 |
+| Conflicts / write attempts | 67.53% | 73.33% |
+| Allocated bytes per batch | 16.25 MB | 19.41 MB |
+
+Folding greatly reduces backend work here, but a conflict re-executes the entire
+Lua chain. This run increased allocated bytes and the fraction of conflicting
+attempts; it does not establish a reduction in conflict probability. Production
+rollout must observe attempt exhaustion, CPU/GC, and tail latency under the actual
+replica count and unchanged retry budget. The synchronous store batcher serializes
+its own dispatched batches; this direct-core test deliberately exercises contention
+that can also occur between replicas. No global ordering or fencing is introduced.
