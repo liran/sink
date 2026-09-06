@@ -29,9 +29,6 @@ func (s *Store) performBulk(
 	query := make(url.Values)
 	if waitUntilVisible {
 		query.Set("refresh", "wait_for")
-		if s.visibleRefresh == VisibleRefreshImmediate {
-			query.Set("refresh", "true")
-		}
 	}
 	opts := requestOptions{
 		method:      http.MethodPost,
