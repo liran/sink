@@ -17,6 +17,11 @@ operation ID with atomic check-and-apply logic when repeated effects are unsafe.
 | Per-operation permanent failure | Inspect and correct the operation. Retrying identical invalid input does not repair it. |
 | Per-operation temporary failure | Retry only unresolved operations, respecting business idempotence and ordering. |
 
+Consecutive synchronous merges for one address may share a final commit and its
+revision. Their intermediate documents do not create independent backend writes
+or change events. A failed commit leaves every operation in that run unresolved;
+see [ordered merge folding](merge-folding.md) before relying on per-write effects.
+
 There is no persistent per-mutation status API. Applications that need end-to-end
 reconciliation should keep their own accepted-operation ledger, compare business
 IDs against stored data, and reconcile source lag and DLQ. An empty source lag
