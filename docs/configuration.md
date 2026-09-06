@@ -259,6 +259,16 @@ addresses so their namespace and dataset contain the direct MongoDB
 database/collection names. For search drivers, keep the logical namespace and
 put the complete existing index or alias name in `dataset`.
 
+Explicit search visibility normally waits for the next scheduled refresh.
+Repeated writes to the same document are serialized, so a busy shared record
+can require several refresh intervals within one request. Set
+`storages[].search.visible_refresh: immediate` when these writes must finish
+without waiting for periodic refreshes. This uses `refresh=true` for visible
+bulk writes and deletes, including when periodic refresh is disabled. It costs
+additional shard refresh work, so enable it only for the relevant storage.
+The default remains `wait_for`; asynchronous delivery and batches containing
+only `WAIT_UNTIL_APPLIED` operations keep their existing refresh behavior.
+
 ## Configuration reference
 
 “Conditionally required” means a field is mandatory only in the modes or with
@@ -283,6 +293,7 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].search.username` | string | Conditionally | empty | Any username accepted by the search service | Basic-auth username. Must be configured together with `password`. |
 | `storages[].search.password` | string | Conditionally | empty | Any password accepted by the search service | Basic-auth password. Must be configured together with `username`. |
 | `storages[].search.api_key` | string | No | empty | Any API key accepted by the search service | API key used instead of basic authentication. |
+| `storages[].search.visible_refresh` | enum string | No | `wait_for` | `wait_for`, `immediate` | Refresh policy for `WAIT_UNTIL_VISIBLE` writes/deletes. `immediate` forces the affected shards to refresh. Asynchronous delivery and batches with only applied operations do not force refreshes. |
 | `service.max_operations` | positive integer | No | `1000` | Integer greater than `0` | Maximum operation count accepted in one Read, Write, or Delete batch request. |
 | `service.max_merge_attempts` | positive integer | No | `3` | Integer greater than `0` | Maximum attempts for a merge after revision conflicts. |
 | `service.batching.enabled` | boolean | No | `true` | `true`, `false` | Enables process-local batching for reads and synchronous mutations in `server` and `all` modes. |

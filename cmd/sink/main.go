@@ -408,12 +408,13 @@ func openMongoStorage(ctx context.Context, configured backendConfig, shutdownTim
 func openSearchStorage(ctx context.Context, configured backendConfig) (openedBackend, error) {
 	var opened openedBackend
 	searchOptions := searchstorage.Options{
-		Driver:    configured.searchDriver,
-		Endpoints: configured.searchEndpoints,
-		Store:     configured.name,
-		Username:  configured.searchUsername,
-		Password:  configured.searchPassword,
-		APIKey:    configured.searchAPIKey,
+		Driver:         configured.searchDriver,
+		Endpoints:      configured.searchEndpoints,
+		Store:          configured.name,
+		Username:       configured.searchUsername,
+		Password:       configured.searchPassword,
+		APIKey:         configured.searchAPIKey,
+		VisibleRefresh: configured.searchVisibleRefresh,
 	}
 	store, err := searchstorage.New(searchOptions)
 	if err != nil {
