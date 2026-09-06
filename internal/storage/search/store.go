@@ -27,6 +27,14 @@ const (
 	DriverOpenSearch    Driver = "opensearch"
 )
 
+// VisibleRefresh controls how explicit visibility requests refresh search shards.
+type VisibleRefresh string
+
+const (
+	VisibleRefreshWaitFor   VisibleRefresh = "wait_for"
+	VisibleRefreshImmediate VisibleRefresh = "immediate"
+)
+
 type Options struct {
 	Driver          Driver
 	Endpoints       []string
@@ -36,6 +44,7 @@ type Options struct {
 	APIKey          string
 	HTTPClient      *http.Client
 	MaxResponseSize int64
+	VisibleRefresh  VisibleRefresh
 }
 
 type Store struct {
@@ -47,6 +56,7 @@ type Store struct {
 	apiKey          string
 	client          *http.Client
 	maxResponseSize int64
+	visibleRefresh  VisibleRefresh
 	nextEndpoint    atomic.Uint64
 }
 
@@ -73,6 +83,12 @@ func New(opts Options) (*Store, error) {
 	}
 	if opts.MaxResponseSize < 0 {
 		return nil, errors.New("create search storage: max response size cannot be negative")
+	}
+	if opts.VisibleRefresh == "" {
+		opts.VisibleRefresh = VisibleRefreshWaitFor
+	}
+	if opts.VisibleRefresh != VisibleRefreshWaitFor && opts.VisibleRefresh != VisibleRefreshImmediate {
+		return nil, errors.New("create search storage: visible refresh must be wait_for or immediate")
 	}
 
 	endpoints := make([]*endpointState, 0, len(opts.Endpoints))
@@ -101,6 +117,7 @@ func New(opts Options) (*Store, error) {
 		apiKey:          opts.APIKey,
 		client:          client,
 		maxResponseSize: maxResponseSize,
+		visibleRefresh:  opts.VisibleRefresh,
 	}
 	return store, nil
 }
