@@ -76,7 +76,6 @@ type backendConfig struct {
 	searchUsername           string
 	searchPassword           string
 	searchAPIKey             string
-	searchVisibleRefresh     searchstorage.VisibleRefresh
 	kafka                    backendKafkaConfig
 }
 
@@ -135,11 +134,10 @@ type mongoDBConfigFile struct {
 }
 
 type searchConfigFile struct {
-	Endpoints      []string `yaml:"endpoints"`
-	Username       string   `yaml:"username"`
-	Password       string   `yaml:"password"`
-	APIKey         string   `yaml:"api_key"`
-	VisibleRefresh string   `yaml:"visible_refresh"`
+	Endpoints []string `yaml:"endpoints"`
+	Username  string   `yaml:"username"`
+	Password  string   `yaml:"password"`
+	APIKey    string   `yaml:"api_key"`
 }
 
 type serviceConfigFile struct {
@@ -429,10 +427,6 @@ func loadStorageConfig(index int, file storageConfigFile) (backendConfig, error)
 	loaded.searchUsername = strings.TrimSpace(file.Search.Username)
 	loaded.searchPassword = strings.TrimSpace(file.Search.Password)
 	loaded.searchAPIKey = strings.TrimSpace(file.Search.APIKey)
-	loaded.searchVisibleRefresh = searchstorage.VisibleRefresh(valueOrDefault(file.Search.VisibleRefresh, string(searchstorage.VisibleRefreshWaitFor)))
-	if loaded.searchVisibleRefresh != searchstorage.VisibleRefreshWaitFor && loaded.searchVisibleRefresh != searchstorage.VisibleRefreshImmediate {
-		return loaded, fmt.Errorf("%s.search.visible_refresh must be wait_for or immediate", prefix)
-	}
 	if (loaded.searchUsername == "") != (loaded.searchPassword == "") {
 		return loaded, fmt.Errorf("%s.search.username and %s.search.password must be configured together", prefix, prefix)
 	}
