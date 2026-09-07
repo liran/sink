@@ -39,7 +39,10 @@ Sink moves the database client boundary into a separately sized service tier.
 Crawler processes keep gRPC connections to Sink, while each Sink process owns
 the backend clients and their database connections. The synchronous batcher
 then coalesces concurrent small RPCs for the same store into bounded storage
-batches. MongoDB can use collection-level bulk operations, and Elasticsearch or
+batches. Automatic mutation batches also share namespace, dataset, and completion
+mode, limiting refresh waits to their own dataset. Completed write document
+chains release their scheduling dependencies; each original RPC returns when
+all of its results are final. MongoDB can use collection-level bulk operations, and Elasticsearch or
 OpenSearch can use `_mget` and `_bulk`. Queue limits, adapter concurrency limits,
 and backpressure stop caller concurrency from passing through to a backend
 without bounds.

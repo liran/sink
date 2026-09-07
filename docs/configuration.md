@@ -156,17 +156,15 @@ A slow batch therefore does not block another method or another store.
 The first queued request starts `service.batching.max_wait_milliseconds`.
 Collection stops when that timer expires or adding another request would cross
 the operation or encoded-byte target. A single valid RPC larger than a batch
-target still runs alone. Collected mutations are grouped by completion mode;
-`WAIT_UNTIL_APPLIED` is never promoted to `WAIT_UNTIL_VISIBLE`. Groups touching
-disjoint record addresses may execute concurrently, with at most two core
-requests per wave, subject to the existing core admission limits. If configured
-request or byte limits cannot accommodate both groups, they run sequentially
-(applied first) without promoting either mode. A change of
+target still runs alone. Automatic mutation batches combine only RPCs sharing
+namespace, dataset, and completion mode. An explicit RPC spanning datasets
+executes alone and keeps its original result boundary. This prevents an index's
+refresh wait from entering an unrelated index's storage bulk through automatic
+batching. `WAIT_UNTIL_APPLIED` is never promoted to `WAIT_UNTIL_VISIBLE`. A change of
 completion mode for the same full record address creates an ordering barrier;
 requests touching multiple records wait for all of their predecessors. Same-mode
 Puts and Merges fold within a group; repeated Reads and Deletes execute once per
-full address. Each group returns its own results and uses only its live callers'
-deadlines and cancellation signals.
+full address. Executions use their live callers' deadlines and cancellation signals.
 
 Write/Delete dispatchers can collect and execute later batches while an earlier
 batch waits for refresh. Each store/method has at most
@@ -175,6 +173,22 @@ dependencies cover both active and queued RPCs: an RPC touching several records
 waits for every predecessor, while unrelated RPCs may pass it. Ordering does not
 extend across methods, bypass requests, or server replicas. Queue budgets and
 explicit RPC boundaries remain in force. Lua program declarations stay scoped to their original RPC.
+Write results become available as each document chain finishes: an original RPC
+returns once all of its own operations have final results. A committed Put need
+not wait for an unrelated Merge read, nor a successful Merge for another
+document's conflict retries. Conditional/Lua outcomes derived from speculative
+state stay private until that chain commits or fails definitively. A later
+execution error affects only unfinished RPCs; it cannot replace a returned
+success. This does not make a multi-operation RPC transactional.
+
+A document becomes eligible for subsequent queued writes once every selected
+caller touching it has finished its remaining operations for that address,
+even if their RPCs still contain other unfinished documents. Caller cancellation
+alone does not release an executing document. Backend bulk calls still return
+together; Sink cannot acknowledge an item whose backend result is not yet known.
+Execution slots and byte reservations remain held until the owning execution
+ends, so early completion cannot bypass admission or memory limits.
+
 An explicit request containing operations for multiple stores bypasses the
 micro-batch queues and goes directly to the storage router, which already
 executes store groups concurrently. This avoids splitting one RPC into partial
@@ -236,10 +250,15 @@ Sink metrics:
 | `sink_batcher_operations` | histogram | `method` | Operations represented by each dispatched batch. |
 | `sink_batcher_bytes` | histogram | `method` | Original encoded request bytes represented by each dispatched batch. |
 | `sink_batcher_queue_duration_seconds` | histogram | `method` | Time the oldest request waited before its batch started. |
+| `sink_batcher_request_queue_duration_seconds` | histogram | `method` | Each queued RPC's residence until dispatch, cancellation, or shutdown; seven finite buckets through 30 seconds. |
+| `sink_batcher_request_queue_exits_total` | counter | `method`, `outcome` | RPCs leaving the queue via execution, cancellation, or shutdown. |
 | `sink_batcher_execution_duration_seconds` | histogram | `method` | Core service execution time for a dispatched batch. |
 | `sink_batcher_queued_operations` | gauge | `method` | Operations currently waiting for dispatch. |
 | `sink_batcher_queued_bytes` | gauge | `method` | Encoded request bytes currently waiting for dispatch. |
 | `sink_batcher_rejected_total` | counter | `method`, `reason` | Requests rejected before dispatch, including queue exhaustion. |
+| `sink_write_phase_duration_seconds` | histogram | `phase` | Synchronous core write admission, parsing, storage read, Lua, and storage write latency across stores; writes distinguish applied/visible. |
+| `sink_write_execution_rounds` | histogram | `phase` | Actual storage read/write calls per synchronous core write, including conflict retries, aggregated across stores. |
+| `sink_write_slow_phases_total` | counter | `store`, `phase` | Phase observations exceeding 5 seconds; attributes slow work to a store without multiplying histogram buckets. |
 | `sink_merge_conflicts_total` | counter | none | Revision conflicts retried by Lua merge operations. |
 | `sink_merge_folded_chains_total` | counter | none | Multi-operation merge runs planned for one conditional commit, excluding retries. |
 | `sink_merge_folded_operations_total` | counter | none | Logical operations in those runs, excluding retries; not a successful commit count. |
@@ -262,10 +281,67 @@ Sink metrics:
 | `sink_kafka_worker_delivery_seconds` | histogram | `store` | Oldest fetched-record age at source commit, including quarantined outcomes. |
 | `sink_kafka_worker_quarantined_total` | counter | `store` | Acknowledged DLQ publications, including replayed quarantine attempts. |
 
-Labels intentionally exclude storage names, namespaces, datasets, record keys,
+Store labels use configured names; slow phases of writes with unknown or mixed stores use
+`_unconfigured` or `_multiple`. Labels exclude namespaces, datasets, record keys,
 and error messages to keep metric cardinality bounded. The endpoint has no
 application-level authentication; bind it to a private interface or protect it
 with the deployment network policy.
+
+For slow-write diagnosis, the per-RPC queue histogram includes every queue exit,
+including canceled and shutdown RPCs. It uses latency boundaries of 1 ms, 10 ms,
+100 ms, 1 s, 5 s, 10 s, and 30 s. For example, the number of Write RPCs that left
+the queue after more than ten seconds during a five-minute window:
+
+```promql
+sum(increase(sink_batcher_request_queue_duration_seconds_count{method="Write"}[5m]))
+-
+sum(increase(sink_batcher_request_queue_duration_seconds_bucket{method="Write",le="10"}[5m]))
+```
+
+Use `sink_batcher_request_queue_exits_total` separately for execution/cancellation/
+shutdown counts. The compact histogram cannot split the latency distribution by
+outcome, completion mode, or store. The legacy queue histogram still observes
+only the oldest request in each dispatched batch.
+
+The write phase histogram uses the same seven finite latency buckets and only
+six phase values: `admission`, `parse`, `storage_read`, `lua`,
+`storage_write_applied`, and `storage_write_visible`. Non-write phases combine
+applied and visible modes. Async acceptance uses the existing Kafka metrics and
+is excluded from these synchronous write diagnostics. Overall latency remains
+available from the existing RPC and batch-execution histograms.
+
+Storage phase histograms observe each backend call; the round histogram counts
+those calls per completed core execution, using boundaries 0, 1, 2, 4, 8, and 16.
+Larger counts fall into `+Inf`; `_sum` still retains their full values. These
+measurements describe core executions/calls, not individual original RPCs or
+commits. All histograms aggregate across stores, sacrificing per-store quantiles
+for a small, predictable series budget. Existing folding counters retain the
+aggregate logical-chain/operation counts; there is no extra chain-size histogram.
+
+Only the slow-phase counter retains store attribution. For example:
+
+```promql
+sum by (store, phase) (increase(sink_write_slow_phases_total[5m]))
+```
+
+A counter increment represents one phase observation strictly longer than five
+seconds, not one slow RPC; a core call can contribute several observations.
+`storage_write_visible` includes `refresh=wait_for` inside the backend request
+and does not isolate refresh from storage processing. Compare applied/visible
+writes, round counts, conflict counters, and backend statistics before
+attributing a slow batch to refresh. Several short phases or retries can also
+produce a slow overall RPC without incrementing the slow-phase counter.
+
+The incremental series budget for these diagnostics is **129 + 6 × configured
+store count per Pod**, including the two fixed fallback store labels, all
+possible phase/outcome combinations, `+Inf`, `_sum`, and `_count`. The breakdown
+is 30 queue-histogram series, 9 queue-exit counters, 60 phase-histogram series,
+18 round-histogram series, and 6 slow-phase counters per store/fallback. With
+three stores and six Pods, the upper bound is **882 added series**. Series are
+created on observation. Existing metrics and historical Pod churn are outside
+this incremental budget. A regression test exports both Prometheus text and
+OpenMetrics with 1, 3, and 16 stores to enforce the budget; it also checks that
+unknown phase/method/outcome values cannot create extra dimensions.
 
 The default standard gRPC health service is the process readiness signal for
 `server` and `all` modes. It remains `SERVING` during a runtime failure of one
