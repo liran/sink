@@ -4,7 +4,7 @@
 
 Every server PR runs the immutable public suite against the candidate executable,
 with race detection and real Elasticsearch plus OpenSearch 3.8/2.17. The suite's
-[incident contracts](https://github.com/liran/sink-production-suite/blob/d59cdb952a0abe5a56dfe358be00fd5ab7025462/docs/reliability-contract.md)
+[incident contracts](https://github.com/liran/sink-production-suite/blob/04fab5351834f55931b1b91885f077e0f475046f/docs/reliability-contract.md)
 cover the production failures behind PRs 37, 38, 40 and 41: bounded hot-key work,
 applied/visible isolation, per-caller budgets, Replace conflicts, independent
 document completion, dataset refresh waits and queued cancellation.
