@@ -1,5 +1,30 @@
 # Reliability and recovery
 
+## Production incident qualification
+
+Every server PR runs the immutable public suite against the candidate executable,
+with race detection and real Elasticsearch plus OpenSearch 3.8/2.17. The suite's
+[incident contracts](https://github.com/liran/sink-production-suite/blob/04fab5351834f55931b1b91885f077e0f475046f/docs/reliability-contract.md)
+cover the production failures behind PRs 37, 38, 40 and 41: bounded hot-key work,
+applied/visible isolation, per-caller budgets, Replace conflicts, independent
+document completion, dataset refresh waits and queued cancellation.
+
+An independent Go state model checks mixed operations through serial RPCs and
+several batching configurations, then through all seven configured storage
+routes in release qualification. Suite CI requires matching assertion failures
+on four immutable pre-fix server commits, so a passing regression must also have
+evidence that it detects the historical bug. Empty or skipped conformance runs
+fail qualification. Release artifacts remain blocked on the pinned public suite;
+nightly runs add varying state-machine seeds before the existing two-hour fault
+workload. Keep the PR, release and nightly suite pins synchronized.
+
+These checks establish the listed contracts, not SQLite-level certification.
+The suite records remaining gaps, including compound failures, arbitrary
+concurrent-history verification, disk exhaustion and durable replica recovery.
+Repository rules must require the CI statuses to enforce a pre-merge gate.
+
+## Delivery and recovery semantics
+
 Sink provides at-least-once asynchronous delivery and per-record conditional
 updates. **Business idempotence belongs to the application.** Sink does not
 deduplicate logical mutations. Client retries, lost backend acknowledgements,
