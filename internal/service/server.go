@@ -209,10 +209,10 @@ func (s *Server) read(ctx context.Context, req *sink.ReadRequest, budgets *reque
 }
 
 func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.WriteResponse, error) {
-	return s.write(ctx, req, nil)
+	return s.write(ctx, req, nil, nil)
 }
 
-func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *requestBudgets) (*sink.WriteResponse, error) {
+func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *requestBudgets, completion *writeCompletion) (*sink.WriteResponse, error) {
 	if req == nil || len(req.GetOperations()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "write request must contain operations")
 	}
@@ -222,14 +222,20 @@ func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *req
 	if !validCompletionMode(req.GetCompletionMode()) {
 		return nil, status.Error(codes.InvalidArgument, "write request has an invalid completion mode")
 	}
+	observation := s.newWriteObservation(req)
+	defer observation.finish()
 	admission := admissionRequest{encodedBytes: s.writeExecutionBytesFor(req, budgets.callerCount()), stores: operationStores(req.GetOperations()), wait: budgets != nil}
+	started := time.Now()
 	ctx, release, err := s.admitRequest(ctx, admission)
+	observation.phase("admission", started)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	started = time.Now()
 	luaPrograms, err := parseLuaPrograms(req.GetLuaPrograms())
 	if err != nil {
+		observation.phase("parse", started)
 		return nil, status.Errorf(codes.InvalidArgument, "write request Lua programs: %v", err)
 	}
 
@@ -242,15 +248,21 @@ func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *req
 		response.Results[index] = result
 
 		if err := contextError(ctx); err != nil {
+			observation.phase("parse", started)
 			return nil, err
 		}
 		parsed, err := s.parseWrite(index, operation, luaPrograms)
 		if err != nil {
 			setWriteFailure(result, sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, err, false)
+			completion.operation(index, result)
 			continue
+		}
+		if parsed.merge != nil {
+			parsed.merge.observation = observation
 		}
 		operations = append(operations, parsed)
 	}
+	observation.phase("parse", started)
 
 	if req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED {
 		err := s.publishWrites(ctx, operations, response.Results)
@@ -263,6 +275,8 @@ func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *req
 	groups := buildWriteGroups(operations)
 	executionOptions := writeExecutionOptions{
 		budgets:          budgets,
+		completion:       completion,
+		observation:      observation,
 		WaitUntilVisible: req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE,
 	}
 	err = s.executeWriteGroups(ctx, groups, response.Results, executionOptions)

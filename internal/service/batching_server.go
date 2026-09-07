@@ -68,6 +68,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 	writeOptions := requestBatcherOptions[*sink.WriteRequest, *sink.WriteResponse]{
 		MaxConcurrent:       min(server.maxInFlightRequests, server.maxStoreRequests),
 		Records:             mutationRequestRecords[*sink.WriteOperation, *sink.WriteRequest],
+		Partition:           mutationRequestPartition[*sink.WriteOperation, *sink.WriteRequest],
 		Method:              "Write",
 		MaxWait:             normalized.MaxWait,
 		MaxOperations:       normalized.MaxOperations,
@@ -83,6 +84,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 	deleteOptions := requestBatcherOptions[*sink.DeleteRequest, *sink.DeleteResponse]{
 		MaxConcurrent:       min(server.maxInFlightRequests, server.maxStoreRequests),
 		Records:             mutationRequestRecords[*sink.DeleteOperation, *sink.DeleteRequest],
+		Partition:           mutationRequestPartition[*sink.DeleteOperation, *sink.DeleteRequest],
 		Method:              "Delete",
 		MaxWait:             normalized.MaxWait,
 		MaxOperations:       normalized.MaxOperations,
@@ -466,9 +468,10 @@ func (s *BatchingServer) executeWriteBatch(
 			budgets.add(len(call.request.GetOperations()))
 		}
 		execution, executionCancel := batchExecutionContext(ctx, group, s.server.requestTimeout)
-		response, err := s.server.write(execution, request, budgets)
+		completion := newWriteCompletion(group)
+		response, err := s.server.write(execution, request, budgets, completion)
 		executionCancel()
-		splitWriteResponse(group, response, err)
+		completion.finish(response, err)
 		start = end
 	}
 }
@@ -491,37 +494,6 @@ func totalWriteOperations(calls []*batchCall[*sink.WriteRequest, *sink.WriteResp
 		total += len(call.request.GetOperations())
 	}
 	return total
-}
-
-func splitWriteResponse(
-	calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse],
-	response *sink.WriteResponse,
-	err error,
-) {
-	if err != nil {
-		for _, call := range calls {
-			completeCall(call, (*sink.WriteResponse)(nil), err)
-		}
-		return
-	}
-	if response == nil || len(response.GetResults()) != totalWriteOperations(calls) {
-		splitErr := status.Error(codes.Internal, "batched write returned an invalid result count")
-		for _, call := range calls {
-			completeCall(call, (*sink.WriteResponse)(nil), splitErr)
-		}
-		return
-	}
-	offset := 0
-	for _, call := range calls {
-		count := len(call.request.GetOperations())
-		results := response.GetResults()[offset : offset+count]
-		for index, result := range results {
-			result.OperationIndex = uint32(index)
-		}
-		split := &sink.WriteResponse{Results: results}
-		completeCall(call, split, nil)
-		offset += count
-	}
 }
 
 func (s *BatchingServer) executeDeletes(

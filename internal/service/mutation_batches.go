@@ -19,6 +19,34 @@ type mutationPosition struct {
 	mode sink.CompletionMode
 }
 
+// Requests spanning datasets retain their RPC boundary but execute alone.
+// Partitioning never permits a later same-record request to pass a predecessor.
+type batchPartition struct {
+	namespace string
+	dataset   string
+	mode      sink.CompletionMode
+	isolated  bool
+}
+
+func mutationRequestPartition[Operation addressedOperation, Request mutationRequest[Operation]](request Request) batchPartition {
+	partition := batchPartition{mode: request.GetCompletionMode()}
+	for index, operation := range request.GetOperations() {
+		address := operation.GetAddress()
+		if address.GetNamespace() == "" || address.GetDataset() == "" {
+			partition.isolated = true
+			break
+		}
+		if index == 0 {
+			partition.namespace = address.GetNamespace()
+			partition.dataset = address.GetDataset()
+		} else if partition.namespace != address.GetNamespace() || partition.dataset != address.GetDataset() {
+			partition.isolated = true
+			break
+		}
+	}
+	return partition
+}
+
 // Partition collected RPCs without strengthening their completion requirements.
 // Different modes can execute together only when their record addresses are
 // disjoint. An RPC touching several records waits for every predecessor; keeping
