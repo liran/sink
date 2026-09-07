@@ -80,7 +80,11 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 		for index, document := range documents {
 			result := &response.Results[batch[index].resultIndex]
 			if document.Found {
-				if err := req.Budget.Reserve(len(document.Source)); err != nil {
+				budget := req.Operations[batch[index].resultIndex].Budget
+				if budget == nil {
+					budget = req.Budget
+				}
+				if err := budget.Reserve(len(document.Source)); err != nil {
 					setReadError(result, err)
 					continue
 				}

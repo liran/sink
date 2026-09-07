@@ -16,12 +16,12 @@ import (
 )
 
 type parsedWrite struct {
-	index     int
-	address   storage.Address
-	original  *sink.WriteOperation
-	put       *parsedPut
-	merge     *parsedMerge
-	routingID string
+	index    int
+	address  storage.Address
+	original *sink.WriteOperation
+	put      *parsedPut
+	merge    *parsedMerge
+	identity recordIdentity
 }
 
 type parsedPut struct {
@@ -37,17 +37,19 @@ type parsedMerge struct {
 	observedAt          time.Time
 }
 
-// A group contains one put or an ordered run of merges for one address.
+// A group contains the ordered writes for one complete record address.
 type writeGroup struct {
 	operations []parsedWrite
+	merges     int
 }
 
-type mergeGroupCandidate struct {
+type writeGroupCandidate struct {
 	group     writeGroup
 	operation storage.WriteOperation
 }
 
 type writeExecutionOptions struct {
+	budgets          *requestBudgets
 	WaitUntilVisible bool
 }
 
@@ -63,7 +65,7 @@ func (s *Server) parseWrite(index int, operation *sink.WriteOperation, programs 
 	parsed.index = index
 	parsed.address = address
 	parsed.original = operation
-	parsed.routingID = address.RoutingKey()
+	parsed.identity = identityOf(address)
 
 	switch action := operation.GetAction().(type) {
 	case *sink.WriteOperation_Put:
@@ -167,65 +169,73 @@ func resolveLuaProgram(program *sink.LuaProgram, programs luaPrograms) (merge.Pr
 	return resolved, nil
 }
 
-func buildWriteWaves(operations []parsedWrite) [][]writeGroup {
-	type position struct{ wave, group int }
-	waves := make([][]writeGroup, 0)
-	last := make(map[string]position)
+func buildWriteGroups(operations []parsedWrite) []writeGroup {
+	groups := make([]writeGroup, 0)
+	positions := make(map[recordIdentity]int)
 	for _, operation := range operations {
-		previous, found := last[operation.routingID]
-		waveIndex := 0
-		if found {
-			group := &waves[previous.wave][previous.group]
-			if operation.merge != nil && group.operations[0].merge != nil {
-				group.operations = append(group.operations, operation)
-				continue
-			}
-			waveIndex = previous.wave + 1
+		position, found := positions[operation.identity]
+		if !found {
+			position = len(groups)
+			positions[operation.identity] = position
+			var group writeGroup
+			groups = append(groups, group)
 		}
-		for len(waves) <= waveIndex {
-			waves = append(waves, nil)
+		groups[position].operations = append(groups[position].operations, operation)
+		if operation.merge != nil {
+			groups[position].merges++
 		}
-		last[operation.routingID] = position{wave: waveIndex, group: len(waves[waveIndex])}
-		group := writeGroup{operations: []parsedWrite{operation}}
-		waves[waveIndex] = append(waves[waveIndex], group)
 	}
-	return waves
+	return groups
 }
 
-func (s *Server) executeWriteWave(
+// Single puts and unconditional put chains do not need a snapshot or a CAS.
+func (g writeGroup) directPut() bool {
+	if len(g.operations) == 1 {
+		return g.operations[0].put != nil
+	}
+	for _, operation := range g.operations {
+		if operation.put == nil || operation.put.precondition.Kind != storage.PreconditionNone {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *Server) executeWriteGroups(
 	ctx context.Context,
-	wave []writeGroup,
+	groups []writeGroup,
 	results []*sink.WriteResult,
 	opts writeExecutionOptions,
 ) error {
-	puts := make([]parsedWrite, 0, len(wave))
-	merges := make([]writeGroup, 0, len(wave))
-	for _, group := range wave {
-		operation := group.operations[0]
-		if operation.put != nil {
-			puts = append(puts, operation)
+	puts := make([]writeGroup, 0, len(groups))
+	conditional := make([]writeGroup, 0, len(groups))
+	for _, group := range groups {
+		s.metrics.ObserveMergeFold(group.merges)
+		if group.directPut() {
+			puts = append(puts, group)
 			continue
 		}
-		merges = append(merges, group)
+		conditional = append(conditional, group)
 	}
 	err := s.executePuts(ctx, puts, results, opts)
 	if err != nil {
 		return err
 	}
-	return s.executeMerges(ctx, merges, results, opts)
+	return s.executeConditionalWrites(ctx, conditional, results, opts)
 }
 
 func (s *Server) executePuts(
 	ctx context.Context,
-	operations []parsedWrite,
+	groups []writeGroup,
 	results []*sink.WriteResult,
 	opts writeExecutionOptions,
 ) error {
-	if len(operations) == 0 {
+	if len(groups) == 0 {
 		return nil
 	}
-	storageOperations := make([]storage.WriteOperation, 0, len(operations))
-	for _, operation := range operations {
+	storageOperations := make([]storage.WriteOperation, 0, len(groups))
+	for _, group := range groups {
+		operation := group.operations[len(group.operations)-1]
 		storageOperation := storage.WriteOperation{
 			Address:      operation.address,
 			Document:     operation.put.document,
@@ -241,87 +251,110 @@ func (s *Server) executePuts(
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "write records: %v", err)
 	}
-	if len(response.Results) != len(operations) {
+	if len(response.Results) != len(groups) {
 		return status.Error(codes.Internal, "storage returned an invalid write result count")
 	}
 	for index, stored := range response.Results {
-		applyWriteResult(results[operations[index].index], stored)
+		applyWriteGroupResult(groups[index], results, stored)
 	}
 	return nil
 }
 
-func (s *Server) executeMerges(
+func (s *Server) executeConditionalWrites(
 	ctx context.Context,
 	groups []writeGroup,
 	results []*sink.WriteResult,
 	opts writeExecutionOptions,
 ) error {
 	pending := groups
-	for _, group := range groups {
-		s.metrics.ObserveMergeFold(len(group.operations))
-	}
 	for range s.maxMergeAttempts {
 		if len(pending) == 0 {
 			return nil
 		}
-		next, err := s.executeMergeAttempt(ctx, pending, results, opts)
+		if err := contextError(ctx); err != nil {
+			return err
+		}
+		next, err := s.executeWriteAttempt(ctx, pending, results, opts)
 		if err != nil {
 			return err
 		}
-		s.metrics.ObserveMergeConflict(len(next))
+		for _, group := range next {
+			if group.merges > 0 {
+				s.metrics.ObserveMergeConflict(1)
+			}
+		}
 		pending = next
 	}
 
 	for _, group := range pending {
-		s.metrics.ObserveMergeExhausted(len(group.operations))
+		s.metrics.ObserveMergeExhausted(group.merges)
 		for _, operation := range group.operations {
 			result := results[operation.index]
 			result.Status = sink.WriteStatus_WRITE_STATUS_PRECONDITION_FAILED
-			conflictErr := errors.New("record changed during merge")
+			conflictErr := errors.New("record changed during conditional write")
 			result.Failure = newFailure(sink.FailureCode_FAILURE_CODE_CONFLICT, conflictErr, true)
 		}
 	}
 	return nil
 }
 
-func (s *Server) executeMergeAttempt(
+func (s *Server) executeWriteAttempt(
 	ctx context.Context,
 	groups []writeGroup,
 	results []*sink.WriteResult,
 	opts writeExecutionOptions,
 ) ([]writeGroup, error) {
+	snapshotBudgets := opts.budgets.fresh(s.maxReadBytes)
 	readOperations := make([]storage.ReadOperation, 0, len(groups))
 	for _, group := range groups {
 		operation := group.operations[0]
-		readOperation := storage.ReadOperation{Address: operation.address}
+		owners := make([]int, 0, len(group.operations))
+		for _, member := range group.operations {
+			owners = append(owners, opts.budgets.owner(member.index))
+		}
+		readOperation := storage.ReadOperation{Address: operation.address, Budget: sharedSnapshotBudget(owners, snapshotBudgets)}
 		readOperations = append(readOperations, readOperation)
 	}
 	readRequest := storage.ReadRequest{Operations: readOperations, Budget: storage.NewReadBudget(s.maxReadBytes)}
 	readResponse, err := s.storage.Read(ctx, readRequest)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "read records for merge: %v", err)
+		return nil, status.Errorf(codes.Unavailable, "read records for conditional write: %v", err)
 	}
 	if len(readResponse.Results) != len(groups) {
-		return nil, status.Error(codes.Internal, "storage returned an invalid merge read result count")
+		return nil, status.Error(codes.Internal, "storage returned an invalid conditional read result count")
 	}
 
-	candidates := make([]mergeGroupCandidate, 0, len(groups))
+	candidates := make([]writeGroupCandidate, 0, len(groups))
 	outputBudget := storage.NewReadBudget(s.maxReadBytes)
+	inputBudgets := opts.budgets.fresh(s.maxReadBytes)
+	outputBudgets := opts.budgets.fresh(s.maxReadBytes)
 	for index, stored := range readResponse.Results {
 		group := groups[index]
-		input := mergeGroupPreparation{group: group, stored: stored, results: results}
-		candidate, include := s.prepareMergeGroup(ctx, input)
+		input := writeGroupPreparation{group: group, stored: stored, results: results}
+		var candidate writeGroupCandidate
+		var include bool
+		if opts.budgets == nil {
+			candidate, include = s.prepareWriteGroup(ctx, input)
+		} else {
+			preparation := batchedWritePreparation{writeGroupPreparation: input, budgets: opts.budgets, inputs: inputBudgets, outputs: outputBudgets}
+			candidate, include = s.prepareBatchedWriteGroup(ctx, preparation)
+		}
 		if include {
-			if err := outputBudget.Reserve(len(candidate.operation.Document.Payload)); err != nil {
-				failure := storage.WriteResult{Status: storage.WriteStatusFailed, Err: err}
-				applyMergeGroupResult(group, results, failure)
-				continue
+			if opts.budgets == nil {
+				if err := outputBudget.Reserve(len(candidate.operation.Document.Payload)); err != nil {
+					failure := storage.WriteResult{Status: storage.WriteStatusFailed, Err: err}
+					applyWriteGroupResult(group, results, failure)
+					continue
+				}
 			}
 			candidates = append(candidates, candidate)
 		}
 	}
 	if len(candidates) == 0 {
 		return nil, nil
+	}
+	if err := contextError(ctx); err != nil {
+		return nil, err
 	}
 
 	writeOperations := make([]storage.WriteOperation, 0, len(candidates))
@@ -334,7 +367,7 @@ func (s *Server) executeMergeAttempt(
 	}
 	writeResponse, err := s.storage.Write(ctx, writeRequest)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "commit merged records: %v", err)
+		return nil, status.Errorf(codes.Unavailable, "commit folded records: %v", err)
 	}
 	if len(writeResponse.Results) != len(candidates) {
 		return nil, status.Error(codes.Internal, "storage returned an invalid merge write result count")
@@ -347,7 +380,7 @@ func (s *Server) executeMergeAttempt(
 			next = append(next, group)
 			continue
 		}
-		applyMergeGroupResult(group, results, stored)
+		applyWriteGroupResult(group, results, stored)
 	}
 	return next, nil
 }

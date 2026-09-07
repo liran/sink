@@ -66,6 +66,8 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 	batching.reads = newStoreRequestBatchers(normalized.StoreNames, readOptions)
 
 	writeOptions := requestBatcherOptions[*sink.WriteRequest, *sink.WriteResponse]{
+		MaxConcurrent:       min(server.maxInFlightRequests, server.maxStoreRequests),
+		Records:             mutationRequestRecords[*sink.WriteOperation, *sink.WriteRequest],
 		Method:              "Write",
 		MaxWait:             normalized.MaxWait,
 		MaxOperations:       normalized.MaxOperations,
@@ -79,6 +81,8 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 	batching.writes = newStoreRequestBatchers(normalized.StoreNames, writeOptions)
 
 	deleteOptions := requestBatcherOptions[*sink.DeleteRequest, *sink.DeleteResponse]{
+		MaxConcurrent:       min(server.maxInFlightRequests, server.maxStoreRequests),
+		Records:             mutationRequestRecords[*sink.DeleteOperation, *sink.DeleteRequest],
 		Method:              "Delete",
 		MaxWait:             normalized.MaxWait,
 		MaxOperations:       normalized.MaxOperations,
@@ -331,13 +335,35 @@ func (s *BatchingServer) executeReads(
 	ctx context.Context,
 	calls []*batchCall[*sink.ReadRequest, *sink.ReadResponse],
 ) {
-	operations := make([]*sink.ReadOperation, 0, totalReadOperations(calls))
-	for _, call := range calls {
-		operations = append(operations, call.request.GetOperations()...)
+	for start := 0; start < len(calls); {
+		end := start
+		bytes := 0
+		for end < len(calls) {
+			next := calls[end].request.SizeVT() + 2*s.server.maxReadBytes
+			if end > start && next > s.server.maxInFlightBytes-bytes {
+				break
+			}
+			bytes += next
+			end++
+		}
+		group := liveMutationCalls(calls[start:end])
+		if len(group) == 0 {
+			start = end
+			continue
+		}
+		operations := make([]*sink.ReadOperation, 0, totalReadOperations(group))
+		budgets := &requestBudgets{}
+		for _, call := range group {
+			operations = append(operations, call.request.GetOperations()...)
+			budgets.add(len(call.request.GetOperations()))
+		}
+		request := &sink.ReadRequest{Operations: operations}
+		execution, cancel := batchExecutionContext(ctx, group, s.server.requestTimeout)
+		response, err := s.server.read(execution, request, budgets)
+		cancel()
+		splitReadResponse(group, response, err)
+		start = end
 	}
-	request := &sink.ReadRequest{Operations: operations}
-	response, err := s.server.Read(ctx, request)
-	splitReadResponse(calls, response, err)
 }
 
 func totalReadOperations(calls []*batchCall[*sink.ReadRequest, *sink.ReadResponse]) int {
@@ -389,7 +415,7 @@ func (s *BatchingServer) executeWrites(
 		if parallel {
 			applied := combinedWriteRequest(wave.applied)
 			visible := combinedWriteRequest(wave.visible)
-			parallel = s.server.writeExecutionBytes(applied)+s.server.writeExecutionBytes(visible) <= s.server.maxInFlightBytes
+			parallel = s.server.writeExecutionBytesFor(applied, len(wave.applied))+s.server.writeExecutionBytesFor(visible, len(wave.visible)) <= s.server.maxInFlightBytes
 		}
 		var executions sync.WaitGroup
 		for _, group := range [][]*batchCall[*sink.WriteRequest, *sink.WriteResponse]{wave.applied, wave.visible} {
@@ -416,9 +442,35 @@ func (s *BatchingServer) executeWriteBatch(
 	}
 	ctx, cancel := batchExecutionContext(ctx, calls, s.server.requestTimeout)
 	defer cancel()
-	request := combinedWriteRequest(calls)
-	response, err := s.server.Write(ctx, request)
-	splitWriteResponse(calls, response, err)
+	for start := 0; start < len(calls); {
+		end := len(calls)
+		combined := combinedWriteRequest(calls[start:end])
+		if s.server.writeExecutionBytesFor(combined, end-start) > s.server.maxInFlightBytes {
+			end = start + 1
+		}
+		for end < len(calls) {
+			next := combinedWriteRequest(calls[start : end+1])
+			if s.server.writeExecutionBytesFor(next, end+1-start) > s.server.maxInFlightBytes {
+				break
+			}
+			end++
+		}
+		group := liveMutationCalls(calls[start:end])
+		if len(group) == 0 {
+			start = end
+			continue
+		}
+		request := combinedWriteRequest(group)
+		budgets := &requestBudgets{}
+		for _, call := range group {
+			budgets.add(len(call.request.GetOperations()))
+		}
+		execution, executionCancel := batchExecutionContext(ctx, group, s.server.requestTimeout)
+		response, err := s.server.write(execution, request, budgets)
+		executionCancel()
+		splitWriteResponse(group, response, err)
+		start = end
+	}
 }
 
 func combinedWriteRequest(calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse]) *sink.WriteRequest {
@@ -510,7 +562,7 @@ func (s *BatchingServer) executeDeleteBatch(
 	ctx, cancel := batchExecutionContext(ctx, calls, s.server.requestTimeout)
 	defer cancel()
 	request := combinedDeleteRequest(calls)
-	response, err := s.server.Delete(ctx, request)
+	response, err := s.server.delete(ctx, request, true)
 	splitDeleteResponse(calls, response, err)
 }
 

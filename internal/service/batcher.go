@@ -22,9 +22,13 @@ type batchCall[Request any, Response any] struct {
 	encodedBytes   int
 	enqueuedAt     time.Time
 	result         chan batchResult[Response]
+	records        []recordIdentity
+	stopWake       func() bool
 }
 
 type requestBatcherOptions[Request any, Response any] struct {
+	MaxConcurrent       int
+	Records             func(Request) []recordIdentity
 	Method              string
 	MaxWait             time.Duration
 	MaxOperations       int
@@ -37,6 +41,9 @@ type requestBatcherOptions[Request any, Response any] struct {
 }
 
 type requestBatcher[Request any, Response any] struct {
+	maxConcurrent       int
+	records             func(Request) []recordIdentity
+	wake                chan struct{}
 	method              string
 	maxWait             time.Duration
 	maxOperations       int
@@ -59,6 +66,9 @@ type requestBatcher[Request any, Response any] struct {
 func newRequestBatcher[Request any, Response any](opts requestBatcherOptions[Request, Response]) *requestBatcher[Request, Response] {
 	ctx, cancel := context.WithCancel(context.Background())
 	batcher := &requestBatcher[Request, Response]{
+		maxConcurrent:       max(1, opts.MaxConcurrent),
+		records:             opts.Records,
+		wake:                make(chan struct{}, 1),
 		method:              opts.Method,
 		maxWait:             opts.MaxWait,
 		maxOperations:       opts.MaxOperations,
@@ -107,6 +117,15 @@ func (b *requestBatcher[Request, Response]) Submit(
 		enqueuedAt:     time.Now(),
 		result:         make(chan batchResult[Response], 1),
 	}
+	if b.records != nil {
+		call.records = b.records(request)
+	}
+	call.stopWake = context.AfterFunc(ctx, func() {
+		select {
+		case b.wake <- struct{}{}:
+		default:
+		}
+	})
 	select {
 	case <-b.ctx.Done():
 		b.release(call)
@@ -165,6 +184,9 @@ func (b *requestBatcher[Request, Response]) reserve(operationCount int, encodedB
 }
 
 func (b *requestBatcher[Request, Response]) release(call *batchCall[Request, Response]) {
+	if call.stopWake != nil {
+		call.stopWake()
+	}
 	b.queueMu.Lock()
 	b.queuedCalls--
 	b.queuedOperations -= call.operationCount
@@ -175,144 +197,125 @@ func (b *requestBatcher[Request, Response]) release(call *batchCall[Request, Res
 
 func (b *requestBatcher[Request, Response]) run() {
 	defer b.waitGroup.Done()
-	var carry *batchCall[Request, Response]
+	pending := make([]*batchCall[Request, Response], 0)
+	active := make(map[recordIdentity]bool)
+	completed := make(chan []*batchCall[Request, Response], b.maxConcurrent)
+	running := 0
 	for {
-		first, ok := b.firstCall(carry)
-		carry = nil
-		if !ok {
-			b.drain()
-			return
-		}
 		if b.ctx.Err() != nil {
-			b.failCalls([]*batchCall[Request, Response]{first})
+			b.failCalls(pending)
 			b.drain()
-			return
-		}
-		if err := contextError(first.ctx); err != nil {
-			b.release(first)
-			completeCall(first, emptyResponse[Response](), err)
-			continue
-		}
-
-		calls, next, reason, collecting := b.collect(first)
-		if !collecting {
-			b.failCalls(calls)
-			if next != nil {
-				b.failCalls([]*batchCall[Request, Response]{next})
+			for running > 0 {
+				<-completed
+				running--
 			}
-			b.drain()
 			return
 		}
-		live := b.liveCalls(calls)
-		if len(live) > 0 {
-			b.executeBatch(live, reason)
+		// Drain the bounded input queue before selecting a batch, including aged
+		// backlog accumulated while all execution slots were occupied.
+	drainInput:
+		for {
+			select {
+			case call := <-b.input:
+				pending = append(pending, call)
+			default:
+				break drainInput
+			}
 		}
-		carry = next
-	}
-}
-
-func (b *requestBatcher[Request, Response]) firstCall(
-	carry *batchCall[Request, Response],
-) (*batchCall[Request, Response], bool) {
-	if carry != nil {
-		return carry, true
-	}
-	select {
-	case call := <-b.input:
-		return call, true
-	case <-b.ctx.Done():
-		return nil, false
-	}
-}
-
-func (b *requestBatcher[Request, Response]) collect(
-	first *batchCall[Request, Response],
-) ([]*batchCall[Request, Response], *batchCall[Request, Response], string, bool) {
-	calls := []*batchCall[Request, Response]{first}
-	operations := first.operationCount
-	encodedBytes := first.encodedBytes
-	var timer *time.Timer
-	defer func() {
+		live := pending[:0]
+		for _, call := range pending {
+			if err := contextError(call.ctx); err != nil {
+				b.release(call)
+				completeCall(call, emptyResponse[Response](), err)
+			} else {
+				live = append(live, call)
+			}
+		}
+		clear(pending[len(live):])
+		pending = live
+		var timer *time.Timer
+		var deadline <-chan time.Time
+		if running < b.maxConcurrent {
+			selected, remaining, reason := b.selectReady(pending, active)
+			if len(selected) > 0 {
+				wait := b.maxWait - time.Since(selected[0].enqueuedAt)
+				if reason != "max_wait" || wait <= 0 {
+					pending = remaining
+					for _, call := range selected {
+						b.release(call)
+						for _, key := range call.records {
+							active[key] = true
+						}
+					}
+					running++
+					go func() { b.executeBatch(selected, reason); completed <- selected }()
+					continue
+				}
+				timer = time.NewTimer(wait)
+				deadline = timer.C
+			}
+		}
+		select {
+		case call := <-b.input:
+			pending = append(pending, call)
+		case calls := <-completed:
+			running--
+			for _, call := range calls {
+				for _, key := range call.records {
+					delete(active, key)
+				}
+			}
+		case <-deadline:
+		case <-b.wake:
+		case <-b.ctx.Done():
+		}
 		if timer != nil {
 			stopTimer(timer)
 		}
-	}()
-	for {
-		if b.ctx.Err() != nil {
-			return calls, nil, "shutdown", false
-		}
-		if operations >= b.maxOperations {
-			return calls, nil, "max_operations", true
-		}
-		if encodedBytes >= b.maxBytes {
-			return calls, nil, "max_bytes", true
-		}
-		if timer == nil {
-			// Drain backlog before checking the wait deadline. Requests can age while
-			// the previous batch executes and must still be coalesced instead of
-			// degenerating into one storage call per queued RPC.
-			select {
-			case next := <-b.input:
-				if err := contextError(next.ctx); err != nil {
-					b.release(next)
-					completeCall(next, emptyResponse[Response](), err)
-					continue
-				}
-				if next.operationCount > b.maxOperations-operations {
-					return calls, next, "max_operations", true
-				}
-				if next.encodedBytes > b.maxBytes-encodedBytes {
-					return calls, next, "max_bytes", true
-				}
-				calls = append(calls, next)
-				operations += next.operationCount
-				encodedBytes += next.encodedBytes
-				continue
-			default:
-			}
-			remaining := b.maxWait - time.Since(first.enqueuedAt)
-			if remaining <= 0 {
-				return calls, nil, "max_wait", true
-			}
-			timer = time.NewTimer(remaining)
-		}
-		select {
-		case next := <-b.input:
-			if err := contextError(next.ctx); err != nil {
-				b.release(next)
-				completeCall(next, emptyResponse[Response](), err)
-				continue
-			}
-			if next.operationCount > b.maxOperations-operations {
-				return calls, next, "max_operations", true
-			}
-			if next.encodedBytes > b.maxBytes-encodedBytes {
-				return calls, next, "max_bytes", true
-			}
-			calls = append(calls, next)
-			operations += next.operationCount
-			encodedBytes += next.encodedBytes
-		case <-timer.C:
-			return calls, nil, "max_wait", true
-		case <-b.ctx.Done():
-			return calls, nil, "shutdown", false
-		}
 	}
 }
 
-func (b *requestBatcher[Request, Response]) liveCalls(
-	calls []*batchCall[Request, Response],
-) []*batchCall[Request, Response] {
-	live := make([]*batchCall[Request, Response], 0, len(calls))
-	for _, call := range calls {
-		b.release(call)
-		if err := contextError(call.ctx); err != nil {
-			completeCall(call, emptyResponse[Response](), err)
+// A blocked earlier RPC reserves all its keys in the dependency graph. Later
+// independent RPCs can pass it, while multi-record chains retain queue order.
+func (b *requestBatcher[Request, Response]) selectReady(pending []*batchCall[Request, Response], active map[recordIdentity]bool) ([]*batchCall[Request, Response], []*batchCall[Request, Response], string) {
+	selected := make([]*batchCall[Request, Response], 0)
+	remaining := make([]*batchCall[Request, Response], 0)
+	blocked := make(map[recordIdentity]bool)
+	operations, bytes := 0, 0
+	reason := "max_wait"
+	for _, call := range pending {
+		dependent := false
+		for _, key := range call.records {
+			if active[key] || blocked[key] {
+				dependent = true
+				break
+			}
+		}
+		fits := len(selected) == 0 || (call.operationCount <= b.maxOperations-operations && call.encodedBytes <= b.maxBytes-bytes)
+		if dependent || !fits {
+			remaining = append(remaining, call)
+			for _, key := range call.records {
+				blocked[key] = true
+			}
+			if !fits && !dependent {
+				if call.operationCount > b.maxOperations-operations {
+					reason = "max_operations"
+				} else {
+					reason = "max_bytes"
+				}
+			}
 			continue
 		}
-		live = append(live, call)
+		selected = append(selected, call)
+		operations += call.operationCount
+		bytes += call.encodedBytes
 	}
-	return live
+	if operations >= b.maxOperations {
+		reason = "max_operations"
+	} else if bytes >= b.maxBytes {
+		reason = "max_bytes"
+	}
+	return selected, remaining, reason
 }
 
 func (b *requestBatcher[Request, Response]) executeBatch(

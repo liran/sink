@@ -29,6 +29,7 @@ const (
 )
 
 type integrationFixture struct {
+	driver   search.Driver
 	endpoint string
 	index    string
 	client   *http.Client
@@ -62,6 +63,7 @@ func newIntegrationFixture(t *testing.T) *integrationFixture {
 		t.Fatalf("store.Ping() error = %v", err)
 	}
 	fixture := &integrationFixture{
+		driver:   driver,
 		endpoint: endpoint,
 		index:    index,
 		client:   client,

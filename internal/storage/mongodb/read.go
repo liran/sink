@@ -15,6 +15,7 @@ type readWork struct {
 	collection resolvedCollection
 	id         any
 	idKey      string
+	budget     *storage.ReadBudget
 }
 
 type readGroup struct {
@@ -51,6 +52,10 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 			collection: collection,
 			id:         id,
 			idKey:      rawValueKey(encodedID),
+			budget:     operation.Budget,
+		}
+		if work.budget == nil {
+			work.budget = req.Budget
 		}
 		group := groups[collection.key()]
 		if group == nil {
@@ -75,17 +80,19 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 			defer func() {
 				<-s.groups
 			}()
-			s.readGroup(ctx, group, response.Results, req.Budget)
+			s.readGroup(ctx, group, response.Results)
 		}()
 	}
 	reads.Wait()
 	return response, nil
 }
 
-func (s *Store) readGroup(ctx context.Context, group *readGroup, results []storage.ReadResult, budget *storage.ReadBudget) {
+func (s *Store) readGroup(ctx context.Context, group *readGroup, results []storage.ReadResult) {
 	ids := make([]any, 0, len(group.operations))
 	indexesByID := make(map[string][]int, len(group.operations))
+	budgets := make(map[int]*storage.ReadBudget, len(group.operations))
 	for _, operation := range group.operations {
+		budgets[operation.index] = operation.budget
 		ids = append(ids, operation.id)
 		indexesByID[operation.idKey] = append(indexesByID[operation.idKey], operation.index)
 	}
@@ -115,7 +122,7 @@ func (s *Store) readGroup(ctx context.Context, group *readGroup, results []stora
 		}
 		admitted := make([]int, 0, len(indexes))
 		for _, index := range indexes {
-			if err := budget.Reserve(len(raw)); err != nil {
+			if err := budgets[index].Reserve(len(raw)); err != nil {
 				setReadError(&results[index], err)
 			} else {
 				admitted = append(admitted, index)

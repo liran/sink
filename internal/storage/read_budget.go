@@ -13,6 +13,7 @@ type ReadBudget struct {
 	mu        sync.Mutex
 	remaining int
 	maximum   int
+	shared    []*ReadBudget
 }
 
 func NewReadBudget(maxBytes int) *ReadBudget {
@@ -23,7 +24,33 @@ func NewReadBudget(maxBytes int) *ReadBudget {
 	return budget
 }
 
+// NewSharedReadBudget charges each interested caller once for a shared snapshot.
+// A caller that exhausted its own quota cannot prevent another caller's read.
+func NewSharedReadBudget(budgets []*ReadBudget) *ReadBudget {
+	if len(budgets) == 1 {
+		return budgets[0]
+	}
+	budget := &ReadBudget{shared: budgets}
+	return budget
+}
+
 func (b *ReadBudget) Reserve(size int) error {
+	if len(b.shared) > 0 {
+		accepted := false
+		var failure error
+		for _, budget := range b.shared {
+			if err := budget.Reserve(size); err != nil {
+				failure = err
+			} else {
+				accepted = true
+			}
+		}
+		if accepted {
+			return nil
+		}
+		return failure
+	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	// Include room for the per-operation protobuf envelope and revision.

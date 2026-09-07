@@ -68,7 +68,11 @@ func (s *Store) Read(_ context.Context, req storage.ReadRequest) (storage.ReadRe
 			response.Results[index].Status = storage.ReadStatusNotFound
 			continue
 		}
-		if err := req.Budget.Reserve(len(stored.document.Payload)); err != nil {
+		budget := operation.Budget
+		if budget == nil {
+			budget = req.Budget
+		}
+		if err := budget.Reserve(len(stored.document.Payload)); err != nil {
 			response.Results[index] = storage.ReadResult{Status: storage.ReadStatusFailed, Err: err}
 			continue
 		}

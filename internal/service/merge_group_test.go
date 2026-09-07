@@ -210,7 +210,7 @@ func TestMergeFoldingPreservesOrderAndSharesCommitRevision(t *testing.T) {
 	}
 }
 
-func TestMergeFoldingPutIsABarrier(t *testing.T) {
+func TestWriteFoldingPreservesPutBetweenMerges(t *testing.T) {
 	backend := memory.New()
 	observed := &countingStorage{backend: backend}
 	server := newTestServer(t, observed, nil)
@@ -232,11 +232,11 @@ func TestMergeFoldingPutIsABarrier(t *testing.T) {
 	if got := foldingValue(t, backend, "counter"); got != 27 {
 		t.Fatalf("value across put barrier = %d", got)
 	}
-	if observed.readCalls.Load() != 2 || observed.writeCalls.Load() != 3 {
-		t.Fatalf("barrier reads=%d writes=%d", observed.readCalls.Load(), observed.writeCalls.Load())
+	if observed.readCalls.Load() != 1 || observed.writeCalls.Load() != 1 {
+		t.Fatalf("folded reads=%d writes=%d", observed.readCalls.Load(), observed.writeCalls.Load())
 	}
-	if bytes.Equal(response.Results[0].GetRevision().GetData(), response.Results[3].GetRevision().GetData()) {
-		t.Fatal("merges across put shared a commit")
+	if !bytes.Equal(response.Results[0].GetRevision().GetData(), response.Results[3].GetRevision().GetData()) {
+		t.Fatal("writes to one record did not share the final commit")
 	}
 }
 

@@ -55,6 +55,7 @@ type Server struct {
 	maxStoreRequests    int
 	maxReadBytes        int
 	admissionMu         sync.Mutex
+	admissionChanged    chan struct{}
 	inFlightRequests    int
 	inFlightBytes       int
 	storeRequests       map[string]int
@@ -118,18 +119,24 @@ func New(opts Options) (*Server, error) {
 		maxStoreRequests:    opts.MaxStoreRequests,
 		maxReadBytes:        opts.MaxReadBytes,
 		storeRequests:       storeRequests,
+		admissionChanged:    make(chan struct{}),
 	}
 	return server, nil
 }
 
 func (s *Server) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadResponse, error) {
+	return s.read(ctx, req, nil)
+}
+
+func (s *Server) read(ctx context.Context, req *sink.ReadRequest, budgets *requestBudgets) (*sink.ReadResponse, error) {
 	if req == nil || len(req.GetOperations()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "read request must contain operations")
 	}
 	if err := s.validateOperationCount(len(req.GetOperations())); err != nil {
 		return nil, err
 	}
-	ctx, release, err := s.beginRequest(ctx, req.SizeVT()+s.maxReadBytes, operationStores(req.GetOperations()))
+	admission := admissionRequest{encodedBytes: req.SizeVT() + 2*s.maxReadBytes*budgets.callerCount(), stores: operationStores(req.GetOperations()), wait: budgets != nil}
+	ctx, release, err := s.admitRequest(ctx, admission)
 	if err != nil {
 		return nil, err
 	}
@@ -140,6 +147,9 @@ func (s *Server) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadRes
 	}
 	storageOperations := make([]storage.ReadOperation, 0, len(req.GetOperations()))
 	operationIndexes := make([]int, 0, len(req.GetOperations()))
+	storageIndexes := make([]int, 0, len(req.GetOperations()))
+	owners := make([][]int, 0, len(req.GetOperations()))
+	positions := make(map[recordIdentity]int)
 
 	for index, operation := range req.GetOperations() {
 		result := &sink.ReadResult{OperationIndex: uint32(index)}
@@ -150,13 +160,26 @@ func (s *Server) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadRes
 			setReadFailure(result, sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, err, false)
 			continue
 		}
-		storageOperation := storage.ReadOperation{Address: address}
-		storageOperations = append(storageOperations, storageOperation)
+		key := identityOf(address)
+		position, found := positions[key]
+		if !found {
+			position = len(storageOperations)
+			positions[key] = position
+			storageOperation := storage.ReadOperation{Address: address}
+			storageOperations = append(storageOperations, storageOperation)
+			owners = append(owners, nil)
+		}
+		owners[position] = append(owners[position], budgets.owner(index))
 		operationIndexes = append(operationIndexes, index)
+		storageIndexes = append(storageIndexes, position)
 	}
 
 	if len(storageOperations) == 0 {
 		return response, nil
+	}
+	snapshotBudgets := budgets.fresh(s.maxReadBytes)
+	for index := range storageOperations {
+		storageOperations[index].Budget = sharedSnapshotBudget(owners[index], snapshotBudgets)
 	}
 	storageRequest := storage.ReadRequest{Operations: storageOperations, Budget: storage.NewReadBudget(s.maxReadBytes)}
 	storageResponse, err := s.storage.Read(ctx, storageRequest)
@@ -167,14 +190,29 @@ func (s *Server) Read(ctx context.Context, req *sink.ReadRequest) (*sink.ReadRes
 		return nil, status.Error(codes.Internal, "storage returned an invalid read result count")
 	}
 
-	for resultIndex, storageResult := range storageResponse.Results {
-		result := response.Results[operationIndexes[resultIndex]]
+	// Fetch each address once, but charge every returned copy in caller order.
+	// Deduplication must not let repeated keys bypass the response byte limit.
+	outputBudgets := budgets.fresh(s.maxReadBytes)
+	for index, operationIndex := range operationIndexes {
+		storageResult := storageResponse.Results[storageIndexes[index]]
+		result := response.Results[operationIndex]
+		if storageResult.Status == storage.ReadStatusFound {
+			if err := outputBudgets[budgets.owner(operationIndex)].Reserve(len(storageResult.Document.Payload)); err != nil {
+				code, retryable := storageFailureDetails(err)
+				setReadFailure(result, code, err, retryable)
+				continue
+			}
+		}
 		applyReadResult(result, storageResult)
 	}
 	return response, nil
 }
 
 func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.WriteResponse, error) {
+	return s.write(ctx, req, nil)
+}
+
+func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *requestBudgets) (*sink.WriteResponse, error) {
 	if req == nil || len(req.GetOperations()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "write request must contain operations")
 	}
@@ -184,7 +222,8 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 	if !validCompletionMode(req.GetCompletionMode()) {
 		return nil, status.Error(codes.InvalidArgument, "write request has an invalid completion mode")
 	}
-	ctx, release, err := s.beginRequest(ctx, s.writeExecutionBytes(req), operationStores(req.GetOperations()))
+	admission := admissionRequest{encodedBytes: s.writeExecutionBytesFor(req, budgets.callerCount()), stores: operationStores(req.GetOperations()), wait: budgets != nil}
+	ctx, release, err := s.admitRequest(ctx, admission)
 	if err != nil {
 		return nil, err
 	}
@@ -221,15 +260,14 @@ func (s *Server) Write(ctx context.Context, req *sink.WriteRequest) (*sink.Write
 		return response, nil
 	}
 
-	waves := buildWriteWaves(operations)
+	groups := buildWriteGroups(operations)
 	executionOptions := writeExecutionOptions{
+		budgets:          budgets,
 		WaitUntilVisible: req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE,
 	}
-	for _, wave := range waves {
-		err := s.executeWriteWave(ctx, wave, response.Results, executionOptions)
-		if err != nil {
-			return nil, err
-		}
+	err = s.executeWriteGroups(ctx, groups, response.Results, executionOptions)
+	if err != nil {
+		return nil, err
 	}
 	return response, nil
 }
@@ -257,6 +295,10 @@ func parseLuaPrograms(programs []*sink.LuaProgram) (luaPrograms, error) {
 }
 
 func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.DeleteResponse, error) {
+	return s.delete(ctx, req, false)
+}
+
+func (s *Server) delete(ctx context.Context, req *sink.DeleteRequest, wait bool) (*sink.DeleteResponse, error) {
 	if req == nil || len(req.GetOperations()) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "delete request must contain operations")
 	}
@@ -266,7 +308,8 @@ func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.Del
 	if !validCompletionMode(req.GetCompletionMode()) {
 		return nil, status.Error(codes.InvalidArgument, "delete request has an invalid completion mode")
 	}
-	ctx, release, err := s.beginRequest(ctx, req.SizeVT(), operationStores(req.GetOperations()))
+	admission := admissionRequest{encodedBytes: req.SizeVT(), stores: operationStores(req.GetOperations()), wait: wait}
+	ctx, release, err := s.admitRequest(ctx, admission)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +320,8 @@ func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.Del
 	}
 	storageOperations := make([]storage.DeleteOperation, 0, len(req.GetOperations()))
 	operationIndexes := make([]int, 0, len(req.GetOperations()))
+	storageIndexes := make([]int, 0, len(req.GetOperations()))
+	positions := make(map[recordIdentity]int)
 	queueMutations := make([]queue.Mutation, 0, len(req.GetOperations()))
 
 	for index, operation := range req.GetOperations() {
@@ -299,8 +344,15 @@ func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.Del
 			queueMutations = append(queueMutations, mutation)
 			continue
 		}
-		storageOperation := storage.DeleteOperation{Address: address}
-		storageOperations = append(storageOperations, storageOperation)
+		key := identityOf(address)
+		position, found := positions[key]
+		if !found {
+			position = len(storageOperations)
+			positions[key] = position
+			storageOperation := storage.DeleteOperation{Address: address}
+			storageOperations = append(storageOperations, storageOperation)
+		}
+		storageIndexes = append(storageIndexes, position)
 	}
 
 	if req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED {
@@ -325,8 +377,9 @@ func (s *Server) Delete(ctx context.Context, req *sink.DeleteRequest) (*sink.Del
 	if len(storageResponse.Results) != len(storageOperations) {
 		return nil, status.Error(codes.Internal, "storage returned an invalid delete result count")
 	}
-	for resultIndex, storageResult := range storageResponse.Results {
-		result := response.Results[operationIndexes[resultIndex]]
+	for index, operationIndex := range operationIndexes {
+		storageResult := storageResponse.Results[storageIndexes[index]]
+		result := response.Results[operationIndex]
 		applyDeleteResult(result, storageResult)
 	}
 	return response, nil

@@ -76,3 +76,14 @@ func liveMutationCalls[Request any, Response any](calls []*batchCall[Request, Re
 	}
 	return live
 }
+
+func mutationRequestRecords[Operation addressedOperation, Request mutationRequest[Operation]](request Request) []recordIdentity {
+	records := make([]recordIdentity, 0, len(request.GetOperations()))
+	for _, operation := range request.GetOperations() {
+		address, err := convertAddress(operation.GetAddress())
+		if err == nil {
+			records = append(records, identityOf(address))
+		}
+	}
+	return records
+}
