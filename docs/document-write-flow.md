@@ -93,7 +93,10 @@ router dispatches their operations to the appropriate backends.
 
 The core validates addresses, document encodings and payloads, and write
 actions. It also limits in-flight requests, execution bytes, and concurrent
-requests per store. Insufficient capacity produces `RESOURCE_EXHAUSTED`.
+requests per store. Direct requests with insufficient capacity receive
+`RESOURCE_EXHAUSTED`; dispatched micro-batches wait within their deadlines.
+Coalesced RPCs retain separate read/output budgets, and execution groups split
+at RPC boundaries when their combined reservations exceed the byte limit.
 
 In this example, Upsert means "write this complete document without requiring
 that the record already exist or be absent." It does not execute Lua or
@@ -267,10 +270,10 @@ Sink's internal revision field; search backends use `_seq_no` and
 A network timeout or lost acknowledgement is not a definite revision
 conflict and does not establish that the previous attempt had no effect.
 
-### Multiple merges for one document may share one commit
+### Multiple writes for one document may share one commit
 
-The current synchronous path folds consecutive merges for the same full
-address and completion mode within an execution batch. For three merges:
+The synchronous path folds Puts and Merges for the same full address and
+completion mode within an execution batch. For three merges:
 
 ```text
 Read the existing document once
@@ -291,8 +294,16 @@ operation retains its own success or failure result. A revision conflict
 recomputes the entire run from the latest document. If the final commit
 fails, no operation in that run can report success.
 
-A Put or a change of completion mode on the same address splits these merge
-runs. Interleaved operations for other addresses do not split a run.
+A Put replaces the in-memory document at its position in the chain. Create
+requires that working state to be absent; Replace requires it to be present;
+Upsert always replaces it. Failed conditions leave it unchanged. A chain of
+Upserts writes only its last document without reading, and a single Put keeps
+its existing direct adapter path. Conditional or mixed chains read once and
+commit against that snapshot. Puts and Merges share the same final revision
+when their chain commits successfully.
+
+A change of completion mode on the same address splits these runs.
+Interleaved operations for other addresses do not split a run.
 Folding does not span execution batches or Sink replicas, and it does not
 hold a single request indefinitely while waiting for more updates.
 Asynchronous publication preserves every original operation separately.
@@ -302,7 +313,10 @@ the folding path described above together.
 
 If every modification needs its own database commit and events, issue
 sequential calls and wait for each to complete. See the
-[merge folding contract](merge-folding.md) for the full boundaries.
+[folding contract](merge-folding.md) for the full boundaries. Repeated Reads
+fetch one backend observation per address and return independent results;
+every copy still counts against the response budget. Repeated synchronous
+Deletes issue one backend delete and return its outcome to all callers.
 
 ## 6. Which layer is doing the batching?
 
@@ -310,7 +324,7 @@ sequential calls and wait for each to complete. See the
 | --- | --- | --- | --- |
 | Explicit SDK batching | Application / sink-go | Multiple operations in one call, split into RPCs if necessary | Fewer RPCs, with individual results preserved |
 | Automatic server batching | `BatchingServer` | Synchronous RPCs for one store in one process | Brief collection followed by execution and response splitting |
-| Merge folding | Write core | A run of merges for one document | Sequential computation with only the final document committed |
+| Record operation folding | Service core | Puts/Merges or repeated Reads/Deletes for one full address | One final write, read, or delete with individual results preserved |
 | Backend bulk operations | Storage adapter | Database operations that can be sent together | Fewer backend requests; partial success remains possible |
 | Kafka publication / consumption batching | Publisher / worker | Independent messages | Batched transport, execution, and offset commits |
 
@@ -318,10 +332,13 @@ Synchronous batching keeps `WAIT_UNTIL_APPLIED` and `WAIT_UNTIL_VISIBLE`
 separate. It does not strengthen an applied-only request into a search
 refresh wait. The two modes can execute concurrently for disjoint addresses
 when capacity permits. A mode change on the same address preserves batch
-collection order by completing the preceding run first.
+collection order by completing the preceding run first. Write/Delete queues
+track these record dependencies across batches as well: later independent RPCs
+can execute while an earlier batch waits for refresh. Execution remains bounded
+by the process and per-store capacity limits.
 
 Disabling `service.batching.enabled` only disables the server's automatic
-batching across RPCs. Explicit batches, merge folding in the core, adapter
+batching across RPCs. Explicit batches, operation folding in the core, adapter
 bulk operations, Kafka consumption batches, core admission checks, and
 backend concurrency limits still apply.
 
@@ -373,7 +390,7 @@ Use these entry points to keep this guide aligned with future changes:
 | Server and worker component wiring | `newApplication` in [main.go](../cmd/sink/main.go) |
 | Synchronous batching and completion-mode separation | [batching_server.go](../internal/service/batching_server.go), [mutation_batches.go](../internal/service/mutation_batches.go) |
 | Request dispatch, admission control, and Put/Merge execution | `Write` in [server.go](../internal/service/server.go), [admission.go](../internal/service/admission.go), [write.go](../internal/service/write.go) |
-| Merge folding for one document | [merge_group.go](../internal/service/merge_group.go), [folding contract](merge-folding.md) |
+| Write folding for one document | [write_group.go](../internal/service/write_group.go), [folding contract](merge-folding.md) |
 | Publishing original intent to Kafka | [publish.go](../internal/service/publish.go), [publisher.go](../internal/queue/kafka/publisher.go) |
 | Consumption, retries, DLQ, and offset commits | [worker.go](../internal/queue/kafka/worker.go), [processor.go](../internal/worker/processor.go) |
 | Backend writes | [MongoDB write.go](../internal/storage/mongodb/write.go), [Search write.go](../internal/storage/search/write.go) |

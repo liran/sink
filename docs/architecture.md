@@ -96,7 +96,8 @@ mutation, keeping their first read-modify-write atomic.
 
 ### Elasticsearch and OpenSearch
 
-The search adapter stores the JSON document unchanged in `_source`. It uses
+The search adapter preserves the JSON document semantics in `_source`, compacting
+formatting whitespace to satisfy Bulk NDJSON framing. It uses
 `_mget` for reads, `_bulk` for puts and hard deletes, and `_seq_no` plus
 `_primary_term` as an opaque revision token. Several configured endpoints are
 used for transport failover.
@@ -110,11 +111,14 @@ Atomicity is per record, never per request. Operations for the same address run
 in request order. Operations for different records or stores may run
 concurrently.
 
-Consecutive synchronous merges for one address execute in memory and share one
-conditional commit and revision. Puts split these runs. Intermediate documents
-are not individually persisted or validated by the backend; see the
-[merge folding contract](merge-folding.md) for result, visibility, and failure
-semantics.
+Synchronous Puts and Merges for one address evaluate in order and share the
+final commit and revision. Create/Replace conditions apply to the working state.
+All-Upsert chains write their last document without a read; conditional or mixed
+chains use one snapshot and a conditional commit. Repeated Reads fetch once,
+while every returned copy still consumes the response budget. Repeated Deletes
+delete once. Intermediate writes are not individually persisted or validated by
+the backend; see the [folding contract](merge-folding.md) for result, visibility,
+and failure semantics.
 
 In `server` and `all` modes, Sink automatically coalesces concurrent
 one-operation RPCs into bounded, process-local batches for each store. Reads
@@ -122,7 +126,12 @@ always use this path when batching is enabled. Synchronous writes and deletes
 use it as well; Kafka-backed mutations bypass it because the publisher already
 batches asynchronous work. Synchronous mutation RPCs only combine with the same
 completion mode. Disjoint modes may run concurrently; a shared full record
-address creates an ordering barrier when its completion mode changes.
+address creates an ordering barrier when its completion mode changes. Bounded
+Write/Delete dispatchers also track active and queued record dependencies across
+batches, so unrelated later requests can execute during an earlier refresh wait.
+Each original RPC retains its own read/snapshot/output quota; memory-limited
+execution groups split at RPC boundaries while hot records share physical
+snapshot/output reservations.
 
 Read, write, and delete queues are independent for each store. This keeps a
 slow method or backend from consuming another queue's allowance. Each queue is

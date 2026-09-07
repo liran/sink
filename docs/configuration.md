@@ -164,12 +164,17 @@ request or byte limits cannot accommodate both groups, they run sequentially
 (applied first) without promoting either mode. A change of
 completion mode for the same full record address creates an ordering barrier;
 requests touching multiple records wait for all of their predecessors. Same-mode
-merges can still fold within a group. Each group returns its own results and
-uses only its live callers' deadlines and cancellation signals.
+Puts and Merges fold within a group; repeated Reads and Deletes execute once per
+full address. Each group returns its own results and uses only its live callers'
+deadlines and cancellation signals.
 
-The dispatcher finishes these waves before collecting its next batch; this is
-not a global per-record scheduler. Queue budgets and explicit RPC boundaries
-remain unchanged. Lua program declarations stay scoped to their original RPC.
+Write/Delete dispatchers can collect and execute later batches while an earlier
+batch waits for refresh. Each store/method has at most
+`min(max_in_flight_requests, max_store_requests)` active batches. Record
+dependencies cover both active and queued RPCs: an RPC touching several records
+waits for every predecessor, while unrelated RPCs may pass it. Ordering does not
+extend across methods, bypass requests, or server replicas. Queue budgets and
+explicit RPC boundaries remain in force. Lua program declarations stay scoped to their original RPC.
 An explicit request containing operations for multiple stores bypasses the
 micro-batch queues and goes directly to the storage router, which already
 executes store groups concurrently. This avoids splitting one RPC into partial
@@ -184,6 +189,20 @@ new single-store request that would cross its queue's limit fails with gRPC
 omitted. Once a batch is dispatched, other live callers in that batch continue
 even if one caller cancels. Once all callers cancel, execution is cancelled too.
 Execution is capped by the server request timeout even without caller deadlines.
+Dispatched micro-batches wait for shared execution capacity within their
+existing deadlines; bypass requests retain immediate admission rejection.
+Each coalesced RPC has its own read, conditional snapshot, and output budgets.
+A shared snapshot is fetched if any interested RPC has room, and every response
+copy is charged to its original RPC. Conditional chains evaluate each RPC's
+budget before incorporating its state into the next caller's operations.
+Batches are split at RPC boundaries when worst-case byte reservations would
+exceed `max_in_flight_bytes`. Reads reserve both snapshot and response space;
+conditional writes reserve snapshot and output space for each original RPC,
+sharing the physical reservation when those RPCs address the same record.
+With the default 256 MiB execution cap and 32 MiB read budget, one such execution
+can hold at most three independent Read/conditional-Write RPCs plus request
+bytes. Conditional writes sharing a hot record can still fold together. Tune `max_read_bytes` to the
+expected per-RPC output size when larger coalesced batches are needed.
 Core admission limits also cover requests that bypass batching. Graceful shutdown first drains active gRPC calls,
 then stops every store's batch dispatchers.
 
@@ -297,7 +316,7 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].search.password` | string | Conditionally | empty | Any password accepted by the search service | Basic-auth password. Must be configured together with `username`. |
 | `storages[].search.api_key` | string | No | empty | Any API key accepted by the search service | API key used instead of basic authentication. |
 | `service.max_operations` | positive integer | No | `1000` | Integer greater than `0` | Maximum operation count accepted in one Read, Write, or Delete batch request. |
-| `service.max_merge_attempts` | positive integer | No | `3` | Integer greater than `0` | Maximum attempts for a merge after revision conflicts. |
+| `service.max_merge_attempts` | positive integer | No | `3` | Integer greater than `0` | Maximum revision-conflict attempts for Merge and folded conditional Put chains. |
 | `service.batching.enabled` | boolean | No | `true` | `true`, `false` | Enables process-local batching for reads and synchronous mutations in `server` and `all` modes. |
 | `service.batching.max_wait_milliseconds` | positive integer | No | `2` | Integer greater than `0` | Maximum collection delay measured from the first request in a batch. |
 | `service.batching.max_operations` | positive integer | No | `service.max_operations` | Integer from `1` through `service.max_operations` | Operation target for one automatically formed batch. |
@@ -333,9 +352,9 @@ counts multiply capacity. Configure the same Kafka policy on servers and workers
 | --- | --- | --- |
 | `service.request_timeout_seconds` | `30` | Request timeout including batching queue wait, at most 300 seconds; a shorter caller deadline wins. |
 | `service.max_in_flight_requests` | `128` | Core request count, at most 10000; all completion modes and cross-store calls count. |
-| `service.max_in_flight_bytes` | `268435456` | Admitted request/output reservation bytes, at most 16 GiB. Reads reserve their output budget; synchronous merges reserve current and output budgets; Lua source expansion is charged. This is not an RSS or VM heap limit. |
+| `service.max_in_flight_bytes` | `268435456` | Admitted request/output reservation bytes, at most 16 GiB. Reads reserve snapshot and response budgets; Merge and folded conditional Put chains reserve current and output budgets; Lua source expansion is charged. This is not an RSS or VM heap limit. |
 | `service.max_store_requests` | `32` | Core requests per configured store, at most 10000. |
-| `service.max_read_bytes` | min(`33554432`, half gRPC send limit) | Aggregate copied read results or merged output per wave, including repeated keys and all stores; cannot exceed half the gRPC send limit. |
+| `service.max_read_bytes` | min(`33554432`, half gRPC send limit) | Per-original-RPC copied read results or folded conditional write snapshot/output per attempt, including repeated read results and all stores; cannot exceed half the gRPC send limit. |
 | `storages[].kafka.dead_letter_retention_hours` | `720` | Independent DLQ retention, 30 days; bounded by Go duration range. |
 | `storages[].kafka.min_insync_replicas` | min(`2`, replication factor) | Minimum ISR, at most replication factor. Publishers require all ISR acknowledgements. |
 | `storages[].kafka.max_record_bytes` | `921600` | Encoded mutation envelope plus key, including expanded Lua source; at most 64 MiB and no larger than the producer buffer. Topic/producer batch limits include an extra 16 KiB for framing and DLQ headers. Broker/replica fetch limits must also support increases. |
@@ -348,8 +367,8 @@ server selection is bounded to five seconds. Verify the deployment supports
 these settings before upgrading. The service deadline bounds the whole request.
 
 A response budget can yield partial results: an individual oversized document
-is a permanent resource failure; exhaustion caused by other records in the batch
-is retryable. Retry only failed operations or reduce the batch. Successful
+is a permanent resource failure; exhaustion caused by other records in the same original RPC
+is retryable. Other coalesced RPCs retain their own quotas. Retry only failed operations or reduce the batch. Successful
 mutation results must not be retried without business idempotence.
 
 ### Mode values

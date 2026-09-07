@@ -17,10 +17,10 @@ operation ID with atomic check-and-apply logic when repeated effects are unsafe.
 | Per-operation permanent failure | Inspect and correct the operation. Retrying identical invalid input does not repair it. |
 | Per-operation temporary failure | Retry only unresolved operations, respecting business idempotence and ordering. |
 
-Consecutive synchronous merges for one address may share a final commit and its
+Synchronous Puts and Merges for one address may share a final commit and its
 revision. Their intermediate documents do not create independent backend writes
 or change events. A failed commit leaves every operation in that run unresolved;
-see [ordered merge folding](merge-folding.md) before relying on per-write effects.
+see [record operation folding](merge-folding.md) before relying on per-write effects.
 
 There is no persistent per-mutation status API. Applications that need end-to-end
 reconciliation should keep their own accepted-operation ledger, compare business
@@ -112,13 +112,18 @@ Changing only a Sink config is refused to protect ordering.
 
 All core calls, including async, batching bypass, and cross-store calls, share
 process and per-store request limits plus byte reservations. Reads and synchronous
-merges reserve output space before execution; MongoDB group/write limits are
-shared across requests. Kafka producers have bounded byte buffers and fail fast
+merges and folded conditional Put chains reserve snapshot/output space before
+execution. Micro-batches reserve these budgets separately for each original RPC
+and split when combined reservations exceed the process limit. Dispatched
+batches wait for admission within their deadlines; direct calls still fail fast.
+Write/Delete dispatchers have bounded concurrency and preserve record dependencies
+across batches, allowing independent calls to pass a refresh wait.
+MongoDB group/write limits are shared across requests. Kafka producers have bounded byte buffers and fail fast
 when full. Size these budgets alongside per-store/method waiting queues,
 transport buffers, Go object/driver overhead, VM working sets, and replica count.
 The admission byte gauge is not process RSS.
 
-Read budgets include repeated keys and all stores. Search reads split a response
+Read budgets include repeated keys and all stores within one original RPC. Search reads split a response
 that exceeds their transport budget before treating an individual document as
 oversized. Lua output traversal bounds alias expansion, depth and node count
 before constructing Go output values. The current embedded Lua VM does not
@@ -164,3 +169,17 @@ business IDs, final reconciliation, maximum resource usage and backlog drain
 time. Define SLO, RPO and RTO from business requirements and validate them with
 these measurements. Passing local/fake-broker tests alone is not production
 reliability certification.
+
+### Search Bulk and Replace conflicts
+
+Search compacts valid JSON before writing Bulk NDJSON, retaining number and
+string semantics and keeping each source on one line. A formatted document
+therefore cannot break a neighboring operation's Bulk framing.
+
+RecordExists (Replace) uses a snapshot and CAS to avoid recreating a deleted
+record. An internal revision race is retried up to three attempts, rereading
+existence each time. A missing record is a permanent precondition failure;
+exhausted version races are retryable CONFLICT failures. Explicit revision
+conditions retain their original failure semantics. Successful sibling writes
+and transport failures with unknown commit outcomes are never replayed by this
+retry loop.
