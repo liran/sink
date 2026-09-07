@@ -293,6 +293,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 				continue
 			}
 			workerOptions := queuekafka.WorkerOptions{
+				ShutdownTimeout:   loaded.shutdownTimeout,
 				Topics:            app.topics[configured.name],
 				ProcessingTimeout: configured.kafka.processingTimeout,
 				MaxRecordBytes:    configured.kafka.maxRecordBytes,
