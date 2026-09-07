@@ -170,6 +170,8 @@ case format, direct flags, BSON examples, CI usage, and coverage guidance.
 
 ## Documentation
 
+- [Document write flow](docs/document-write-flow.md) — follow one document
+  through synchronous writes, Kafka workers, Lua merges, batching, and completion
 - [Reliability and recovery](docs/reliability.md) — idempotence responsibility,
   fault handling, capacity, durability baselines, alerting, and DLQ replay
 
