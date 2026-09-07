@@ -14,6 +14,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  public-conformance:
+    name: Public API conformance (OpenSearch ${{ matrix.version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - version: '3.8'
+            image: opensearchproject/opensearch:3.8.0@sha256:bcc1797519726ceb6d651d4a3e60b7c30da91793914a8dfe75fd441d4f641509
+          - version: '2.17'
+            image: opensearchproject/opensearch:2.17.0@sha256:7b9517dff561f54456fad947f11820fa595a340fd1034fc63d57b77f724b3f8f
+    steps:
+      - name: Check out Sink candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check out immutable public suite
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: liran/sink-production-suite
+          path: qualification
+          ref: d59cdb952a0abe5a56dfe358be00fd5ab7025462
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: qualification/go.mod
+          cache-dependency-path: qualification/go.sum
+      - name: Qualify public behavior, isolation and operation sequences
+        env:
+          SINK_SERVER_DIR: ${{ github.workspace }}
+          SINK_CONFORMANCE_OPENSEARCH_IMAGE: ${{ matrix.image }}
+          TMPDIR: ${{ runner.temp }}
+        run: make -C qualification test-conformance
+      - name: Upload public API qualification evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: public-api-conformance-${{ matrix.version }}
+          path: ${{ runner.temp }}/sink-conformance.*
+          retention-days: 14
+
   client-contract:
     name: Go client protocol contract
     runs-on: ubuntu-latest
