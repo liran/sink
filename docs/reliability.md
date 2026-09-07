@@ -2,9 +2,24 @@
 
 ## Production incident qualification
 
+Public qualification also exercises commit/response-loss boundaries, worker
+SIGKILL before and after source-offset settlement, concurrent single-record
+histories through two server processes, and slow-store saturation with bounded
+healthy-store deadlines and cancellation cleanup. Nightly qualification repeats
+twelve fault cycles during a two-hour workload, including simultaneous Kafka and
+OpenSearch outages. Release binaries and images wait for sustained qualification
+of the release candidate as well as its public production checks.
+
+`Sink reliability gate` aggregates every PR check and fails if any prerequisite
+fails, is cancelled or is skipped. Repository rules must require this status.
+
+Readiness requests respect their own deadline even if a dependency probe is
+still waiting on network work. Concurrent HTTP and gRPC health checks share at
+most one outstanding probe per dependency; a completed result is not cached.
+
 Every server PR runs the immutable public suite against the candidate executable,
 with race detection and real Elasticsearch plus OpenSearch 3.8/2.17. The suite's
-[incident contracts](https://github.com/liran/sink-production-suite/blob/04fab5351834f55931b1b91885f077e0f475046f/docs/reliability-contract.md)
+[incident contracts](https://github.com/liran/sink-production-suite/blob/ac4e924ccab2658872ba01638415d880d92c9506/docs/reliability-contract.md)
 cover the production failures behind PRs 37, 38, 40 and 41: bounded hot-key work,
 applied/visible isolation, per-caller budgets, Replace conflicts, independent
 document completion, dataset refresh waits and queued cancellation.
@@ -68,6 +83,14 @@ Unknown in-flight writes can complete; adapters must honor cancellation, and
 business operations must tolerate replay. Keep one ordered asynchronous path
 for order-sensitive records. Concurrent sync writes, multiple producers, and
 late DLQ replay need application-level version/order checks.
+
+After processing and offset settlement stop, worker group departure uses
+`shutdown_timeout_seconds`. If Kafka does not acknowledge departure within that
+window, Sink cancels the Kafka client's internal network work before closing it.
+Shutdown does not acknowledge additional source records; a replacement consumer
+recovers unresolved offsets. SIGKILL recovery also depends on Kafka's session
+timeout and rebalance window, so process startup alone does not prove consumption
+has resumed.
 
 Source retention is still a finite recovery window. The default is 72 hours;
 set it longer than outage detection, repair, and backlog drain time combined.
