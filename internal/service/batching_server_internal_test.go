@@ -24,7 +24,7 @@ func TestSplitReadResponseRejectsInvalidResultCount(t *testing.T) {
 	}
 }
 
-func TestSplitWriteResponsePropagatesExecutionError(t *testing.T) {
+func TestWriteCompletionPropagatesExecutionError(t *testing.T) {
 	request := &sink.WriteRequest{Operations: []*sink.WriteOperation{{}}}
 	call := &batchCall[*sink.WriteRequest, *sink.WriteResponse]{
 		request: request,
@@ -32,7 +32,8 @@ func TestSplitWriteResponsePropagatesExecutionError(t *testing.T) {
 	}
 	calls := []*batchCall[*sink.WriteRequest, *sink.WriteResponse]{call}
 	executionErr := errors.New("write failed")
-	splitWriteResponse(calls, nil, executionErr)
+	completion := newWriteCompletion(calls)
+	completion.finish(nil, executionErr)
 	result := <-call.result
 	if result.response != nil || !errors.Is(result.err, executionErr) {
 		t.Fatalf("split result = %+v", result)

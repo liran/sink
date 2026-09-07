@@ -30,6 +30,7 @@ type parsedPut struct {
 }
 
 type parsedMerge struct {
+	observation         *writeObservation
 	incoming            storage.Document
 	merger              merge.Merger
 	program             merge.Program
@@ -49,6 +50,8 @@ type writeGroupCandidate struct {
 }
 
 type writeExecutionOptions struct {
+	completion       *writeCompletion
+	observation      *writeObservation
 	budgets          *requestBudgets
 	WaitUntilVisible bool
 }
@@ -247,7 +250,9 @@ func (s *Server) executePuts(
 		Operations:       storageOperations,
 		WaitUntilVisible: opts.WaitUntilVisible,
 	}
+	started := time.Now()
 	response, err := s.storage.Write(ctx, request)
+	opts.observation.phase("storage_write", started)
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "write records: %v", err)
 	}
@@ -256,6 +261,7 @@ func (s *Server) executePuts(
 	}
 	for index, stored := range response.Results {
 		applyWriteGroupResult(groups[index], results, stored)
+		opts.completion.group(groups[index], results)
 	}
 	return nil
 }
@@ -294,6 +300,7 @@ func (s *Server) executeConditionalWrites(
 			conflictErr := errors.New("record changed during conditional write")
 			result.Failure = newFailure(sink.FailureCode_FAILURE_CODE_CONFLICT, conflictErr, true)
 		}
+		opts.completion.group(group, results)
 	}
 	return nil
 }
@@ -316,7 +323,9 @@ func (s *Server) executeWriteAttempt(
 		readOperations = append(readOperations, readOperation)
 	}
 	readRequest := storage.ReadRequest{Operations: readOperations, Budget: storage.NewReadBudget(s.maxReadBytes)}
+	started := time.Now()
 	readResponse, err := s.storage.Read(ctx, readRequest)
+	opts.observation.phase("storage_read", started)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "read records for conditional write: %v", err)
 	}
@@ -344,10 +353,13 @@ func (s *Server) executeWriteAttempt(
 				if err := outputBudget.Reserve(len(candidate.operation.Document.Payload)); err != nil {
 					failure := storage.WriteResult{Status: storage.WriteStatusFailed, Err: err}
 					applyWriteGroupResult(group, results, failure)
+					opts.completion.group(group, results)
 					continue
 				}
 			}
 			candidates = append(candidates, candidate)
+		} else {
+			opts.completion.group(group, results)
 		}
 	}
 	if len(candidates) == 0 {
@@ -365,7 +377,9 @@ func (s *Server) executeWriteAttempt(
 		Operations:       writeOperations,
 		WaitUntilVisible: opts.WaitUntilVisible,
 	}
+	started = time.Now()
 	writeResponse, err := s.storage.Write(ctx, writeRequest)
+	opts.observation.phase("storage_write", started)
 	if err != nil {
 		return nil, status.Errorf(codes.Unavailable, "commit folded records: %v", err)
 	}
@@ -381,6 +395,7 @@ func (s *Server) executeWriteAttempt(
 			continue
 		}
 		applyWriteGroupResult(group, results, stored)
+		opts.completion.group(group, results)
 	}
 	return next, nil
 }
@@ -425,7 +440,9 @@ func (s *Server) prepareMergeOperation(
 		return candidate, false
 	}
 
+	started := time.Now()
 	merged, err := operation.merge.merger.Merge(ctx, mergeRequest)
+	operation.merge.observation.phase("lua", started)
 	if err != nil {
 		code := mergeFailureCode(err)
 		setWriteFailure(result, code, err, ctx.Err() != nil)

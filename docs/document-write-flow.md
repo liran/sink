@@ -80,7 +80,8 @@ The service checks that the request is nonempty and that its operation count
 and completion mode are valid. If `service.batching.enabled` is enabled
 (the default) and the request targets one configured store, this synchronous
 request enters that store's in-memory Write queue. It may execute together
-with other RPCs. The default collection window is 2 ms; operation-count and
+with other RPCs sharing namespace, dataset, and completion mode. Explicit
+multi-dataset RPCs execute alone. The default collection window is 2 ms; operation-count and
 byte limits can trigger earlier dispatch. **The 2 ms window is a collection
 window, not an end-to-end latency limit.** Queueing and backend execution
 also take time.
@@ -127,7 +128,8 @@ transaction.
 
 The adapter returns the operation's status and revision, and the core builds
 its `WriteResult`. If multiple RPCs were combined earlier, the batching
-layer splits the results back into their original RPC responses. Success
+layer returns each original RPC once all of its operations have final results,
+without waiting for unrelated document chains. Success
 in this example returns `APPLIED`: MongoDB has acknowledged the write.
 
 The SDK's `Dataset.Upsert` aggregates individual operation failures into a
@@ -323,7 +325,7 @@ Deletes issue one backend delete and return its outcome to all callers.
 | Layer | Organizer | What it combines | Effect on the call |
 | --- | --- | --- | --- |
 | Explicit SDK batching | Application / sink-go | Multiple operations in one call, split into RPCs if necessary | Fewer RPCs, with individual results preserved |
-| Automatic server batching | `BatchingServer` | Synchronous RPCs for one store in one process | Brief collection followed by execution and response splitting |
+| Automatic server batching | `BatchingServer` | One store in one process; mutations also share namespace, dataset, and mode | Bounded collection and execution; each Write RPC returns when its own results are final |
 | Record operation folding | Service core | Puts/Merges or repeated Reads/Deletes for one full address | One final write, read, or delete with individual results preserved |
 | Backend bulk operations | Storage adapter | Database operations that can be sent together | Fewer backend requests; partial success remains possible |
 | Kafka publication / consumption batching | Publisher / worker | Independent messages | Batched transport, execution, and offset commits |
@@ -336,6 +338,10 @@ collection order by completing the preceding run first. Write/Delete queues
 track these record dependencies across batches as well: later independent RPCs
 can execute while an earlier batch waits for refresh. Execution remains bounded
 by the process and per-store capacity limits.
+Completed document chains release their queued successors even if the same
+execution still contains other unfinished documents. Conditional/Lua failures
+from speculative state are not final until the chain commits or definitively
+fails. A shared backend bulk still has to return before its results are known.
 
 Disabling `service.batching.enabled` only disables the server's automatic
 batching across RPCs. Explicit batches, operation folding in the core, adapter

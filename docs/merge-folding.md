@@ -12,6 +12,8 @@ for different addresses remain independent. Folding applies to explicit core
 requests and the micro-batcher's combined requests. Mutation completion modes
 remain separate, and a mode change for the same address remains an ordering
 barrier. Folding does not span running batches, replicas, or RPC methods.
+Automatic mutation batches also stay within one namespace and dataset; explicit
+multi-dataset RPCs keep their own boundary and are not combined with other RPCs.
 
 | Operations for one address | Backend work without conflicts |
 | --- | --- |
@@ -54,6 +56,14 @@ once and returns APPLIED, PRECONDITION_FAILED, APPLIED. `Upsert(A), Merge(B),
 Upsert(C), Merge(D)` evaluates both Lua programs in order and commits the result
 of merging D into C. A failed final commit leaves the whole chain unresolved,
 including conditional/Lua failures evaluated on its speculative state.
+
+The batcher delivers each original RPC as soon as all of its operations have
+final results, preserving operation indexes and independent result objects.
+Finished document chains release their scheduling dependencies without waiting
+for unrelated documents' reads or retries. A later execution error is returned
+only to RPCs whose results are still incomplete. Backend bulk response barriers
+remain: results cannot be delivered before the backend provides them. Admission
+reservations and execution slots remain held until the execution finishes.
 
 WAIT_UNTIL_VISIBLE waits for the final committed state using the existing
 refresh=wait_for path. WAIT_UNTIL_APPLIED does not acquire a stronger requirement.

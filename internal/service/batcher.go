@@ -24,11 +24,17 @@ type batchCall[Request any, Response any] struct {
 	result         chan batchResult[Response]
 	records        []recordIdentity
 	stopWake       func() bool
+	partition      batchPartition
+	resultOnce     sync.Once
+	recordMu       sync.Mutex
+	pendingRecords map[recordIdentity]bool
+	onRecordsDone  func([]recordIdentity)
 }
 
 type requestBatcherOptions[Request any, Response any] struct {
 	MaxConcurrent       int
 	Records             func(Request) []recordIdentity
+	Partition           func(Request) batchPartition
 	Method              string
 	MaxWait             time.Duration
 	MaxOperations       int
@@ -43,6 +49,7 @@ type requestBatcherOptions[Request any, Response any] struct {
 type requestBatcher[Request any, Response any] struct {
 	maxConcurrent       int
 	records             func(Request) []recordIdentity
+	partition           func(Request) batchPartition
 	wake                chan struct{}
 	method              string
 	maxWait             time.Duration
@@ -68,6 +75,7 @@ func newRequestBatcher[Request any, Response any](opts requestBatcherOptions[Req
 	batcher := &requestBatcher[Request, Response]{
 		maxConcurrent:       max(1, opts.MaxConcurrent),
 		records:             opts.Records,
+		partition:           opts.Partition,
 		wake:                make(chan struct{}, 1),
 		method:              opts.Method,
 		maxWait:             opts.MaxWait,
@@ -119,6 +127,9 @@ func (b *requestBatcher[Request, Response]) Submit(
 	}
 	if b.records != nil {
 		call.records = b.records(request)
+	}
+	if b.partition != nil {
+		call.partition = b.partition(request)
 	}
 	call.stopWake = context.AfterFunc(ctx, func() {
 		select {
@@ -193,12 +204,22 @@ func (b *requestBatcher[Request, Response]) release(call *batchCall[Request, Res
 	b.queuedBytes -= call.encodedBytes
 	b.queueMu.Unlock()
 	b.metrics.AdjustBatchQueue(b.method, -call.operationCount, -call.encodedBytes)
+	outcome := "execute"
+	if b.ctx.Err() != nil {
+		outcome = "shutdown"
+	} else if call.ctx.Err() != nil {
+		outcome = "canceled"
+	}
+	observation := sinkmetrics.RequestQueueObservation{Method: b.method, Outcome: outcome, Duration: time.Since(call.enqueuedAt)}
+	b.metrics.ObserveRequestQueue(observation)
 }
 
 func (b *requestBatcher[Request, Response]) run() {
 	defer b.waitGroup.Done()
 	pending := make([]*batchCall[Request, Response], 0)
 	active := make(map[recordIdentity]bool)
+	references := make(map[recordIdentity]int)
+	recordsDone := make(chan []recordIdentity, b.maxConcurrent)
 	completed := make(chan []*batchCall[Request, Response], b.maxConcurrent)
 	running := 0
 	for {
@@ -243,8 +264,20 @@ func (b *requestBatcher[Request, Response]) run() {
 					pending = remaining
 					for _, call := range selected {
 						b.release(call)
+						call.pendingRecords = make(map[recordIdentity]bool, len(call.records))
 						for _, key := range call.records {
+							if call.pendingRecords[key] {
+								continue
+							}
+							call.pendingRecords[key] = true
+							references[key]++
 							active[key] = true
+						}
+						call.onRecordsDone = func(keys []recordIdentity) {
+							select {
+							case recordsDone <- keys:
+							case <-b.ctx.Done():
+							}
 						}
 					}
 					running++
@@ -258,10 +291,13 @@ func (b *requestBatcher[Request, Response]) run() {
 		select {
 		case call := <-b.input:
 			pending = append(pending, call)
-		case calls := <-completed:
+		case <-completed:
 			running--
-			for _, call := range calls {
-				for _, key := range call.records {
+		case keys := <-recordsDone:
+			for _, key := range keys {
+				references[key]--
+				if references[key] == 0 {
+					delete(references, key)
 					delete(active, key)
 				}
 			}
@@ -292,7 +328,8 @@ func (b *requestBatcher[Request, Response]) selectReady(pending []*batchCall[Req
 			}
 		}
 		fits := len(selected) == 0 || (call.operationCount <= b.maxOperations-operations && call.encodedBytes <= b.maxBytes-bytes)
-		if dependent || !fits {
+		compatible := len(selected) == 0 || (!call.partition.isolated && !selected[0].partition.isolated && call.partition == selected[0].partition)
+		if dependent || !fits || !compatible {
 			remaining = append(remaining, call)
 			for _, key := range call.records {
 				blocked[key] = true
@@ -335,6 +372,9 @@ func (b *requestBatcher[Request, Response]) executeBatch(
 	executionContext, cancel := batchExecutionContext(b.ctx, calls, b.executionTimeout)
 	started := time.Now()
 	b.execute(executionContext, calls)
+	for _, call := range calls {
+		call.finishRecords(call.records)
+	}
 	cancel()
 	observation := sinkmetrics.BatchObservation{
 		Method:            b.method,
@@ -425,8 +465,31 @@ func completeCall[Request any, Response any](
 	response Response,
 	err error,
 ) {
-	result := batchResult[Response]{response: response, err: err}
-	call.result <- result
+	call.resultOnce.Do(func() {
+		result := batchResult[Response]{response: response, err: err}
+		call.result <- result
+		call.finishRecords(call.records)
+	})
+}
+
+// Caller cancellation does not release a running document. Only an execution
+// result (or execution shutdown) establishes that no further mutation remains.
+func (call *batchCall[Request, Response]) finishRecords(keys []recordIdentity) {
+	if call.onRecordsDone == nil {
+		return
+	}
+	call.recordMu.Lock()
+	finished := make([]recordIdentity, 0, len(keys))
+	for _, key := range keys {
+		if call.pendingRecords[key] {
+			delete(call.pendingRecords, key)
+			finished = append(finished, key)
+		}
+	}
+	call.recordMu.Unlock()
+	if len(finished) > 0 {
+		call.onRecordsDone(finished)
+	}
 }
 
 func emptyResponse[Response any]() Response {

@@ -30,6 +30,11 @@ type Metrics struct {
 	batcherQueuedOps       *prometheus.GaugeVec
 	batcherQueuedBytes     *prometheus.GaugeVec
 	batcherRejected        *prometheus.CounterVec
+	requestQueueDuration   *prometheus.HistogramVec
+	writePhaseDuration     *prometheus.HistogramVec
+	writeExecutionRounds   *prometheus.HistogramVec
+	requestQueueExits      *prometheus.CounterVec
+	writeSlowPhases        *prometheus.CounterVec
 	mergeConflicts         prometheus.Counter
 	mergeExhausted         prometheus.Counter
 	mergeFoldedChains      prometheus.Counter
@@ -145,6 +150,37 @@ func New(version string) (*Metrics, error) {
 		Help:      "Total number of synchronous requests rejected before batching.",
 	}
 	batcherRejected := prometheus.NewCounterVec(rejectedOptions, []string{"method", "reason"})
+	// Seven finite latency buckets retain the 5s/10s thresholds without
+	// multiplying every store, completion mode, and exit outcome by every bucket.
+	latencyBuckets := []float64{0.001, 0.01, 0.1, 1, 5, 10, 30}
+	requestQueueOptions := prometheus.HistogramOpts{
+		Namespace: namespace, Subsystem: "batcher", Name: "request_queue_duration_seconds",
+		Help:    "Queue residence of each RPC leaving the synchronous queue, including cancellation and shutdown.",
+		Buckets: latencyBuckets,
+	}
+	requestQueueDuration := prometheus.NewHistogramVec(requestQueueOptions, []string{"method"})
+	queueExitOptions := prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "batcher", Name: "request_queue_exits_total",
+		Help: "RPCs leaving the synchronous queue by exit outcome.",
+	}
+	requestQueueExits := prometheus.NewCounterVec(queueExitOptions, []string{"method", "outcome"})
+	writePhaseOptions := prometheus.HistogramOpts{
+		Namespace: namespace, Subsystem: "write", Name: "phase_duration_seconds",
+		Help:    "Synchronous core write phase durations aggregated across stores; storage_write_visible includes visibility waiting.",
+		Buckets: latencyBuckets,
+	}
+	writePhaseDuration := prometheus.NewHistogramVec(writePhaseOptions, []string{"phase"})
+	slowPhaseOptions := prometheus.CounterOpts{
+		Namespace: namespace, Subsystem: "write", Name: "slow_phases_total",
+		Help: "Synchronous write phase observations exceeding 5 seconds, by configured store and phase.",
+	}
+	writeSlowPhases := prometheus.NewCounterVec(slowPhaseOptions, []string{"store", "phase"})
+	roundOptions := prometheus.HistogramOpts{
+		Namespace: namespace, Subsystem: "write", Name: "execution_rounds",
+		Help:    "Storage read/write calls per synchronous core write execution, including conflict retries, aggregated across stores.",
+		Buckets: []float64{0, 1, 2, 4, 8, 16},
+	}
+	writeExecutionRounds := prometheus.NewHistogramVec(roundOptions, []string{"phase"})
 	mergeConflictOptions := prometheus.CounterOpts{
 		Namespace: namespace,
 		Subsystem: "merge",
@@ -249,6 +285,7 @@ func New(version string) (*Metrics, error) {
 		batcherQueuedOps,
 		batcherQueuedBytes,
 		batcherRejected,
+		requestQueueDuration, requestQueueExits, writePhaseDuration, writeSlowPhases, writeExecutionRounds,
 		mergeConflicts,
 		mergeExhausted,
 		mergeFoldedChains,
@@ -283,6 +320,11 @@ func New(version string) (*Metrics, error) {
 		batcherQueuedOps:       batcherQueuedOps,
 		batcherQueuedBytes:     batcherQueuedBytes,
 		batcherRejected:        batcherRejected,
+		requestQueueDuration:   requestQueueDuration,
+		writePhaseDuration:     writePhaseDuration,
+		writeExecutionRounds:   writeExecutionRounds,
+		requestQueueExits:      requestQueueExits,
+		writeSlowPhases:        writeSlowPhases,
 		mergeConflicts:         mergeConflicts,
 		mergeExhausted:         mergeExhausted,
 		mergeFoldedChains:      mergeFoldedChains,
