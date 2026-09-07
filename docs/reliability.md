@@ -27,14 +27,14 @@ document completion, dataset refresh waits and queued cancellation.
 An independent Go state model checks mixed operations through serial RPCs and
 several batching configurations, then through all seven configured storage
 routes in release qualification. Suite CI requires matching assertion failures
-on four immutable pre-fix server commits, so a passing regression must also have
+on five immutable pre-fix server commits, so a passing regression must also have
 evidence that it detects the historical bug. Empty or skipped conformance runs
 fail qualification. Release artifacts remain blocked on the pinned public suite;
 nightly runs add varying state-machine seeds before the existing two-hour fault
 workload. Keep the PR, release and nightly suite pins synchronized.
 
 These checks establish the listed contracts, not SQLite-level certification.
-The suite records remaining gaps, including compound failures, arbitrary
+The suite records remaining gaps, including broader compound failures, arbitrary
 concurrent-history verification, disk exhaustion and durable replica recovery.
 Repository rules must require the CI statuses to enforce a pre-merge gate.
 
