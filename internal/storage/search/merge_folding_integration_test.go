@@ -18,7 +18,13 @@ import (
 type foldingSearchStorage struct {
 	storage.Storage
 	reads, writes, documents int
+	deletes                  int
 	visible                  bool
+}
+
+func (s *foldingSearchStorage) Delete(ctx context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	s.deletes += len(req.Operations)
+	return s.Storage.Delete(ctx, req)
 }
 
 func (s *foldingSearchStorage) Read(ctx context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {

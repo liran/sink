@@ -646,6 +646,8 @@ func newTestServer(t testing.TB, store storage.Storage, publisher queue.Publishe
 		Lua:              luaEngine,
 		Publisher:        publisher,
 		MaxMergeAttempts: testMergeAttempts,
+		// Small fixture documents allow many independent RPC budgets in one batch.
+		MaxReadBytes: 1 << 20,
 	}
 	server, err := service.New(options)
 	if err != nil {

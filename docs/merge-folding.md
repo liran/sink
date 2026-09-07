@@ -1,82 +1,171 @@
-# Ordered merge folding
+# Record operation folding
 
-Synchronous writes fold each consecutive run of merges for the same complete
-record address into one conditional backend commit. Each Lua program still runs
-in order against the preceding successful in-memory result. This removes repeated
-reads, writes, and visibility waits for a hot document without changing refresh
-configuration or dropping any merge intent.
+Synchronous requests fold repeated operations for the same complete record
+address within one execution batch. Each original operation still receives its
+own indexed result. Folding reduces backend work and visibility waits; it never
+acknowledges a mutation before its final backend result.
 
 ## Scope and ordering
 
-The execution planner groups by store, namespace, dataset, and typed record key.
-Different addresses may execute together in a backend bulk request. Interleaved
-operations for other addresses do not split a run. A valid put (create, replace,
-or upsert) for the same address ends the run and executes separately before the
-next run. Invalid operations retain their individual validation failure.
+Identity includes store, namespace, dataset, and typed record key. Operations
+for different addresses remain independent. Folding applies to explicit core
+requests and the micro-batcher's combined requests. Mutation completion modes
+remain separate, and a mode change for the same address remains an ordering
+barrier. Folding does not span running batches, replicas, or RPC methods.
 
-Folding applies to explicit synchronous Write batches and to the existing
-process-local micro-batcher's combined requests with the same completion mode. It does not extend the collection
-window, span running batches or replicas, or buffer writes after returning success.
-Read and Delete use independent execution paths. Async acceptance still publishes
-each original operation to Kafka; worker per-address failure barriers remain intact.
+| Operations for one address | Backend work without conflicts |
+| --- | --- |
+| Upsert only | Write the last document once, without a read |
+| One Create or Replace | One direct conditional write, as before |
+| Repeated Create/Replace/Upsert, or Put mixed with Merge | Read once, evaluate in order, commit the final successful document once |
+| Merge only | Read once, execute each Lua program in order, commit once |
+| Repeated Read | Fetch once, return separate result objects from that observation |
+| Repeated synchronous Delete | Delete once, return the same outcome to every operation |
 
-## Commit and result contract
+A Put replaces the working document at its position in a write chain; it no
+longer splits the chain. Interleaved operations for other addresses do not split
+it either. Invalid addresses, payloads, actions, and Lua declarations retain
+their validation failures and are excluded from the execution plan.
 
-1. Read one document and its revision per run.
-2. Run every Lua program using its own input, encoding, missing-document policy,
-   and fixed observation time. A successful result becomes the next program's
-   current document. A Lua or missing-document failure leaves it unchanged.
-3. Commit the final successful result with the original read's revision condition,
-   or a record-not-exists condition if the run creates the document.
-4. After a successful commit, return APPLIED for successful programs and retain
-   each failed program's failure. All successful operations in the run share the
-   actual final commit revision. Preserve original operation indexes and RPC
-   response boundaries. If no program succeeds, return the evaluated failures
-   without issuing a backend write.
+Async acceptance publishes every original operation. The worker's per-address
+failure barriers and execution waves remain in place, so queued mutations for
+one address are still applied separately. Write and Delete use independent RPCs
+and queues; a Put and a Delete are not folded together.
 
-WAIT_UNTIL_VISIBLE waits for the final committed state to become searchable,
-using the existing refresh=wait_for path. Synchronous micro-batches keep completion
-modes separate: a request that only needs application must not inherit another
-record's refresh wait. A mode change on the same address separates folding groups
-and preserves submission order. No caller is acknowledged from memory.
+## Write commit and result contract
 
-This is a **final-state commit contract**. Intermediate documents are not written
-or independently made visible. Backend schema validation, generated/default
-fields, ingest processing, revision increments, change streams, and audit events
-apply to the final backend write, not each in-memory step. Lua sees intermediate
-program output without backend normalization. Callers requiring independent
-commits or intermediate backend effects must issue sequential calls and await
-each result before submitting the next. This behavior must be included in release
-notes; it is not observationally equivalent to individual backend writes.
+1. A chain containing only Upserts writes its last document directly. A single
+   Put retains the adapter's existing precondition handling.
+2. Other chains read one document and its revision, or observe that it is absent.
+3. Evaluate each operation against the preceding successful in-memory state.
+   Create succeeds only if that state is absent; Replace succeeds only if it is
+   present; Upsert replaces it unconditionally. A successful Put makes it present.
+   Merge executes its Lua program and missing-document policy as before.
+4. A failed condition or Lua program leaves the working state unchanged. Commit
+   the final successful document using the original snapshot's revision, or a
+   record-not-exists condition for an initially absent document.
+5. After a successful commit, successful operations return APPLIED with the
+   same final revision. Preserve the individually evaluated failures and original
+   operation indexes/RPC boundaries. If no operation succeeds, return the
+   evaluated failures without writing.
 
-## Conflicts and failures
+For example, on a missing document, `Create(A), Create(B), Replace(C)` commits C
+once and returns APPLIED, PRECONDITION_FAILED, APPLIED. `Upsert(A), Merge(B),
+Upsert(C), Merge(D)` evaluates both Lua programs in order and commits the result
+of merging D into C. A failed final commit leaves the whole chain unresolved,
+including conditional/Lua failures evaluated on its speculative state.
 
-A definite revision conflict restarts the entire run from a fresh read, including
-programs that failed on the previous speculative state. Observation times remain
-fixed across attempts. Exhaustion reports a retryable conflict for every operation
-in the unresolved run. Another replica or a concurrent delete can change the base;
-the backend revision condition remains the concurrency boundary.
+WAIT_UNTIL_VISIBLE waits for the final committed state using the existing
+refresh=wait_for path. WAIT_UNTIL_APPLIED does not acquire a stronger requirement.
+Repeated Deletes wait for their one backend delete and requested visibility.
 
-A failed final commit reports its failure for every operation in that run,
-including provisional Lua failures that may depend on an uncommitted predecessor.
-Other document runs retain their independent results. A transport failure, lost
-acknowledgement, or cancellation can leave the commit outcome unknown; Sink does
-not replay such a write internally. Existing application idempotence requirements
-still apply. Folding does not provide exactly-once execution or batch transactions.
+This is a **final-state commit contract** for Put as well as Merge. Intermediate
+documents are not independently persisted or validated by the backend. Schema
+validation, generated/default fields, ingest processing, revision increments,
+change streams, audit events, and visibility apply to the final backend write.
+Lua sees intermediate program or Put output without backend normalization.
+Successful operations may be superseded later in the same chain. Callers needing
+independent commits, intermediate backend effects, or separate read observations
+must issue sequential calls and wait for each result. Releases containing this
+change must describe these semantics.
 
-## Resource and performance bounds
+## Conflicts, failures, and resource bounds
 
-The existing operation count, admission bytes, batch collection limits, request
-deadline, Lua instruction/time/result limits, and aggregate read/output budgets
-remain in force. Each run retains its original intents and one working document;
-it does not retain every intermediate document. Conflict attempts remain bounded.
+A definite revision conflict restarts the whole snapshot-based chain, including
+previous conditional/Lua failures. Lua observation times remain fixed. The
+existing service.max_merge_attempts limit also bounds folded conditional Put
+chains. Exhaustion returns a retryable CONFLICT for every operation in that
+unresolved chain. An ambiguous transport failure, lost acknowledgement, or
+cancellation is not replayed internally. Existing business idempotence
+requirements still apply; folding does not provide exactly-once execution or
+batch transactions.
 
-For N merges to one address in one run, without conflicts, backend document reads
-and writes drop from N to one; Lua still executes N times. Visibility requires one
-backend wait. Unique-document workloads retain one read and write per document.
-Cross-replica contention, sparse arrivals, Lua CPU cost, and backend latency limit
-the actual latency improvement. Benchmarks must report hot/mixed/unique workloads,
-backend work, latency distribution, allocations, and conflicts separately.
+Reads share one backend observation per address but produce independent payload
+and revision copies. Every returned document, including repetitions, consumes
+the response budget in original input order. Deduplication therefore does not
+allow repeated keys to bypass max_read_bytes. The backend's unique-document
+read also remains bounded. Missing/error results are returned to all matching
+operations.
+
+Snapshot-based Put chains reserve read/output admission space before execution,
+just like Merge. Operation limits, byte limits, request deadlines, bounded
+conflict attempts, and Lua limits remain in force. Single Puts and all-Upsert
+chains retain their direct path. Existing merge metrics continue counting Lua
+operations rather than inflating them with Puts; they are not total folding
+metrics for Read/Put/Delete.
+
+Write/Delete dispatchers also track record dependencies across queued and active
+batches. Independent later requests can run during a previous refresh wait,
+within bounded execution capacity; same-record and multi-record dependency
+chains keep their order. This ordering remains local to one store/method queue.
+
+Micro-batches preserve original RPC snapshot/output quotas. Shared observations
+cannot make a healthy RPC inherit another caller's quota failure. A conditional
+RPC's working state is admitted before later callers can use it; failed output
+is excluded from the folded document. Worst-case reservations are charged per
+RPC, sharing physical snapshot/output reservations for hot records; oversized
+combined executions split at RPC boundaries. This can reduce
+cross-RPC folding when large per-RPC budgets approach the process byte limit;
+it does not affect folding within an explicit RPC.
+
+## Validation
+
+The service tests exhaust all 486 five-Put sequences across Create/Replace/Upsert
+and initially present/absent records, comparing each result and final state with
+sequential commits. Additional tests cover mixed Put/Merge ordering, whole-chain
+conflict recomputation, failed/lost commits, output and admission bounds, read
+response copies and repeated-key budgets, full address isolation, cross-RPC
+folding, and preservation of asynchronous intents. Existing completion-mode and
+cancellation regressions remain applicable. Tagged MongoDB/Search integration
+cases exercise mixed writes, final revisions, BSON dates, and search visibility.
+Additional regressions cover multiline Bulk JSON, bounded Replace revision
+retries (including unknown acknowledgements and successful siblings), per-RPC
+budget isolation, memory-limited splitting, and cross-batch dependencies and
+shutdown. Real Search tests create an actual revision conflict and disable
+automatic refresh while later applied writes/deletes complete.
+
+The historical Merge measurements below predate folding of Puts, Reads, and
+Deletes. New operation measurements use BenchmarkRecordFolding.
+
+## Operation comparison (2026-09-07)
+
+Compared with cee5dd5 on Apple M2 / darwin-arm64, GOMAXPROCS=4, using the same
+BenchmarkRecordFolding source against both implementations. Each batch contains
+64 operations. The table uses one hot record and 30 batches, with an artificial
+1 ms delay per storage adapter call. Counts are operations passed from the core
+to the adapter; they do not count an adapter's internal database round trips.
+
+| Workload | Reads / writes / deletes per batch, before → after | Visibility waits, before → after | Mean milliseconds per batch, before → after |
+| --- | --- | --- | --- |
+| upsert | 0 / 64 / 0 → 0 / 1 / 0 | 64 → 1 | 82.23 → 1.33 |
+| replace | 0 / 64 / 0 → 1 / 1 / 0 | 64 → 1 | 82.28 → 2.64 |
+| put_merge | 32 / 64 / 0 → 1 / 1 / 0 | 64 → 1 | 130.15 → 4.03 |
+| read | 64 / 0 / 0 → 1 / 0 / 0 | 0 → 0 | 1.32 → 1.31 |
+| delete | 0 / 0 / 64 → 0 / 0 / 1 | 1 → 1 | 1.35 → 1.33 |
+
+Read/Delete were already sent in one adapter call, so reducing their document
+operation count does not remove the artificial call delay. The Delete benchmark
+seeds the record before timing; later iterations also exercise missing deletes.
+These controlled measurements are not production latency predictions.
+
+Deduplication has a cost when every address is unique. A separate memory-only
+comparison used 1,000 batches per run, three runs, and the median run mean. It
+kept the same backend operation count but measured extra lookup/admission work:
+
+| 64 unique records | Microseconds per batch, before → after | Allocated bytes per batch, before → after |
+| --- | --- | --- |
+| replace | 41.94 → 64.97 | 114,353 → 138,737 |
+| read | 16.40 → 30.64 | 50,632 → 75,288 |
+| delete | 11.00 → 23.88 | 35,888 → 60,520 |
+
+The benefit therefore depends on repetition, document size, backend latency,
+and contention. Do not describe folding as a speedup for every workload.
+
+Reproduce with `GOMAXPROCS=4 go test ./internal/service -run '^$'
+-bench '^BenchmarkRecordFolding$' -benchtime=30x -count=1`, running the same
+benchmark and test helpers against the baseline and candidate code. For the CPU
+comparison select `BenchmarkRecordFolding/(replace|read|delete)/(hot|unique)/io=0s`
+with `-benchtime=1000x -count=3`.
 
 ## Local comparison (2026-09-06)
 

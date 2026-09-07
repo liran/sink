@@ -382,7 +382,7 @@ func submitBatcherTestRequestWithSize(
 	results <- result
 }
 
-func waitForQueuedCalls(t *testing.T, batcher *requestBatcher[int, int], wanted int) {
+func waitForQueuedCalls[Request any, Response any](t *testing.T, batcher *requestBatcher[Request, Response], wanted int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

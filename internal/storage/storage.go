@@ -24,6 +24,7 @@ const (
 	ErrorCodeResourceExhausted
 	ErrorCodeUnavailable
 	ErrorCodeDeadlineExceeded
+	ErrorCodeConflict
 )
 
 // OperationError carries storage-independent failure classification through the
@@ -93,6 +94,8 @@ func (e ErrorCode) String() string {
 		return "unavailable"
 	case ErrorCodeDeadlineExceeded:
 		return "deadline_exceeded"
+	case ErrorCodeConflict:
+		return "conflict"
 	default:
 		return fmt.Sprintf("internal(%d)", e)
 	}
@@ -160,6 +163,9 @@ type ReadRequest struct {
 }
 
 type ReadOperation struct {
+	// Budget overrides the request budget when an operation belongs to one or
+	// more original RPCs inside a coalesced storage request.
+	Budget  *ReadBudget
 	Address Address
 }
 

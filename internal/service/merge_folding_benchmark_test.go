@@ -22,8 +22,20 @@ type foldingBenchmarkStorage struct {
 	storage.Storage
 	delay           time.Duration
 	reads, writes   atomic.Int64
+	deletes         atomic.Int64
 	visibilityWaits atomic.Int64
 	conflicts       atomic.Int64
+}
+
+func (s *foldingBenchmarkStorage) Delete(ctx context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	s.deletes.Add(int64(len(req.Operations)))
+	if req.WaitUntilVisible {
+		s.visibilityWaits.Add(1)
+	}
+	if s.delay > 0 {
+		time.Sleep(s.delay)
+	}
+	return s.Storage.Delete(ctx, req)
 }
 
 func (s *foldingBenchmarkStorage) Read(ctx context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
