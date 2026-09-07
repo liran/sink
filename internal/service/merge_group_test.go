@@ -48,9 +48,6 @@ func TestMergeFoldingAcrossRPCsPreservesResponseBoundaries(t *testing.T) {
 			hot := foldingMerge("hot", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
 			cold := foldingMerge(fmt.Sprintf("cold-%d", caller), incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
 			request := foldingRequest(hot, cold)
-			if caller%2 == 0 {
-				request.CompletionMode = sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED
-			}
 			response, err := server.Write(ctx, request)
 			responses <- response
 			errs <- err
@@ -77,7 +74,7 @@ func TestMergeFoldingAcrossRPCsPreservesResponseBoundaries(t *testing.T) {
 		}
 	}
 	if observed.readCalls.Load() != 1 || observed.writeCalls.Load() != 1 || observed.maxWriteOperations.Load() != callers+1 || !observed.writeWaitVisible.Load() {
-		t.Fatalf("mixed batch reads=%d writes=%d docs=%d visible=%t", observed.readCalls.Load(), observed.writeCalls.Load(), observed.maxWriteOperations.Load(), observed.writeWaitVisible.Load())
+		t.Fatalf("batch reads=%d writes=%d docs=%d visible=%t", observed.readCalls.Load(), observed.writeCalls.Load(), observed.maxWriteOperations.Load(), observed.writeWaitVisible.Load())
 	}
 	if foldingValue(t, backend, "hot") != callers {
 		t.Fatal("lost hot document updates")

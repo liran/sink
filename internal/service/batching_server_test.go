@@ -849,44 +849,6 @@ func TestBatchingServerPreservesMultiOperationResponseBoundaries(t *testing.T) {
 	})
 }
 
-func TestBatchingServerPromotesMixedCompletionModesToVisible(t *testing.T) {
-	observed := &countingStorage{backend: memory.New()}
-	server := newBatchingTestServer(t, observed, nil, 2)
-	defer server.Close()
-
-	requests := []*sink.WriteRequest{
-		{
-			CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED,
-			Operations:     []*sink.WriteOperation{putWriteOperation("applied", "value")},
-		},
-		{
-			CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE,
-			Operations:     []*sink.WriteOperation{putWriteOperation("visible", "value")},
-		},
-	}
-	errors := make(chan error, len(requests))
-	start := make(chan struct{})
-	for _, request := range requests {
-		go func() {
-			<-start
-			response, err := server.Write(t.Context(), request)
-			if err == nil && response.GetResults()[0].GetStatus() != sink.WriteStatus_WRITE_STATUS_APPLIED {
-				err = errUnexpectedStatus(response.GetResults()[0].GetStatus())
-			}
-			errors <- err
-		}()
-	}
-	close(start)
-	for range requests {
-		if err := <-errors; err != nil {
-			t.Fatalf("Write() error = %v", err)
-		}
-	}
-	if observed.writeCalls.Load() != 1 || !observed.writeWaitVisible.Load() {
-		t.Fatalf("storage writes = %d, wait visible = %t", observed.writeCalls.Load(), observed.writeWaitVisible.Load())
-	}
-}
-
 func TestBatchingServerBypassesAsynchronousMutations(t *testing.T) {
 	publisher := &recordingPublisher{}
 	observed := &countingStorage{backend: memory.New()}

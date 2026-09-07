@@ -120,7 +120,9 @@ In `server` and `all` modes, Sink automatically coalesces concurrent
 one-operation RPCs into bounded, process-local batches for each store. Reads
 always use this path when batching is enabled. Synchronous writes and deletes
 use it as well; Kafka-backed mutations bypass it because the publisher already
-batches asynchronous work.
+batches asynchronous work. Synchronous mutation RPCs only combine with the same
+completion mode. Disjoint modes may run concurrently; a shared full record
+address creates an ordering barrier when its completion mode changes.
 
 Read, write, and delete queues are independent for each store. This keeps a
 slow method or backend from consuming another queue's allowance. Each queue is

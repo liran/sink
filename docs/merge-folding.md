@@ -15,7 +15,7 @@ or upsert) for the same address ends the run and executes separately before the
 next run. Invalid operations retain their individual validation failure.
 
 Folding applies to explicit synchronous Write batches and to the existing
-process-local micro-batcher's combined requests. It does not extend the collection
+process-local micro-batcher's combined requests with the same completion mode. It does not extend the collection
 window, span running batches or replicas, or buffer writes after returning success.
 Read and Delete use independent execution paths. Async acceptance still publishes
 each original operation to Kafka; worker per-address failure barriers remain intact.
@@ -35,8 +35,10 @@ each original operation to Kafka; worker per-address failure barriers remain int
    without issuing a backend write.
 
 WAIT_UNTIL_VISIBLE waits for the final committed state to become searchable,
-using the existing refresh=wait_for path. A mixed synchronous micro-batch retains
-the strongest requested completion mode. No caller is acknowledged from memory.
+using the existing refresh=wait_for path. Synchronous micro-batches keep completion
+modes separate: a request that only needs application must not inherit another
+record's refresh wait. A mode change on the same address separates folding groups
+and preserves submission order. No caller is acknowledged from memory.
 
 This is a **final-state commit contract**. Intermediate documents are not written
 or independently made visible. Backend schema validation, generated/default
