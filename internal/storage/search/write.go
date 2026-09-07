@@ -16,6 +16,7 @@ type writeWork struct {
 	document     resolvedDocument
 	source       []byte
 	precondition storage.Precondition
+	existsOnly   bool
 }
 
 type bulkActionMetadata struct {
@@ -65,6 +66,7 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 		document:     document,
 		source:       bytes.Clone(operation.Document.Payload),
 		precondition: operation.Precondition,
+		existsOnly:   operation.Precondition.Kind == storage.PreconditionRecordExists,
 	}
 	return work, nil
 }
@@ -98,12 +100,29 @@ func buildWriteWaves(prepared []writeWork) [][]writeWork {
 	return waves
 }
 
-func (s *Store) writeWave(
+const maxExistingWriteAttempts = 3
+
+func (s *Store) writeWave(ctx context.Context, wave []writeWork, results []storage.WriteResult, visible bool) {
+	pending := wave
+	for range maxExistingWriteAttempts {
+		if len(pending) == 0 {
+			return
+		}
+		pending = s.writeWaveAttempt(ctx, pending, results, visible)
+	}
+	for _, work := range pending {
+		cause := errors.New("record changed during search replace")
+		err := storage.NewOperationError(storage.ErrorCodeConflict, true, cause)
+		setWriteError(&results[work.resultIndex], err)
+	}
+}
+
+func (s *Store) writeWaveAttempt(
 	ctx context.Context,
 	wave []writeWork,
 	results []storage.WriteResult,
 	waitUntilVisible bool,
-) {
+) []writeWork {
 	eligible := make([]bool, len(wave))
 	existsWorks := make([]readWork, 0)
 	existsIndexes := make([]int, 0)
@@ -141,25 +160,34 @@ func (s *Store) writeWave(
 		}
 	}
 	if len(ready) == 0 {
-		return
+		return nil
 	}
 	payload, err := buildWriteBulk(ready)
 	if err != nil {
 		for _, work := range ready {
 			setWriteError(&results[work.resultIndex], err)
 		}
-		return
+		return nil
 	}
 	items, err := s.performBulk(ctx, payload, len(ready), waitUntilVisible)
 	if err != nil {
 		for _, work := range ready {
 			setWriteError(&results[work.resultIndex], err)
 		}
-		return
+		return nil
 	}
+	pending := make([]writeWork, 0)
 	for index, item := range items {
-		applyWriteItem(&results[ready[index].resultIndex], item)
+		work := ready[index]
+		if item.Status == 409 && work.existsOnly {
+			work.precondition.Kind = storage.PreconditionRecordExists
+			work.precondition.Revision = storage.Revision{}
+			pending = append(pending, work)
+			continue
+		}
+		applyWriteItem(&results[work.resultIndex], item)
 	}
+	return pending
 }
 
 func (s *Store) prepareExistingWrite(
@@ -223,7 +251,9 @@ func buildWriteBulk(works []writeWork) ([]byte, error) {
 		}
 		payload.Write(encodedAction)
 		payload.WriteByte('\n')
-		payload.Write(bytes.TrimSpace(work.source))
+		if err := json.Compact(&payload, work.source); err != nil {
+			return nil, fmt.Errorf("encode search bulk document: %w", err)
+		}
 		payload.WriteByte('\n')
 	}
 	return payload.Bytes(), nil

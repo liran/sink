@@ -168,6 +168,8 @@ func storageFailureDetails(err error) (sink.FailureCode, bool) {
 		return sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED, retryable
 	case storage.ErrorCodeUnavailable:
 		return sink.FailureCode_FAILURE_CODE_UNAVAILABLE, retryable
+	case storage.ErrorCodeConflict:
+		return sink.FailureCode_FAILURE_CODE_CONFLICT, retryable
 	case storage.ErrorCodeDeadlineExceeded:
 		return sink.FailureCode_FAILURE_CODE_DEADLINE_EXCEEDED, retryable
 	default:
