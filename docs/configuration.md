@@ -156,9 +156,20 @@ A slow batch therefore does not block another method or another store.
 The first queued request starts `service.batching.max_wait_milliseconds`.
 Collection stops when that timer expires or adding another request would cross
 the operation or encoded-byte target. A single valid RPC larger than a batch
-target still runs alone. If a batch contains both synchronous mutation modes,
-the entire storage request waits until visible, preserving the stronger caller
-contract. Lua program declarations remain scoped to their original write RPC.
+target still runs alone. Collected mutations are grouped by completion mode;
+`WAIT_UNTIL_APPLIED` is never promoted to `WAIT_UNTIL_VISIBLE`. Groups touching
+disjoint record addresses may execute concurrently, with at most two core
+requests per wave, subject to the existing core admission limits. If configured
+request or byte limits cannot accommodate both groups, they run sequentially
+(applied first) without promoting either mode. A change of
+completion mode for the same full record address creates an ordering barrier;
+requests touching multiple records wait for all of their predecessors. Same-mode
+merges can still fold within a group. Each group returns its own results and
+uses only its live callers' deadlines and cancellation signals.
+
+The dispatcher finishes these waves before collecting its next batch; this is
+not a global per-record scheduler. Queue budgets and explicit RPC boundaries
+remain unchanged. Lua program declarations stay scoped to their original RPC.
 An explicit request containing operations for multiple stores bypasses the
 micro-batch queues and goes directly to the storage router, which already
 executes store groups concurrently. This avoids splitting one RPC into partial

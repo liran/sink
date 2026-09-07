@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
@@ -382,20 +383,54 @@ func (s *BatchingServer) executeWrites(
 	ctx context.Context,
 	calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse],
 ) {
-	operations := make([]*sink.WriteOperation, 0, totalWriteOperations(calls))
-	completionMode := sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED
-	for _, call := range calls {
-		operations = append(operations, call.request.GetOperations()...)
-		if call.request.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE {
-			completionMode = sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE
+	for _, wave := range planMutationWaves[*sink.WriteOperation](calls) {
+		parallel := len(wave.applied) > 0 && len(wave.visible) > 0 &&
+			s.server.maxInFlightRequests > 1 && s.server.maxStoreRequests > 1
+		if parallel {
+			applied := combinedWriteRequest(wave.applied)
+			visible := combinedWriteRequest(wave.visible)
+			parallel = s.server.writeExecutionBytes(applied)+s.server.writeExecutionBytes(visible) <= s.server.maxInFlightBytes
 		}
+		var executions sync.WaitGroup
+		for _, group := range [][]*batchCall[*sink.WriteRequest, *sink.WriteResponse]{wave.applied, wave.visible} {
+			if len(group) == 0 {
+				continue
+			}
+			if parallel {
+				executions.Go(func() { s.executeWriteBatch(ctx, group) })
+			} else {
+				s.executeWriteBatch(ctx, group)
+			}
+		}
+		executions.Wait()
 	}
-	request := &sink.WriteRequest{
-		CompletionMode: completionMode,
-		Operations:     operations,
+}
+
+func (s *BatchingServer) executeWriteBatch(
+	ctx context.Context,
+	calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse],
+) {
+	calls = liveMutationCalls(calls)
+	if len(calls) == 0 {
+		return
 	}
+	ctx, cancel := batchExecutionContext(ctx, calls, s.server.requestTimeout)
+	defer cancel()
+	request := combinedWriteRequest(calls)
 	response, err := s.server.Write(ctx, request)
 	splitWriteResponse(calls, response, err)
+}
+
+func combinedWriteRequest(calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse]) *sink.WriteRequest {
+	operations := make([]*sink.WriteOperation, 0, totalWriteOperations(calls))
+	for _, call := range calls {
+		operations = append(operations, call.request.GetOperations()...)
+	}
+	request := &sink.WriteRequest{
+		CompletionMode: calls[0].request.GetCompletionMode(),
+		Operations:     operations,
+	}
+	return request
 }
 
 func totalWriteOperations(calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse]) int {
@@ -441,20 +476,54 @@ func (s *BatchingServer) executeDeletes(
 	ctx context.Context,
 	calls []*batchCall[*sink.DeleteRequest, *sink.DeleteResponse],
 ) {
-	operations := make([]*sink.DeleteOperation, 0, totalDeleteOperations(calls))
-	completionMode := sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED
-	for _, call := range calls {
-		operations = append(operations, call.request.GetOperations()...)
-		if call.request.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE {
-			completionMode = sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE
+	for _, wave := range planMutationWaves[*sink.DeleteOperation](calls) {
+		parallel := len(wave.applied) > 0 && len(wave.visible) > 0 &&
+			s.server.maxInFlightRequests > 1 && s.server.maxStoreRequests > 1
+		if parallel {
+			applied := combinedDeleteRequest(wave.applied)
+			visible := combinedDeleteRequest(wave.visible)
+			parallel = applied.SizeVT()+visible.SizeVT() <= s.server.maxInFlightBytes
 		}
+		var executions sync.WaitGroup
+		for _, group := range [][]*batchCall[*sink.DeleteRequest, *sink.DeleteResponse]{wave.applied, wave.visible} {
+			if len(group) == 0 {
+				continue
+			}
+			if parallel {
+				executions.Go(func() { s.executeDeleteBatch(ctx, group) })
+			} else {
+				s.executeDeleteBatch(ctx, group)
+			}
+		}
+		executions.Wait()
 	}
-	request := &sink.DeleteRequest{
-		CompletionMode: completionMode,
-		Operations:     operations,
+}
+
+func (s *BatchingServer) executeDeleteBatch(
+	ctx context.Context,
+	calls []*batchCall[*sink.DeleteRequest, *sink.DeleteResponse],
+) {
+	calls = liveMutationCalls(calls)
+	if len(calls) == 0 {
+		return
 	}
+	ctx, cancel := batchExecutionContext(ctx, calls, s.server.requestTimeout)
+	defer cancel()
+	request := combinedDeleteRequest(calls)
 	response, err := s.server.Delete(ctx, request)
 	splitDeleteResponse(calls, response, err)
+}
+
+func combinedDeleteRequest(calls []*batchCall[*sink.DeleteRequest, *sink.DeleteResponse]) *sink.DeleteRequest {
+	operations := make([]*sink.DeleteOperation, 0, totalDeleteOperations(calls))
+	for _, call := range calls {
+		operations = append(operations, call.request.GetOperations()...)
+	}
+	request := &sink.DeleteRequest{
+		CompletionMode: calls[0].request.GetCompletionMode(),
+		Operations:     operations,
+	}
+	return request
 }
 
 func totalDeleteOperations(calls []*batchCall[*sink.DeleteRequest, *sink.DeleteResponse]) int {

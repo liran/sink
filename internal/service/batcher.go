@@ -329,7 +329,7 @@ func (b *requestBatcher[Request, Response]) executeBatch(
 			oldest = call.enqueuedAt
 		}
 	}
-	executionContext, cancel := b.executionContext(calls)
+	executionContext, cancel := batchExecutionContext(b.ctx, calls, b.executionTimeout)
 	started := time.Now()
 	b.execute(executionContext, calls)
 	cancel()
@@ -344,12 +344,14 @@ func (b *requestBatcher[Request, Response]) executeBatch(
 	b.metrics.ObserveBatch(observation)
 }
 
-func (b *requestBatcher[Request, Response]) executionContext(
+func batchExecutionContext[Request any, Response any](
+	parent context.Context,
 	calls []*batchCall[Request, Response],
+	timeout time.Duration,
 ) (context.Context, context.CancelFunc) {
 	// Keep shared work alive while at least one caller still needs it, but
 	// never extend execution beyond the server's own time budget.
-	limit := time.Now().Add(b.executionTimeout)
+	limit := time.Now().Add(timeout)
 	var latest time.Time
 	for _, call := range calls {
 		deadline, ok := call.ctx.Deadline()
@@ -363,7 +365,7 @@ func (b *requestBatcher[Request, Response]) executionContext(
 	if latest.IsZero() || latest.After(limit) {
 		latest = limit
 	}
-	ctx, cancel := context.WithDeadline(b.ctx, latest)
+	ctx, cancel := context.WithDeadline(parent, latest)
 	var mu sync.Mutex
 	remaining := len(calls)
 	stops := make([]func() bool, 0, len(calls))

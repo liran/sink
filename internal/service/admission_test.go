@@ -74,9 +74,8 @@ func TestExecutionContextSurvivesOneCallerButCancelsForAll(t *testing.T) {
 	second, cancelSecond := context.WithCancel(t.Context())
 	defer cancelFirst()
 	defer cancelSecond()
-	b := &requestBatcher[int, int]{ctx: t.Context(), executionTimeout: time.Second}
 	calls := []*batchCall[int, int]{{ctx: first}, {ctx: second}}
-	ctx, cleanup := b.executionContext(calls)
+	ctx, cleanup := batchExecutionContext(t.Context(), calls, time.Second)
 	defer cleanup()
 	cancelFirst()
 	select {
