@@ -28,6 +28,18 @@ func (c *config) loadReliabilityConfig(file serviceConfigFile) error {
 	if err != nil {
 		return err
 	}
+	c.maxScanRequests, err = boundedInt("service.max_scan_requests", file.MaxScanRequests, max(1, c.maxInFlightRequests/2), c.maxInFlightRequests)
+	if err != nil {
+		return err
+	}
+	c.maxScanBytes, err = boundedInt("service.max_scan_bytes", file.MaxScanBytes, max(1, c.maxInFlightBytes/2), c.maxInFlightBytes)
+	if err != nil {
+		return err
+	}
+	c.maxStoreScanRequests, err = boundedInt("service.max_store_scan_requests", file.MaxStoreScanRequests, max(1, c.maxStoreRequests/2), c.maxStoreRequests)
+	if err != nil {
+		return err
+	}
 	// Leave room for status entries and protocol framing at the transport boundary.
 	limit := min(32<<20, c.grpcMaxSendBytes/2)
 	c.maxReadBytes, err = boundedInt("service.max_read_bytes", file.MaxReadBytes, limit, c.grpcMaxSendBytes/2)

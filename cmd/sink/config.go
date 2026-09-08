@@ -62,6 +62,9 @@ type config struct {
 	maxInFlightRequests    int
 	maxInFlightBytes       int
 	maxStoreRequests       int
+	maxScanRequests        int
+	maxScanBytes           int
+	maxStoreScanRequests   int
 	maxReadBytes           int
 }
 
@@ -147,6 +150,9 @@ type serviceConfigFile struct {
 	MaxInFlightRequests   *int               `yaml:"max_in_flight_requests"`
 	MaxInFlightBytes      *int               `yaml:"max_in_flight_bytes"`
 	MaxStoreRequests      *int               `yaml:"max_store_requests"`
+	MaxScanRequests       *int               `yaml:"max_scan_requests"`
+	MaxScanBytes          *int               `yaml:"max_scan_bytes"`
+	MaxStoreScanRequests  *int               `yaml:"max_store_scan_requests"`
 	MaxReadBytes          *int               `yaml:"max_read_bytes"`
 	MaxOperations         *int               `yaml:"max_operations"`
 	MaxMergeAttempts      *int               `yaml:"max_merge_attempts"`

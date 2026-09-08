@@ -431,6 +431,9 @@ counts multiply capacity. Configure the same Kafka policy on servers and workers
 | `service.max_in_flight_requests` | `128` | Core request count, at most 10000; all completion modes and cross-store calls count. |
 | `service.max_in_flight_bytes` | `268435456` | Admitted request/output reservation bytes, at most 16 GiB. Reads reserve snapshot and response budgets; Merge and folded conditional Put chains reserve current and output budgets; Lua source expansion is charged. This is not an RSS or VM heap limit. |
 | `service.max_store_requests` | `32` | Core requests per configured store, at most 10000. |
+| `service.max_scan_requests` | half `max_in_flight_requests`, at least 1 | Scan-only request sublimit, no greater than the total request limit. |
+| `service.max_scan_bytes` | half `max_in_flight_bytes`, at least 1 | Scan-only byte sublimit; global byte admission still applies. BSON Scan reserves 48 MiB driver wire space plus page copies. |
+| `service.max_store_scan_requests` | half `max_store_requests`, at least 1 | Per-store Scan sublimit, no greater than the total per-store request limit. |
 | `service.max_read_bytes` | min(`33554432`, half gRPC send limit) | Per-original-RPC Read or returned-Write documents, conditional write snapshot/output per attempt, and native Execute response. Scan pages use the smaller of this limit and 4 MiB. Cannot exceed half the gRPC send limit. |
 | `storages[].kafka.dead_letter_retention_hours` | `720` | Independent DLQ retention, 30 days; bounded by Go duration range. |
 | `storages[].kafka.min_insync_replicas` | min(`2`, replication factor) | Minimum ISR, at most replication factor. Publishers require all ISR acknowledgements. |
