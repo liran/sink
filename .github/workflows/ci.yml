@@ -14,10 +14,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  reliability-gate:
+    name: Sink reliability gate
+    if: always()
+    needs: [public-conformance, client-contract, test, mongodb, search, image, release-assets, quickstart]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every qualification job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: jq -e 'to_entries | length > 0 and all(.[]; .value.result == "success")' <<< "$RESULTS"
+
   public-conformance:
     name: Public API conformance (OpenSearch ${{ matrix.version }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +45,7 @@ jobs:
         with:
           repository: liran/sink-production-suite
           path: qualification
-          ref: 04fab5351834f55931b1b91885f077e0f475046f
+          ref: b2c0ea1c79827083c33f5d005e95e632e68f01df
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:

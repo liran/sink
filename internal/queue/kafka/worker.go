@@ -48,6 +48,7 @@ type WorkerOptions struct {
 	Metrics           *sinkmetrics.Metrics
 	ProcessingTimeout time.Duration
 	MaxRecordBytes    int
+	ShutdownTimeout   time.Duration
 }
 
 type Worker struct {
@@ -67,6 +68,8 @@ type Worker struct {
 	running           bool
 	lastError         error
 	offsetGap         bool
+	shutdownTimeout   time.Duration
+	cancelClient      context.CancelFunc
 }
 
 func NewWorker(opts WorkerOptions) (*Worker, error) {
@@ -114,6 +117,12 @@ func NewWorker(opts WorkerOptions) (*Worker, error) {
 	if opts.MaxRecordBytes == 0 {
 		opts.MaxRecordBytes = defaultMaxRecordBytes
 	}
+	if opts.ShutdownTimeout < 0 {
+		return nil, errors.New("create Kafka worker: shutdown timeout cannot be negative")
+	}
+	if opts.ShutdownTimeout == 0 {
+		opts.ShutdownTimeout = 5 * time.Second
+	}
 	worker := &Worker{
 		topics:            opts.Topics,
 		handler:           opts.Handler,
@@ -125,10 +134,14 @@ func NewWorker(opts WorkerOptions) (*Worker, error) {
 		maxRetryBackoff:   maxRetryBackoff,
 		metrics:           opts.Metrics,
 		processingTimeout: opts.ProcessingTimeout,
+		shutdownTimeout:   opts.ShutdownTimeout,
 	}
 
+	clientContext, cancelClient := context.WithCancel(context.Background())
+	worker.cancelClient = cancelClient
 	clientOptions := append([]kgo.Opt(nil), opts.ClientOptions...)
 	requiredOptions := []kgo.Opt{
+		kgo.WithContext(clientContext),
 		kgo.SeedBrokers(opts.Brokers...),
 		kgo.ConsumeTopics(opts.Topic),
 		kgo.ConsumerGroup(opts.GroupID),
@@ -149,6 +162,7 @@ func NewWorker(opts WorkerOptions) (*Worker, error) {
 	clientOptions = append(clientOptions, requiredOptions...)
 	client, err := kgo.NewClient(clientOptions...)
 	if err != nil {
+		cancelClient()
 		return nil, err
 	}
 	worker.client = client
@@ -503,7 +517,19 @@ func (w *Worker) Ping(ctx context.Context) error {
 }
 
 func (w *Worker) Close() {
+	defer w.cancelClient()
 	w.client.AllowRebalance()
+	// Close otherwise waits for LeaveGroup using the client's lifetime context.
+	// A lost reply must not keep a terminating worker alive indefinitely. Run
+	// has already settled its resolved prefix; this does not commit new offsets.
+	ctx, cancel := context.WithTimeout(context.Background(), w.shutdownTimeout)
+	defer cancel()
+	if err := w.client.LeaveGroupContext(ctx); err != nil {
+		slog.Warn("Kafka worker leave group did not complete before shutdown", "store", w.store, "error", err)
+		// Also cancel internal metadata, coordinator and fetch-session work.
+		// Close waits for those goroutines even after LeaveGroup times out.
+		w.cancelClient()
+	}
 	w.client.Close()
 }
 

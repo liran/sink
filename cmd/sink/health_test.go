@@ -36,9 +36,9 @@ func (s *healthStorage) Delete(_ context.Context, req storage.DeleteRequest) (st
 func TestUpdateHealthIsolatesStorageFailure(t *testing.T) {
 	failedStore := &healthStorage{pingErr: errors.New("storage unavailable")}
 	healthyStore := &healthStorage{}
-	failedCheck := configuredHealthCheck{service: storageHealthService("failed"), pinger: failedStore}
-	healthyCheck := configuredHealthCheck{service: storageHealthService("healthy"), pinger: healthyStore}
-	healthChecks := []configuredHealthCheck{failedCheck, healthyCheck}
+	failedCheck := &configuredHealthCheck{service: storageHealthService("failed"), pinger: failedStore}
+	healthyCheck := &configuredHealthCheck{service: storageHealthService("healthy"), pinger: healthyStore}
+	healthChecks := []*configuredHealthCheck{failedCheck, healthyCheck}
 	app := &application{health: health.NewServer(), healthChecks: healthChecks}
 	app.health.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	app.health.SetServingStatus(failedCheck.service, healthpb.HealthCheckResponse_SERVING)
@@ -58,8 +58,8 @@ func TestUpdateHealthIsolatesStorageFailure(t *testing.T) {
 
 func TestCloseMarksEveryHealthServiceNotServing(t *testing.T) {
 	store := &healthStorage{}
-	healthCheck := configuredHealthCheck{service: kafkaHealthService("primary"), pinger: store}
-	app := &application{health: health.NewServer(), healthChecks: []configuredHealthCheck{healthCheck}}
+	healthCheck := &configuredHealthCheck{service: kafkaHealthService("primary"), pinger: store}
+	app := &application{health: health.NewServer(), healthChecks: []*configuredHealthCheck{healthCheck}}
 	app.health.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
 	app.health.SetServingStatus(healthCheck.service, healthpb.HealthCheckResponse_SERVING)
 

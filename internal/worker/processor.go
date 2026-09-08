@@ -202,8 +202,16 @@ func (e *ApplyError) Retryable() bool {
 func resultApplyError(operation string, failure *sink.Failure) error {
 	if failure == nil {
 		err := errors.New("sink returned a mutation failure without details")
-		return NewApplyError(operation, false, err)
+		return NewApplyError(operation, true, err)
 	}
 	cause := errors.New(failure.GetMessage())
-	return NewApplyError(operation, failure.GetRetryable(), cause)
+	// An absent/unknown/internal failure is not evidence of a bad record. Keep
+	// its source offset and same-record barrier until the dependency is repaired.
+	retryable := true
+	switch failure.GetCode() {
+	case sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, sink.FailureCode_FAILURE_CODE_PRECONDITION_FAILED,
+		sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED:
+		retryable = failure.GetRetryable()
+	}
+	return NewApplyError(operation, retryable, cause)
 }

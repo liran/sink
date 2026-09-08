@@ -114,7 +114,7 @@ type application struct {
 	storage         storagecontract.Storage
 	publisher       queue.Publisher
 	kafkaPublishers []*queuekafka.Publisher
-	healthChecks    []configuredHealthCheck
+	healthChecks    []*configuredHealthCheck
 	workers         []configuredWorker
 	batchingServer  *service.BatchingServer
 	grpcServer      *grpc.Server
@@ -136,6 +136,8 @@ type healthPinger interface {
 type configuredHealthCheck struct {
 	service string
 	pinger  healthPinger
+	mu      sync.Mutex
+	active  *healthAttempt
 }
 
 type configuredHealthResult struct {
@@ -214,7 +216,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 			}
 			app.kafkaPublishers = append(app.kafkaPublishers, publisher)
 
-			healthCheck := configuredHealthCheck{
+			healthCheck := &configuredHealthCheck{
 				service: kafkaHealthService(configured.name),
 				pinger:  publisher,
 			}
@@ -293,6 +295,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 				continue
 			}
 			workerOptions := queuekafka.WorkerOptions{
+				ShutdownTimeout:   loaded.shutdownTimeout,
 				Topics:            app.topics[configured.name],
 				ProcessingTimeout: configured.kafka.processingTimeout,
 				MaxRecordBytes:    configured.kafka.maxRecordBytes,
@@ -315,7 +318,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 			}
 			workerInstance := configuredWorker{store: configured.name, worker: kafkaWorker}
 			app.workers = append(app.workers, workerInstance)
-			workerHealth := configuredHealthCheck{service: "sink.worker." + configured.name, pinger: kafkaWorker}
+			workerHealth := &configuredHealthCheck{service: "sink.worker." + configured.name, pinger: kafkaWorker}
 			app.healthChecks = append(app.healthChecks, workerHealth)
 			if app.health != nil {
 				app.health.SetServingStatus(workerHealth.service, healthpb.HealthCheckResponse_NOT_SERVING)
@@ -328,7 +331,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 type openedStorage struct {
 	value        storagecontract.Storage
 	mongoClients map[string]*mongo.Client
-	healthChecks []configuredHealthCheck
+	healthChecks []*configuredHealthCheck
 }
 
 func openConfiguredStorage(ctx context.Context, loaded config) (openedStorage, error) {
@@ -342,7 +345,7 @@ func openConfiguredStorage(ctx context.Context, loaded config) (openedStorage, e
 			return opened, fmt.Errorf("open storage %q: %w", configured.name, err)
 		}
 		backends[configured.name] = backend.value
-		healthCheck := configuredHealthCheck{
+		healthCheck := &configuredHealthCheck{
 			service: storageHealthService(configured.name),
 			pinger:  backend.value,
 		}
@@ -533,7 +536,7 @@ func (a *application) updateHealth(parent context.Context) {
 			ctx, cancel := context.WithTimeout(parent, healthCheckTimeout)
 			defer cancel()
 			status := healthpb.HealthCheckResponse_SERVING
-			if err := configured.pinger.Ping(ctx); err != nil {
+			if err := configured.check(ctx); err != nil {
 				status = healthpb.HealthCheckResponse_NOT_SERVING
 			}
 			result := configuredHealthResult{service: configured.service, status: status}
@@ -618,7 +621,7 @@ func (a *application) serveReadiness(w http.ResponseWriter, r *http.Request) {
 		}
 		checks++
 		work.Go(func() {
-			if err := configured.pinger.Ping(ctx); err != nil {
+			if err := configured.check(ctx); err != nil {
 				failures <- configured.service
 			}
 		})

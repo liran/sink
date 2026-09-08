@@ -204,7 +204,11 @@ func (s *Store) prepareExistingWrite(
 		setWriteError(result, document.Error)
 		return
 	}
-	if !document.Found {
+	if document.Found == nil {
+		setWriteError(result, errors.New("search document has no found flag"))
+		return
+	}
+	if !*document.Found {
 		result.Status = storage.WriteStatusPreconditionFailed
 		return
 	}
@@ -260,7 +264,7 @@ func buildWriteBulk(works []writeWork) ([]byte, error) {
 }
 
 func applyWriteItem(result *storage.WriteResult, item bulkItem) {
-	if item.Status == 409 {
+	if item.Status == 409 && (item.Error == nil || item.Error.Type == "version_conflict_engine_exception") {
 		result.Status = storage.WriteStatusPreconditionFailed
 		return
 	}
@@ -288,22 +292,21 @@ func applyWriteItem(result *storage.WriteResult, item bulkItem) {
 
 func classifySearchStatus(statusCode int, cause error) error {
 	var detail *errorDetail
-	if errors.As(cause, &detail) && isRetryableSearchError(detail) {
-		return storage.BackendError(cause)
+	if statusCode == 400 && errors.As(cause, &detail) {
+		// Only an explicit per-document rejection can quarantine a mutation.
+		// Generic argument, authorization, index and cluster errors are not proof.
+		switch detail.Type {
+		case "mapper_parsing_exception", "document_parsing_exception", "strict_dynamic_mapping_exception":
+			return storage.InvalidArgumentError(cause)
+		}
 	}
-	switch statusCode {
-	case 408, 502, 503, 504:
-		return storage.BackendError(cause)
-	case 413, 429:
+	if statusCode == 413 || statusCode == 429 {
 		return storage.ResourceExhaustedError(cause)
-	case 400, 401, 403, 404:
-		return storage.InvalidArgumentError(cause)
-	default:
-		return cause
 	}
+	return storage.BackendError(cause)
 }
 
 func setWriteError(result *storage.WriteResult, err error) {
 	result.Status = storage.WriteStatusFailed
-	result.Err = err
+	result.Err = storage.BackendError(err)
 }
