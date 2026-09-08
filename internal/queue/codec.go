@@ -41,7 +41,11 @@ func MarshalMutation(mutation Mutation) ([]byte, error) {
 	}
 	envelope := make([]byte, 0, len(envelopeMagic)+2+len(payload))
 	envelope = append(envelope, envelopeMagic[:]...)
-	envelope = append(envelope, envelopeVersion, kind)
+	version := envelopeVersion
+	if mutation.Write.GetOperationId() != "" {
+		version = 2
+	}
+	envelope = append(envelope, version, kind)
 	envelope = append(envelope, payload...)
 	return envelope, nil
 }
@@ -54,7 +58,8 @@ func UnmarshalMutation(envelope []byte) (Mutation, error) {
 	if !bytes.Equal(envelope[:len(envelopeMagic)], envelopeMagic[:]) {
 		return empty, errors.New("queue mutation envelope has invalid magic")
 	}
-	if envelope[len(envelopeMagic)] != envelopeVersion {
+	version := envelope[len(envelopeMagic)]
+	if version != envelopeVersion && version != 2 {
 		return empty, fmt.Errorf("unsupported queue mutation envelope version %d", envelope[len(envelopeMagic)])
 	}
 	kind := envelope[len(envelopeMagic)+1]
@@ -65,9 +70,15 @@ func UnmarshalMutation(envelope []byte) (Mutation, error) {
 		if err := operation.UnmarshalVT(payload); err != nil {
 			return empty, fmt.Errorf("unmarshal queued write: %w", err)
 		}
+		if (version == 2) != (operation.GetOperationId() != "") {
+			return empty, errors.New("idempotent queue mutation requires envelope version 2")
+		}
 		mutation := Mutation{Write: operation}
 		return mutation, nil
 	case mutationDelete:
+		if version == 2 {
+			return empty, errors.New("idempotent delete is not supported")
+		}
 		operation := &sink.DeleteOperation{}
 		if err := operation.UnmarshalVT(payload); err != nil {
 			return empty, fmt.Errorf("unmarshal queued delete: %w", err)

@@ -44,10 +44,32 @@ Repository rules must require the CI statuses to enforce a pre-merge gate.
 ## Delivery and recovery semantics
 
 Sink provides at-least-once asynchronous delivery and per-record conditional
-updates. **Business idempotence belongs to the application.** Sink does not
-deduplicate logical mutations. Client retries, lost backend acknowledgements,
-worker restarts, and DLQ replay can repeat business effects. Use a business
-operation ID with atomic check-and-apply logic when repeated effects are unsafe.
+updates. Ordinary writes, native Execute and deletes do not deduplicate logical
+mutations: retries, lost acknowledgements, worker restarts and DLQ replay can
+repeat business effects. Opted-in [idempotent record writes](idempotency.md)
+atomically commit MongoDB mutations with durable receipts. They require a
+replica set or mongos and a fixed operation ID; unsupported backends fail closed.
+This is bounded deduplication, not end-to-end exactly-once delivery.
+
+Supported MongoDB native writes and record writes share the same revision
+protocol: business changes and fresh revision metadata commit atomically per
+document. A concurrent Merge retries an invalidated snapshot. This requires all
+writers to use the same metadata field and excludes direct database writes and
+administrative restore/rename paths. See [revision-protected native mutations](native-access.md#revision-protected-native-mutations)
+for supported commands, pre-execution rejection, and remaining native semantics.
+Revision conflict detection does not deduplicate business effects or make native
+retries safe.
+
+Returned-document chains execute in ordered rounds: independent direct Puts
+commit before a round starts conditional reads, without concurrent unbudgeted
+snapshots. Each returned operation retains its own committed revision/document.
+Scan has separate byte, request and per-store sublimits in addition to global
+admission. Defaults reserve half the configured capacity for ordinary work
+(count limits round up to one for a total limit of one). Two default BSON scans
+fit the 128 MiB scan budget; a third is rejected while ordinary Read/Merge can
+still fit. Raising scan sublimits to total limits relinquishes that reservation.
+MongoDB Read cursor cleanup uses a separate five-second context after caller
+cancellation; cleanup is best effort if the backend itself is unreachable.
 
 ## Interpret outcomes
 

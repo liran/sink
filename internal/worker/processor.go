@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	sink "github.com/liran/sink/gen/sink"
 	"github.com/liran/sink/internal/queue"
+	"github.com/liran/sink/internal/storage"
 )
 
 type Applier interface {
@@ -43,6 +45,12 @@ func (p *Processor) HandleBatch(ctx context.Context, mutations []queue.Mutation)
 	results := make([]error, len(mutations))
 	prepared := make([]mutationWork, 0, len(mutations))
 	for index, mutation := range mutations {
+		if id := mutation.Write.GetOperationId(); id != "" {
+			if _, err := storage.OperationCreated(id, time.Now()); err != nil {
+				results[index] = NewApplyError("apply queued idempotent mutation", false, err)
+				continue
+			}
+		}
 		key, err := queue.MutationKey(mutation)
 		if err != nil {
 			results[index] = NewApplyError("apply queued mutation", false, err)
@@ -127,6 +135,13 @@ func (p *Processor) applyWrites(ctx context.Context, operations []mutationWork, 
 		operation := operations[index]
 		if err := ctx.Err(); err != nil {
 			results[operation.index] = NewApplyError("apply queued write", true, err)
+			continue
+		}
+		failure := result.GetFailure()
+		if operation.mutation.Write.GetOperationId() != "" && failure.GetCode() == sink.FailureCode_FAILURE_CODE_CONFLICT && !failure.GetRetryable() {
+			// A protected ID/payload mismatch is definitive. Ordinary conflicts
+			// retain the conservative retry/barrier behavior below.
+			results[operation.index] = NewApplyError("idempotent operation conflict", false, errors.New(failure.GetMessage()))
 			continue
 		}
 		results[operation.index] = resultApplyError("apply queued write", result.GetFailure())

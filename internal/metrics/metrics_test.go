@@ -202,6 +202,29 @@ func TestMetricsRecordGRPCFailuresAndIgnoreOtherServices(t *testing.T) {
 	}
 }
 
+func TestMetricsObserveIdempotentWrite(t *testing.T) {
+	observed, err := sinkmetrics.New("idempotent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := &grpc.UnaryServerInfo{FullMethod: sink.Sink_WriteIdempotent_FullMethodName}
+	handler := func(context.Context, any) (any, error) {
+		result := &sink.WriteResult{Status: sink.WriteStatus_WRITE_STATUS_APPLIED}
+		response := &sink.WriteResponse{Results: []*sink.WriteResult{result}}
+		return response, nil
+	}
+	_, err = observed.UnaryServerInterceptor()(t.Context(), nil, info, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := scrape(t, observed)
+	for _, want := range []string{`sink_grpc_server_requests_total{code="OK",method="WriteIdempotent"} 1`, `sink_grpc_server_operation_results_total{method="WriteIdempotent",status="applied"} 1`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing protected write metric: %s", want)
+		}
+	}
+}
+
 func scrape(t *testing.T, observed *sinkmetrics.Metrics) string {
 	t.Helper()
 	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)

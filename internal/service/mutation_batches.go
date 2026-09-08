@@ -30,6 +30,16 @@ type batchPartition struct {
 
 func mutationRequestPartition[Operation addressedOperation, Request mutationRequest[Operation]](request Request) batchPartition {
 	partition := batchPartition{mode: request.GetCompletionMode()}
+	if write, ok := any(request).(*sink.WriteRequest); ok {
+		for _, operation := range write.GetOperations() {
+			if operation.GetOperationId() != "" {
+				// Capability/expiry failures must not poison unrelated original
+				// RPCs. Protected writes also retain separate receipt budgets.
+				partition.isolated = true
+				return partition
+			}
+		}
+	}
 	for index, operation := range request.GetOperations() {
 		address := operation.GetAddress()
 		if address.GetNamespace() == "" || address.GetDataset() == "" {

@@ -50,6 +50,7 @@ type writeGroupCandidate struct {
 }
 
 type writeExecutionOptions struct {
+	transaction      bool
 	returns          *writeReturns
 	completion       *writeCompletion
 	observation      *writeObservation
@@ -70,6 +71,13 @@ func (s *Server) parseWrite(index int, operation *sink.WriteOperation, programs 
 	parsed.address = address
 	parsed.original = operation
 	parsed.identity = identityOf(address)
+	var operationCreated time.Time
+	if operation.GetOperationId() != "" {
+		operationCreated, err = storage.OperationCreated(operation.GetOperationId(), time.Now())
+		if err != nil {
+			return parsed, err
+		}
+	}
 
 	switch action := operation.GetAction().(type) {
 	case *sink.WriteOperation_Put:
@@ -84,6 +92,9 @@ func (s *Server) parseWrite(index int, operation *sink.WriteOperation, programs 
 			return parsed, parseErr
 		}
 		parsed.merge = &mergeOperation
+		if !operationCreated.IsZero() {
+			parsed.merge.observedAt = operationCreated
+		}
 	default:
 		return parsed, errors.New("write action is required")
 	}
@@ -211,22 +222,69 @@ func (s *Server) executeWriteGroups(
 	results []*sink.WriteResult,
 	opts writeExecutionOptions,
 ) error {
-	puts := make([]writeGroup, 0, len(groups))
-	conditional := make([]writeGroup, 0, len(groups))
-	for _, group := range groups {
-		if len(group.operations) > 1 && group.hasReturns() {
-			// Preserve each operation's own committed result and revision. Keep
-			// the group inside its batcher's existing record ordering barrier.
-			for _, operation := range group.operations {
-				single := writeGroup{operations: []parsedWrite{operation}}
-				if operation.merge != nil {
+	// Returned chains need one commit per operation, but must not jump ahead
+	// of independent records. Each round remains batch-native and retains the
+	// original caller budgets; no concurrent snapshot allocations are added.
+	for len(groups) > 0 {
+		wave := make([]writeGroup, 0, len(groups))
+		next := make([]writeGroup, 0)
+		for _, group := range groups {
+			if len(group.operations) > 1 && (group.hasReturns() || group.hasOperationIDs()) {
+				first := group.operations[0]
+				single := writeGroup{operations: []parsedWrite{first}}
+				if first.merge != nil {
 					single.merges = 1
+					group.merges--
 				}
-				err := s.executeWriteGroups(ctx, []writeGroup{single}, results, opts)
-				if err != nil {
-					return err
+				wave = append(wave, single)
+				group.operations = group.operations[1:]
+				next = append(next, group)
+			} else {
+				wave = append(wave, group)
+			}
+		}
+		err := s.executeWriteWave(ctx, wave, results, opts)
+		if err != nil {
+			return err
+		}
+		// Retrying a protected RPC must not insert a previously failed earlier
+		// operation AFTER an already committed later operation on the same key.
+		blocked := make(map[recordIdentity]bool)
+		for _, group := range wave {
+			for _, operation := range group.operations {
+				if operation.original.GetOperationId() != "" && results[operation.index].GetStatus() != sink.WriteStatus_WRITE_STATUS_APPLIED {
+					blocked[operation.identity] = true
 				}
 			}
+		}
+		groups = next[:0]
+		for _, group := range next {
+			if blocked[group.operations[0].identity] {
+				err := errors.New("preceding idempotent write did not apply; retry the ordered chain with original IDs")
+				for _, operation := range group.operations {
+					setWriteFailure(results[operation.index], sink.FailureCode_FAILURE_CODE_CONFLICT, err, true)
+				}
+				opts.completion.group(group, results)
+				continue
+			}
+			groups = append(groups, group)
+		}
+	}
+	return nil
+}
+
+func (s *Server) executeWriteWave(
+	ctx context.Context,
+	groups []writeGroup,
+	results []*sink.WriteResult,
+	opts writeExecutionOptions,
+) error {
+	puts := make([]writeGroup, 0, len(groups))
+	conditional := make([]writeGroup, 0, len(groups))
+	idempotent := make([]writeGroup, 0)
+	for _, group := range groups {
+		if group.hasOperationIDs() {
+			idempotent = append(idempotent, group)
 			continue
 		}
 		s.metrics.ObserveMergeFold(group.merges)
@@ -240,7 +298,17 @@ func (s *Server) executeWriteGroups(
 	if err != nil {
 		return err
 	}
-	return s.executeConditionalWrites(ctx, conditional, results, opts)
+	err = s.executeConditionalWrites(ctx, conditional, results, opts)
+	if err != nil {
+		return err
+	}
+	for _, group := range idempotent {
+		err = s.executeIdempotent(ctx, group, results, opts)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Server) executePuts(
@@ -281,12 +349,18 @@ func (s *Server) executePuts(
 	response, err := s.storage.Write(ctx, request)
 	opts.observation.phase("storage_write", started)
 	if err != nil {
+		if opts.transaction {
+			return err
+		}
 		return status.Errorf(codes.Unavailable, "write records: %v", err)
 	}
 	if len(response.Results) != len(appliedGroups) {
 		return status.Error(codes.Internal, "storage returned an invalid write result count")
 	}
 	for index, stored := range response.Results {
+		if opts.transaction && stored.Status == storage.WriteStatusFailed {
+			return storage.BackendError(stored.Err)
+		}
 		group := appliedGroups[index]
 		applyWriteGroupResult(group, results, stored)
 		attachWriteDocument(group, results, storageOperations[index].Document)
@@ -356,6 +430,9 @@ func (s *Server) executeWriteAttempt(
 	readResponse, err := s.storage.Read(ctx, readRequest)
 	opts.observation.phase("storage_read", started)
 	if err != nil {
+		if opts.transaction {
+			return nil, err
+		}
 		return nil, status.Errorf(codes.Unavailable, "read records for conditional write: %v", err)
 	}
 	if len(readResponse.Results) != len(groups) {
@@ -367,6 +444,9 @@ func (s *Server) executeWriteAttempt(
 	inputBudgets := opts.budgets.fresh(s.maxReadBytes)
 	outputBudgets := opts.budgets.fresh(s.maxReadBytes)
 	for index, stored := range readResponse.Results {
+		if opts.transaction && stored.Status == storage.ReadStatusFailed {
+			return nil, storage.BackendError(stored.Err)
+		}
 		group := groups[index]
 		input := writeGroupPreparation{group: group, stored: stored, results: results}
 		var candidate writeGroupCandidate
@@ -416,6 +496,9 @@ func (s *Server) executeWriteAttempt(
 	writeResponse, err := s.storage.Write(ctx, writeRequest)
 	opts.observation.phase("storage_write", started)
 	if err != nil {
+		if opts.transaction {
+			return nil, err
+		}
 		return nil, status.Errorf(codes.Unavailable, "commit folded records: %v", err)
 	}
 	if len(writeResponse.Results) != len(candidates) {
@@ -424,6 +507,9 @@ func (s *Server) executeWriteAttempt(
 
 	next := make([]writeGroup, 0)
 	for index, stored := range writeResponse.Results {
+		if opts.transaction && stored.Status == storage.WriteStatusFailed {
+			return nil, storage.BackendError(stored.Err)
+		}
 		group := candidates[index].group
 		if stored.Status == storage.WriteStatusPreconditionFailed {
 			next = append(next, group)

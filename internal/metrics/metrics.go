@@ -515,6 +515,8 @@ func sinkMethod(fullMethod string) (string, bool) {
 		return "Read", true
 	case sink.Sink_Write_FullMethodName:
 		return "Write", true
+	case sink.Sink_WriteIdempotent_FullMethodName:
+		return "WriteIdempotent", true
 	case sink.Sink_Delete_FullMethodName:
 		return "Delete", true
 	case sink.Sink_Execute_FullMethodName:
