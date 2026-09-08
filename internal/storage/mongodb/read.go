@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -104,7 +105,9 @@ func (s *Store) readGroup(ctx context.Context, group *readGroup, results []stora
 		return
 	}
 	defer func() {
-		_ = cursor.Close(ctx)
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = cursor.Close(cleanup)
 	}()
 
 	found := make(map[string]bool, len(group.operations))
