@@ -15,6 +15,7 @@ type admissionRequest struct {
 	encodedBytes int
 	stores       []string
 	wait         bool
+	timeout      time.Duration
 }
 
 func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (context.Context, context.CancelFunc, error) {
@@ -54,7 +55,11 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		break
 	}
 	s.metrics.AdjustAdmission(1, request.encodedBytes)
-	execution, cancel := context.WithTimeout(ctx, s.requestTimeout)
+	timeout := request.timeout
+	if timeout == 0 {
+		timeout = s.requestTimeout
+	}
+	execution, cancel := context.WithTimeout(ctx, timeout)
 	release := func() {
 		cancel()
 		s.admissionMu.Lock()
@@ -93,6 +98,9 @@ func (s *Server) writeExecutionBytes(req *sink.WriteRequest) int {
 
 func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int) int {
 	bytes := req.SizeVT()
+	if hasWriteReturns(req) {
+		bytes += s.maxReadBytes * callers
+	}
 	largestSource := 0
 	for _, program := range req.GetLuaPrograms() {
 		largestSource = max(largestSource, len(program.GetSource()))

@@ -25,6 +25,7 @@ func (s *Server) prepareWriteGroup(ctx context.Context, input writeGroupPreparat
 		result.Status = sink.WriteStatus_WRITE_STATUS_UNSPECIFIED
 		result.Revision = nil
 		result.Failure = nil
+		result.Document = nil
 		var merged storage.WriteOperation
 		var ok bool
 		if operation.put != nil {
@@ -83,6 +84,7 @@ func prepareFoldedPut(operation parsedWrite, current storage.ReadResult, result 
 func applyWriteGroupResult(group writeGroup, results []*sink.WriteResult, stored storage.WriteResult) {
 	for _, operation := range group.operations {
 		result := results[operation.index]
+		result.Document = nil
 		// Conditional and Lua failures become final only when their speculative
 		// state commits. A failed commit leaves the entire chain unresolved.
 		if stored.Status == storage.WriteStatusApplied && result.Failure != nil {

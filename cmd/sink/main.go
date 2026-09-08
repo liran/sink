@@ -244,6 +244,7 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 	serverOptions := service.Options{
 		StoreNames:          storeNames,
 		RequestTimeout:      loaded.requestTimeout,
+		ScanTimeout:         loaded.scanTimeout,
 		MaxInFlightRequests: loaded.maxInFlightRequests,
 		MaxInFlightBytes:    loaded.maxInFlightBytes,
 		MaxStoreRequests:    loaded.maxStoreRequests,
@@ -439,6 +440,7 @@ func (a *application) configureGRPC(server sink.SinkServer, observed *sinkmetric
 	if observed != nil {
 		interceptor := observed.UnaryServerInterceptor()
 		serverOptions = append(serverOptions, grpc.UnaryInterceptor(interceptor))
+		serverOptions = append(serverOptions, grpc.StreamInterceptor(observed.StreamServerInterceptor()))
 	}
 	grpcServer := grpc.NewServer(serverOptions...)
 	sink.RegisterSinkServer(grpcServer, server)

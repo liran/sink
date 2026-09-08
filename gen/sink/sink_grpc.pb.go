@@ -19,9 +19,11 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Sink_Read_FullMethodName   = "/sink.v1.Sink/Read"
-	Sink_Write_FullMethodName  = "/sink.v1.Sink/Write"
-	Sink_Delete_FullMethodName = "/sink.v1.Sink/Delete"
+	Sink_Read_FullMethodName    = "/sink.v1.Sink/Read"
+	Sink_Write_FullMethodName   = "/sink.v1.Sink/Write"
+	Sink_Delete_FullMethodName  = "/sink.v1.Sink/Delete"
+	Sink_Execute_FullMethodName = "/sink.v1.Sink/Execute"
+	Sink_Scan_FullMethodName    = "/sink.v1.Sink/Scan"
 )
 
 // SinkClient is the client API for Sink service.
@@ -30,13 +32,14 @@ const (
 //
 // Sink provides database-independent record reads and mutations.
 //
-// Every request is batch-native. A request containing one operation is the
-// single-record form. Atomicity is guaranteed per record, never for the whole
-// request.
+// Record requests are batch-native. Atomicity is guaranteed per record, never
+// for the whole request. Native queries use Execute or the streaming Scan RPC.
 type SinkClient interface {
 	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	Execute(ctx context.Context, in *ExecuteRequest, opts ...grpc.CallOption) (*ExecuteResponse, error)
+	Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScanResponse], error)
 }
 
 type sinkClient struct {
@@ -77,19 +80,49 @@ func (c *sinkClient) Delete(ctx context.Context, in *DeleteRequest, opts ...grpc
 	return out, nil
 }
 
+func (c *sinkClient) Execute(ctx context.Context, in *ExecuteRequest, opts ...grpc.CallOption) (*ExecuteResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ExecuteResponse)
+	err := c.cc.Invoke(ctx, Sink_Execute_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sinkClient) Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScanResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Sink_ServiceDesc.Streams[0], Sink_Scan_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ScanRequest, ScanResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sink_ScanClient = grpc.ServerStreamingClient[ScanResponse]
+
 // SinkServer is the server API for Sink service.
 // All implementations must embed UnimplementedSinkServer
 // for forward compatibility.
 //
 // Sink provides database-independent record reads and mutations.
 //
-// Every request is batch-native. A request containing one operation is the
-// single-record form. Atomicity is guaranteed per record, never for the whole
-// request.
+// Record requests are batch-native. Atomicity is guaranteed per record, never
+// for the whole request. Native queries use Execute or the streaming Scan RPC.
 type SinkServer interface {
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
 	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
+	Execute(context.Context, *ExecuteRequest) (*ExecuteResponse, error)
+	Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error
 	mustEmbedUnimplementedSinkServer()
 }
 
@@ -108,6 +141,12 @@ func (UnimplementedSinkServer) Write(context.Context, *WriteRequest) (*WriteResp
 }
 func (UnimplementedSinkServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
+}
+func (UnimplementedSinkServer) Execute(context.Context, *ExecuteRequest) (*ExecuteResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Execute not implemented")
+}
+func (UnimplementedSinkServer) Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method Scan not implemented")
 }
 func (UnimplementedSinkServer) mustEmbedUnimplementedSinkServer() {}
 func (UnimplementedSinkServer) testEmbeddedByValue()              {}
@@ -184,6 +223,35 @@ func _Sink_Delete_Handler(srv interface{}, ctx context.Context, dec func(interfa
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Sink_Execute_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ExecuteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SinkServer).Execute(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sink_Execute_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SinkServer).Execute(ctx, req.(*ExecuteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Sink_Scan_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ScanRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(SinkServer).Scan(m, &grpc.GenericServerStream[ScanRequest, ScanResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Sink_ScanServer = grpc.ServerStreamingServer[ScanResponse]
+
 // Sink_ServiceDesc is the grpc.ServiceDesc for Sink service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -203,7 +271,17 @@ var Sink_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Delete",
 			Handler:    _Sink_Delete_Handler,
 		},
+		{
+			MethodName: "Execute",
+			Handler:    _Sink_Execute_Handler,
+		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Scan",
+			Handler:       _Sink_Scan_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "sink/sink.proto",
 }

@@ -6,13 +6,14 @@ option go_package = "github.com/liran/sink/gen/sink;sink";
 
 // Sink provides database-independent record reads and mutations.
 //
-// Every request is batch-native. A request containing one operation is the
-// single-record form. Atomicity is guaranteed per record, never for the whole
-// request.
+// Record requests are batch-native. Atomicity is guaranteed per record, never
+// for the whole request. Native queries use Execute or the streaming Scan RPC.
 service Sink {
   rpc Read(ReadRequest) returns (ReadResponse);
   rpc Write(WriteRequest) returns (WriteResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc Scan(ScanRequest) returns (stream ScanResponse);
 }
 
 // RecordAddress identifies a record without exposing a physical database,
@@ -119,6 +120,11 @@ message WriteRequest {
 message WriteOperation {
   RecordAddress address = 1;
 
+  // Return the logical document submitted by this operation after its commit.
+  // Only synchronous completion modes support this. These operations do not
+  // share a folded commit with preceding or following operations.
+  bool return_document = 4;
+
   oneof action {
     PutOperation put = 2;
     MergeOperation merge = 3;
@@ -174,6 +180,7 @@ message WriteResult {
   WriteStatus status = 2;
   RevisionToken revision = 3;
   Failure failure = 4;
+  Document document = 5;
 }
 
 enum WriteStatus {
@@ -234,4 +241,52 @@ enum FailureCode {
   FAILURE_CODE_UNAVAILABLE = 6;
   FAILURE_CODE_DEADLINE_EXCEEDED = 7;
   FAILURE_CODE_INTERNAL = 8;
+}
+
+// Native operations route through a configured store; callers never provide
+// database connection addresses or credentials. Only supported read and index
+// management commands are accepted. Data mutations use Write and Delete.
+message ExecuteRequest {
+  string store = 1;
+  oneof command {
+    MongoCommand mongodb = 2;
+    SearchCommand search = 3;
+  }
+}
+
+message MongoCommand {
+  string database = 1;
+  bytes command = 2; // Ordered BSON command document.
+}
+
+message Header {
+  string name = 1;
+  repeated string values = 2;
+}
+
+message SearchCommand {
+  string method = 1;
+  string path = 2; // Absolute path within the configured endpoint.
+  string query = 3; // URL-encoded query parameters, including repeated values.
+  repeated Header headers = 4;
+  bytes body = 5;
+}
+
+message ExecuteResponse {
+  string content_type = 1;
+  bytes payload = 2;
+  bool success = 3;
+  uint32 status_code = 4; // HTTP status for search stores; zero for MongoDB.
+  repeated Header headers = 5;
+}
+
+// Scan owns the backend cursor for the lifetime of the stream and closes it
+// on completion, cancellation, or failure. Streams are never replayed by Sink.
+message ScanRequest {
+  ExecuteRequest request = 1;
+  uint32 batch_size = 2; // Default 100, maximum 1000 documents.
+}
+
+message ScanResponse {
+  repeated Document documents = 1;
 }

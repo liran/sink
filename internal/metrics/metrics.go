@@ -517,9 +517,28 @@ func sinkMethod(fullMethod string) (string, bool) {
 		return "Write", true
 	case sink.Sink_Delete_FullMethodName:
 		return "Delete", true
+	case sink.Sink_Execute_FullMethodName:
+		return "Execute", true
+	case sink.Sink_Scan_FullMethodName:
+		return "Scan", true
 	default:
 		return "", false
 	}
+}
+
+func (m *Metrics) StreamServerInterceptor() grpc.StreamServerInterceptor {
+	interceptor := func(server any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		method, observed := sinkMethod(info.FullMethod)
+		if !observed {
+			return handler(server, stream)
+		}
+		started := time.Now()
+		err := handler(server, stream)
+		m.requests.WithLabelValues(method, status.Code(err).String()).Inc()
+		m.requestDuration.WithLabelValues(method).Observe(time.Since(started).Seconds())
+		return err
+	}
+	return interceptor
 }
 
 func (m *Metrics) observeOperationResults(method string, response any) {
@@ -536,6 +555,12 @@ func (m *Metrics) observeOperationResults(method string, response any) {
 		for _, result := range typed.GetResults() {
 			m.operationResults.WithLabelValues(method, deleteStatus(result.GetStatus())).Inc()
 		}
+	case *sink.ExecuteResponse:
+		result := "failed"
+		if typed.GetSuccess() {
+			result = "succeeded"
+		}
+		m.operationResults.WithLabelValues(method, result).Inc()
 	}
 }
 

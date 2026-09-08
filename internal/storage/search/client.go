@@ -24,11 +24,15 @@ type requestOptions struct {
 	payload     []byte
 	query       url.Values
 	retrySafe   bool
+	headers     http.Header
+	maxBytes    int64
+	native      bool
 }
 
 type apiResponse struct {
 	statusCode int
 	body       []byte
+	headers    http.Header
 }
 
 type errorDetail struct {
@@ -96,26 +100,39 @@ func (s *Store) performOnce(ctx context.Context, opts requestOptions, endpoint *
 	if opts.contentType != "" {
 		request.Header.Set("Content-Type", opts.contentType)
 	}
+	for name, values := range opts.headers {
+		request.Header[name] = append([]string(nil), values...)
+	}
 	if s.apiKey != "" {
 		request.Header.Set("Authorization", "ApiKey "+s.apiKey)
 	} else if s.username != "" {
 		request.SetBasicAuth(s.username, s.password)
 	}
 
-	httpResponse, err := s.client.Do(request)
+	client := s.client
+	if opts.native {
+		copied := *s.client
+		copied.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+		client = &copied
+	}
+	httpResponse, err := client.Do(request)
 	if err != nil {
 		return empty, storage.BackendError(err)
 	}
 	defer httpResponse.Body.Close()
-	limited := io.LimitReader(httpResponse.Body, s.maxResponseSize+1)
+	maximum := s.maxResponseSize
+	if opts.maxBytes > 0 {
+		maximum = min(maximum, opts.maxBytes)
+	}
+	limited := io.LimitReader(httpResponse.Body, maximum+1)
 	body, err := io.ReadAll(limited)
 	if err != nil {
 		return empty, storage.BackendError(err)
 	}
-	if int64(len(body)) > s.maxResponseSize {
-		return empty, fmt.Errorf("%w: %s maximum is %d bytes", errResponseTooLarge, s.driver, s.maxResponseSize)
+	if int64(len(body)) > maximum {
+		return empty, fmt.Errorf("%w: %s maximum is %d bytes", errResponseTooLarge, s.driver, maximum)
 	}
-	response := apiResponse{statusCode: httpResponse.StatusCode, body: body}
+	response := apiResponse{statusCode: httpResponse.StatusCode, body: body, headers: httpResponse.Header.Clone()}
 	return response, nil
 }
 
