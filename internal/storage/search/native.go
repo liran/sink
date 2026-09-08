@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"net/url"
 	"strings"
@@ -16,10 +17,10 @@ import (
 
 func nativeOptions(req storage.NativeRequest) (requestOptions, error) {
 	var opts requestOptions
-	if req.Search == nil || req.MongoDB != nil {
-		return opts, errors.New("search storage requires an HTTP command")
+	if req.Namespace != "" {
+		return opts, errors.New("search native requests do not use namespace; select resources with path")
 	}
-	command := req.Search
+	command := req
 	path := command.Path
 	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "?#\\\x00\r\n") {
 		return opts, errors.New("native path must be an absolute endpoint path without a host, query, or fragment")
@@ -49,6 +50,8 @@ func nativeOptions(req storage.NativeRequest) (requestOptions, error) {
 			return opts, errors.New("invalid HTTP header name")
 		}
 		switch strings.ToLower(name) {
+		case "content-type":
+			return opts, errors.New("set content_type directly, not in headers")
 		case "authorization", "proxy-authorization", "host", "connection", "proxy-connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade", "content-length":
 			return opts, fmt.Errorf("request header %q is managed by Sink's transport", name)
 		}
@@ -59,12 +62,17 @@ func nativeOptions(req storage.NativeRequest) (requestOptions, error) {
 			headers.Add(name, value)
 		}
 	}
-	contentType := ContentTypeJSON
-	if strings.HasSuffix(decoded, "/_msearch") || strings.HasSuffix(decoded, "/_bulk") {
-		contentType = "application/x-ndjson"
+	if len(command.Payload) > 0 && command.ContentType == "" {
+		return opts, errors.New("native payload requires content_type")
 	}
-	opts = requestOptions{method: command.Method, path: decoded, rawPath: path, payload: command.Body,
-		query: query, headers: headers, contentType: contentType, maxBytes: int64(req.MaxBytes), native: true}
+	if command.ContentType != "" {
+		_, _, err := mime.ParseMediaType(command.ContentType)
+		if err != nil || !httpguts.ValidHeaderFieldValue(command.ContentType) {
+			return opts, errors.New("invalid native content_type")
+		}
+	}
+	opts = requestOptions{method: command.Method, path: decoded, rawPath: path, payload: command.Payload,
+		query: query, headers: headers, contentType: command.ContentType, maxBytes: int64(req.MaxBytes), native: true}
 	return opts, nil
 }
 
@@ -101,7 +109,8 @@ type scanPage struct {
 }
 
 type scanHits struct {
-	Hits []json.RawMessage `json:"hits"`
+	Hits  []json.RawMessage `json:"hits"`
+	Total json.RawMessage   `json:"total"`
 }
 
 func (s *Store) Scan(ctx context.Context, req storage.ScanRequest, send func([]storage.Document) error) error {
@@ -117,6 +126,10 @@ func (s *Store) Scan(ctx context.Context, req storage.ScanRequest, send func([]s
 	}
 	if !strings.HasSuffix(opts.path, "/_search") || (opts.method != http.MethodGet && opts.method != http.MethodPost) {
 		return storage.InvalidArgumentError(errors.New("search Scan requires a _search request"))
+	}
+	mediaType, _, _ := mime.ParseMediaType(opts.contentType)
+	if opts.contentType != "" && mediaType != ContentTypeJSON && !strings.HasSuffix(mediaType, "+json") {
+		return storage.InvalidArgumentError(errors.New("search Scan requires a JSON content_type"))
 	}
 	if opts.query.Has("source") {
 		return storage.InvalidArgumentError(errors.New("Scan requires the search body instead of the source parameter"))

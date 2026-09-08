@@ -1,9 +1,9 @@
-# Native queries, streaming scans, and returned writes
+# Native commands, paged queries, counts, scans, and returned writes
 
 Applications can move their database connections and runtime clients into Sink
 while retaining native query languages. `Execute` sends native commands and
-returns the database response; `Scan` provides managed streaming for cursor
-queries. Existing `Read`, `Write`, `Delete`, Lua Merge, completion modes, and
+returns the database response; `Query` returns an independent page, `Count`
+counts matching results, and `Scan` manages streaming cursor queries. Existing `Read`, `Write`, `Delete`, Lua Merge, completion modes, and
 returned-document options remain available.
 
 These capabilities are additive to the protocol, not a database wire-protocol
@@ -15,8 +15,12 @@ Sink revision can invalidate optimistic concurrency assumptions.
 
 ## Execute
 
-An `ExecuteRequest` names exactly one configured `store` and either a MongoDB
-command or a search HTTP command. Sink selects the connection and authentication;
+All four native RPCs share `Command`: `store`, `namespace`, `method`, `path`,
+`query`, `headers`, `content_type`, and `payload`. The configured store selects
+the adapter. MongoDB reads namespace and the BSON payload; HTTP search reads
+method/path/query/headers and the original body. Unused fields must be empty.
+There are no database-specific protobuf branches or extra payload envelopes.
+Sink selects the connection and authentication;
 callers cannot supply a URI, endpoint host, or credentials. Unknown stores return
 `INVALID_ARGUMENT`; adapters without native support return `UNIMPLEMENTED`.
 
@@ -37,11 +41,14 @@ byte-for-byte forwarding of HTTP packets. Redirects are returned without being
 followed. Request headers are forwarded except transport-owned headers:
 `Authorization`, `Proxy-Authorization`, `Host`, `Connection`, `Proxy-Connection`,
 `Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, and `Content-Length`.
+Set `content_type` directly; `Content-Type` in request headers is rejected.
 The query field uses URL query encoding and preserves repeated parameter values.
+Nonempty payloads require a valid content type; no encoding is inferred from paths.
 
 ### MongoDB commands
 
-The database is separate from an ordered BSON command. The first BSON field is
+The database is provided as `Command.namespace`, separately from the ordered
+BSON command in `Command.payload`, with `content_type=application/bson`. The first BSON field is
 the command name; use a struct, `bson.D`, or `bson.Raw`, not an unordered map.
 
 Execute does not use a command allowlist. Commands such as `count`, `distinct`,
@@ -83,14 +90,58 @@ Percent-encoded document IDs are supported. Supply query parameters separately;
 `{index}` can use the backend's index and alias expressions. Authentication and
 the endpoint host remain configured by Sink.
 
-`_msearch` and `_bulk` default to `application/x-ndjson`; retain the final newline
-in the body. Other requests default to JSON, overridable with `Content-Type`.
+For `_msearch` and `_bulk`, set `content_type=application/x-ndjson` and retain
+the final newline. For JSON bodies, use `application/json`. Other media types
+are forwarded unchanged through Execute.
 The body stays opaque. Callers may manage search scrolls or other native
 pagination explicitly through Execute and are responsible for closing them.
 
+## Query and Count
+
+`QueryRequest` combines `Command`, `page`, `page_size`, ordered `sort` keys, and
+an optional `projection`. Pages start at 1 (zero defaults to 1); page size defaults
+to 100 and is capped at 1000. Query returns native `documents` and `has_more`,
+fetching one extra result to determine whether another page exists. It never runs
+Count automatically. An oversized response fails rather than shortening the page.
+
+Sort entries contain `field` and `descending`. Projection contains `fields` and
+`exclude`: include the fields by default, or exclude them when true. Empty sort
+preserves native sorting; absent projection preserves native projection. An
+explicit projection with no fields selects all fields. Duplicate or blank fields
+are rejected. HTTP projection applies to `_source`; hit metadata is retained.
+MongoDB retains its native `_id` projection rules.
+
+MongoDB Query supports `find` and read-only `aggregate`. For find, Query replaces
+native skip/limit, and explicit sort/projection replace their native counterparts.
+For aggregate, explicit sort and projection follow the supplied pipeline, then
+skip/limit apply to its output. HTTP Query requires `_search`, replaces from/size,
+and maps explicit sort/projection to sort and `_source` selection.
+
+Each call is independent: no cursor or session is retained between RPCs. Any
+short-lived MongoDB cursor is closed before returning. Search does not open a
+scroll or PIT; manual pagination inputs (`scroll`, `pit`, `search_after`) and
+response-truncating `filter_path` are rejected. Use a stable native sort with a
+unique tie-breaker. Concurrent changes may shift pages; this is not a snapshot.
+Deep pages incur backend offset costs and result-window limits, including the
+extra result needed for `has_more`. Use Scan for sustained traversal.
+
+`CountRequest` takes the same Command and returns an exact uint64 `count`.
+MongoDB counts find matches before skip/limit, or the output of a supplied
+read-only aggregate pipeline. Find filters, hints, collation, read concern, let,
+comment and allowDiskUse are supported; other non-pagination find options are
+rejected when they cannot be translated faithfully. HTTP Count obtains exact
+matching-document totals before pagination/collapse, without computing hit
+presentation or aggregations. Partial, timed-out, shard-failed and approximate
+results fail instead of returning a misleading count. Query and Count report
+backend failures as gRPC errors; use Execute when a complete native reply is needed.
+
+Count and Query are separate observations and can differ during concurrent writes.
+Neither RPC is automatically retried. Both use the same admission, timeout and
+byte limits as Execute.
+
 ## Scan
 
-`ScanRequest` wraps a native request and an optional batch size (default 100,
+`ScanRequest` wraps the shared Command and an optional batch size (default 100,
 maximum 1000). Sink streams `ScanResponse.documents` until completion and owns
 opening, advancing, and closing the backend cursor. Cancellation, callback
 failure, timeout, and database errors terminate the scan; cleanup uses a separate

@@ -21,7 +21,7 @@ Sink centralizes those concerns:
 | Problem | What Sink provides |
 | --- | --- |
 | Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON or BSON documents |
-| Native commands still need direct database clients | Native `Execute` and streaming `Scan` reuse Sink's configured connections |
+| Native queries still need direct database clients | `Execute`, paged `Query`, `Count`, and streaming `Scan` share one command structure and Sink's connections |
 | Every crawler process opens its own database connections | Database connections move into the smaller Sink tier, so connection growth follows Sink replicas instead of crawler processes |
 | Many small calls overload storage | Automatic bounded batching, concurrency limits, and backpressure per store |
 | Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
@@ -68,8 +68,8 @@ key = product-42
 `store` selects a configured backend. For MongoDB, `namespace` and `dataset`
 are the database and collection. For Elasticsearch and OpenSearch, `dataset`
 is the complete existing index or alias name. The application never sends a
-database connection string. Native commands use the separate `Execute` and `Scan`
-methods; the record API remains storage-independent.
+database connection string. Native access uses `Execute`, `Query`, `Count`, and
+`Scan` with a common `Command`; the record API remains storage-independent.
 
 Every document declares its encoding. MongoDB stores require BSON, so clients
 apply `bson` struct tags and retain native BSON values such as datetimes.
@@ -173,7 +173,8 @@ case format, direct flags, BSON examples, CI usage, and coverage guidance.
 ## Documentation
 
 - [Native queries and returned writes](docs/native-access.md) — raw BSON/HTTP
-  responses, managed streaming cursors, index setup, and atomic counter results
+  responses, paged queries with sorting/projection, exact counts, managed cursors,
+  index setup, and atomic counter results
 - [Document write flow](docs/document-write-flow.md) — follow one document
   through synchronous writes, Kafka workers, Lua merges, batching, and completion
 - [Reliability and recovery](docs/reliability.md) — idempotence responsibility,

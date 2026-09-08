@@ -13,6 +13,8 @@ service Sink {
   rpc Write(WriteRequest) returns (WriteResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   rpc Execute(ExecuteRequest) returns (ExecuteResponse);
+  rpc Query(QueryRequest) returns (QueryResponse);
+  rpc Count(CountRequest) returns (CountResponse);
   rpc Scan(ScanRequest) returns (stream ScanResponse);
 }
 
@@ -243,21 +245,51 @@ enum FailureCode {
   FAILURE_CODE_INTERNAL = 8;
 }
 
-// Native operations route through a configured store; callers never provide
-// database connection addresses or credentials. Execute forwards native commands
-// with database semantics; MongoDB cursor and session commands are rejected.
-// Use Scan for supported cursor queries and Write/Delete for record semantics.
-message ExecuteRequest {
+// Command is the common input for Execute, Query, Count and Scan. Store configuration selects
+// the adapter, which reads and validates the fields it needs. There is no
+// backend-specific message branch or additional Sink envelope inside payload.
+// Fields not used by an adapter must be empty.
+//
+// Current adapter mappings:
+// - MongoDB: store, namespace, content_type and payload. Namespace is the
+//   database; payload is the complete ordered BSON command document, including
+//   the command name and collection when applicable. Use application/bson.
+// - HTTP search: store, method, path, query, headers, content_type and payload.
+//   Payload is the original request body, such as JSON or NDJSON. Namespace is
+//   unused; resource selection is already expressed by path and the native body.
+//
+// These are native operations: payload retains the selected backend's syntax.
+// SDK helpers can serialize native values directly into payload without callers
+// constructing a separate Sink-specific command envelope.
+message Command {
+  // Required logical store. Endpoints and credentials come from server config.
   string store = 1;
-  oneof command {
-    MongoCommand mongodb = 2;
-    SearchCommand search = 3;
-  }
-}
 
-message MongoCommand {
-  string database = 1;
-  bytes command = 2; // Ordered BSON command document.
+  // Execution scope, such as a database name, when the adapter requires one.
+  string namespace = 2;
+
+  // Request method, such as GET or POST, when the adapter uses request methods.
+  string method = 3;
+
+  // Absolute path within the configured endpoint, never a URL. No host, query,
+  // fragment or traversal segments; escaped resource IDs are supported.
+  string path = 4;
+
+  // URL-encoded query parameters without a leading '?'; repeated keys are valid.
+  string query = 5;
+
+  // Repeated values are preserved. Authentication and transport-owned headers
+  // remain server-controlled. Set Content-Type using content_type, not headers.
+  repeated Header headers = 6;
+
+  // Payload media type, e.g. application/bson, application/json or
+  // application/x-ndjson. Required when payload is nonempty. This describes the
+  // native encoding, not a separately versioned Sink payload schema.
+  string content_type = 7;
+
+  // Original command document or request body bytes. Keep native scalar types,
+  // field order and bulk framing intact; no custom protobuf value wrappers.
+  bytes payload = 8;
 }
 
 message Header {
@@ -265,29 +297,116 @@ message Header {
   repeated string values = 2;
 }
 
-message SearchCommand {
-  string method = 1;
-  string path = 2; // Absolute path within the configured endpoint.
-  string query = 3; // URL-encoded query parameters, including repeated values.
-  repeated Header headers = 4;
-  bytes body = 5;
+// Execute performs one native interaction. It does not provide cross-RPC
+// session affinity. Adapters reject commands requiring session affinity or a
+// client-managed session; supported cursor queries use Scan instead.
+// Other native commands are not restricted to a query/index-only allowlist.
+//
+// Native writes use backend semantics, outside record revisions, Lua merges,
+// batching and asynchronous completion modes. Neither Sink nor its SDK should
+// automatically replay an Execute request after an unknown outcome.
+message ExecuteRequest {
+  Command command = 1;
 }
 
+// A complete native reply retains its original payload, including backend error
+// replies. Such replies use gRPC OK with success=false; validation, transport
+// and capacity failures use gRPC errors. HTTP replies preserve the status,
+// repeated headers and entity bytes; redirects are returned without following.
 message ExecuteResponse {
   string content_type = 1;
   bytes payload = 2;
+
+  // Native command success, or HTTP 2xx. Callers must still inspect item-level
+  // failures in batch responses. Document commands also check native write and
+  // write-concern errors.
   bool success = 3;
-  uint32 status_code = 4; // HTTP status for search stores; zero for MongoDB.
+
+  // Native transport status when available; zero means no such status exists.
+  uint32 status_code = 4;
   repeated Header headers = 5;
 }
 
-// Scan owns the backend cursor for the lifetime of the stream and closes it
-// on completion, cancellation, or failure. Streams are never replayed by Sink.
-message ScanRequest {
-  ExecuteRequest request = 1;
-  uint32 batch_size = 2; // Default 100, maximum 1000 documents.
+// Query returns an independent page without retaining a cursor between RPCs.
+// Supported sources are find/read-only aggregate command documents and HTTP
+// _search requests. Documents have the same native result shape as Scan.
+// Use a stable native sort with a unique tie-breaker for predictable pages.
+// Concurrent changes may shift results; pagination does not provide a snapshot.
+message QueryRequest {
+  Command command = 1;
+
+  // One-based page number; zero selects page 1. Deep pages still incur backend
+  // offset costs and are subject to the backend's result-window limits.
+  uint32 page = 2;
+
+  // Zero selects 100; maximum 1000. Query replaces native find skip/limit and
+  // HTTP from/size. For aggregate, pagination follows the supplied pipeline.
+  uint32 page_size = 3;
+
+  // Ordered sort keys. Empty preserves the native sort; nonempty replaces find
+  // or HTTP sorting. For aggregate, sort follows the supplied pipeline.
+  repeated SortField sort = 4;
+
+  // Absent preserves native projection. Present replaces find projection or
+  // HTTP _source selection; aggregate applies it after the pipeline and sort,
+  // before pagination. An empty fields list selects all document fields.
+  Projection projection = 5;
 }
 
+message SortField {
+  string field = 1;
+  bool descending = 2;
+}
+
+// Field names are native document paths (relative to _source for HTTP search).
+// HTTP hit metadata is unchanged. Document stores retain their native rules for
+// identity-field projection.
+// Database-specific computed projections can remain in Command.payload.
+message Projection {
+  repeated string fields = 1;
+  bool exclude = 2; // False includes listed fields; true excludes them.
+}
+
+message QueryResponse {
+  repeated Document documents = 1;
+
+  // Determined by fetching one extra result, not by running Count. Result-window
+  // limits apply to this extra result too. A byte limit fails the whole request;
+  // it never produces a silently shortened page.
+  bool has_more = 2;
+}
+
+// Count is an independent query, not an implicit part of Query. It accepts the
+// same sources and counts matches before find/HTTP pagination; for aggregate it
+// counts the output of the supplied pipeline. HTTP counts matching documents
+// before collapse. Partial, timed-out or approximate counts fail the request.
+// Count and Query are separate observations and may differ under concurrent writes.
+message CountRequest {
+  Command command = 1;
+}
+
+message CountResponse {
+  uint64 count = 1;
+}
+
+// Scan accepts the same Command, limited to adapter-supported read-only cursor
+// queries. Sink owns opening, advancing and closing the cursor within the RPC.
+// Completion, cancellation and failures trigger best-effort cursor cleanup.
+// Stateful transactions, change streams and indefinitely tailing cursors are
+// outside this contract. Delivered batches are not replayed after a failure.
+message ScanRequest {
+  Command command = 1;
+
+  // Overrides native batch sizes. Zero selects the server default of 100;
+  // maximum 1000 documents per response. Server byte and time limits also apply.
+  uint32 batch_size = 2;
+}
+
+// Documents retain native encodings and result shapes: BSON documents for the
+// document adapter and complete JSON hits for the search adapter. Scan unwraps
+// cursor batches; Execute returns the full native reply instead.
+// Empty results complete successfully without emitting a batch. A terminal
+// error may follow already delivered batches, so callers must check completion.
 message ScanResponse {
   repeated Document documents = 1;
 }

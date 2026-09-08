@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"mime"
 	"net/http"
 	"sort"
 	"strings"
@@ -15,33 +16,29 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func nativeRequest(req *sink.ExecuteRequest, maximum int) (storage.NativeRequest, error) {
+func nativeRequest(req *sink.Command, maximum int) (storage.NativeRequest, error) {
 	request := storage.NativeRequest{MaxBytes: maximum}
 	if req == nil || strings.TrimSpace(req.GetStore()) == "" {
 		return request, status.Error(codes.InvalidArgument, "native request requires a store")
 	}
-	request.Store = req.GetStore()
-	switch command := req.GetCommand().(type) {
-	case *sink.ExecuteRequest_Mongodb:
-		if command.Mongodb == nil {
-			return request, status.Error(codes.InvalidArgument, "MongoDB command is missing")
-		}
-		request.MongoDB = &storage.MongoCommand{Database: command.Mongodb.GetDatabase(), Command: command.Mongodb.GetCommand()}
-	case *sink.ExecuteRequest_Search:
-		if command.Search == nil {
-			return request, status.Error(codes.InvalidArgument, "search command is missing")
-		}
-		headers := make(http.Header)
-		for _, header := range command.Search.GetHeaders() {
-			for _, value := range header.GetValues() {
-				headers.Add(header.GetName(), value)
-			}
-		}
-		request.Search = &storage.SearchCommand{Method: command.Search.GetMethod(), Path: command.Search.GetPath(),
-			Query: command.Search.GetQuery(), Body: command.Search.GetBody(), Headers: headers}
-	default:
-		return request, status.Error(codes.InvalidArgument, "native command is missing")
+	if len(req.GetPayload()) > 0 && req.GetContentType() == "" {
+		return request, status.Error(codes.InvalidArgument, "native payload requires content_type")
 	}
+	if req.GetContentType() != "" {
+		if _, _, err := mime.ParseMediaType(req.GetContentType()); err != nil {
+			return request, status.Error(codes.InvalidArgument, "invalid native content_type")
+		}
+	}
+	headers := make(http.Header)
+	for _, header := range req.GetHeaders() {
+		if header == nil || header.GetName() == "" || len(header.GetValues()) == 0 {
+			return request, status.Error(codes.InvalidArgument, "native header requires a name and values")
+		}
+		headers[header.GetName()] = append(headers[header.GetName()], header.GetValues()...)
+	}
+	request = storage.NativeRequest{Store: req.GetStore(), Namespace: req.GetNamespace(),
+		Method: req.GetMethod(), Path: req.GetPath(), Query: req.GetQuery(), Headers: headers,
+		ContentType: req.GetContentType(), Payload: req.GetPayload(), MaxBytes: maximum}
 	return request, nil
 }
 
@@ -74,7 +71,7 @@ func nativeStatus(err error) error {
 }
 
 func (s *Server) Execute(ctx context.Context, req *sink.ExecuteRequest) (*sink.ExecuteResponse, error) {
-	request, err := nativeRequest(req, s.maxReadBytes)
+	request, err := nativeRequest(req.GetCommand(), s.maxReadBytes)
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +79,7 @@ func (s *Server) Execute(ctx context.Context, req *sink.ExecuteRequest) (*sink.E
 	if !ok {
 		return nil, nativeStatus(storage.ErrNativeUnsupported)
 	}
-	admission := admissionRequest{encodedBytes: nativeExecutionBytes(req, request), stores: []string{request.Store}}
+	admission := admissionRequest{encodedBytes: nativeExecutionBytes(req.GetCommand(), request), stores: []string{request.Store}}
 	ctx, release, err := s.admitRequest(ctx, admission)
 	if err != nil {
 		return nil, err
@@ -111,7 +108,7 @@ func (s *Server) Execute(ctx context.Context, req *sink.ExecuteRequest) (*sink.E
 
 func (s *Server) Scan(req *sink.ScanRequest, stream grpc.ServerStreamingServer[sink.ScanResponse]) error {
 	maximum := min(s.maxReadBytes, 4<<20)
-	request, err := nativeRequest(req.GetRequest(), maximum)
+	request, err := nativeRequest(req.GetCommand(), maximum)
 	if err != nil {
 		return err
 	}
@@ -126,7 +123,7 @@ func (s *Server) Scan(req *sink.ScanRequest, stream grpc.ServerStreamingServer[s
 	if !ok {
 		return nativeStatus(storage.ErrNativeUnsupported)
 	}
-	admission := admissionRequest{encodedBytes: nativeExecutionBytes(req.GetRequest(), request) + 16, stores: []string{request.Store}, timeout: s.scanTimeout}
+	admission := admissionRequest{encodedBytes: nativeExecutionBytes(req.GetCommand(), request), stores: []string{request.Store}, timeout: s.scanTimeout}
 	ctx, release, err := s.admitRequest(stream.Context(), admission)
 	if err != nil {
 		return err
@@ -167,9 +164,10 @@ func (s *Server) Scan(req *sink.ScanRequest, stream grpc.ServerStreamingServer[s
 	return nativeStatus(err)
 }
 
-func nativeExecutionBytes(req *sink.ExecuteRequest, request storage.NativeRequest) int {
-	bytes := req.SizeVT() + 2*request.MaxBytes
-	if request.MongoDB != nil {
+func nativeExecutionBytes(req *sink.Command, request storage.NativeRequest) int {
+	bytes := req.SizeVT() + 16 + 2*request.MaxBytes
+	mediaType, _, _ := mime.ParseMediaType(request.ContentType)
+	if mediaType == "application/bson" {
 		// The driver receives a complete wire message before Sink can enforce
 		// its smaller document/page limit. Account for its 48 MiB wire ceiling.
 		bytes += 48 << 20

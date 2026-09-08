@@ -55,8 +55,7 @@ func TestNativeCommandAllowsWritesAndRejectsCursorSessionState(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mongoCommand := &storage.MongoCommand{Database: "catalog", Command: payload}
-			req := storage.NativeRequest{Store: "primary", MongoDB: mongoCommand}
+			req := storage.NativeRequest{Store: "primary", Namespace: "catalog", ContentType: "application/bson", Payload: payload}
 			_, err = validateNativeCommand(req, test.scan)
 			if (err == nil) != test.allowed {
 				t.Fatalf("allowed=%v, error=%v", test.allowed, err)

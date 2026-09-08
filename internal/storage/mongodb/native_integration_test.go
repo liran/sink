@@ -29,8 +29,7 @@ func mongoNativeRequest(t *testing.T, database string, command bson.D) storage.N
 	if err != nil {
 		t.Fatal(err)
 	}
-	mongoCommand := &storage.MongoCommand{Database: database, Command: payload}
-	request := storage.NativeRequest{Store: "primary", MongoDB: mongoCommand, MaxBytes: 1 << 20}
+	request := storage.NativeRequest{Store: "primary", Namespace: database, ContentType: "application/bson", Payload: payload, MaxBytes: 1 << 20}
 	return request
 }
 

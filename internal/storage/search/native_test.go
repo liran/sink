@@ -35,8 +35,7 @@ func TestNativeExecutePreservesErrorBodyAndHeadersWithoutRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := &storage.SearchCommand{Method: "POST", Path: "/products/_msearch", Query: "q=a&q=b", Body: []byte("{}\n{}\n")}
-	req := storage.NativeRequest{Store: "search", Search: command, MaxBytes: 4096}
+	req := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_msearch", Query: "q=a&q=b", ContentType: "application/x-ndjson", Payload: []byte("{}\n{}\n"), MaxBytes: 4096}
 	response, err := store.Execute(t.Context(), req)
 	if err != nil || response.Success || response.StatusCode != 429 || string(response.Payload) != payload || len(response.Headers.Values("Warning")) != 2 || calls.Load() != 1 {
 		t.Fatalf("response=%+v calls=%d err=%v", response, calls.Load(), err)
@@ -44,7 +43,7 @@ func TestNativeExecutePreservesErrorBodyAndHeadersWithoutRetry(t *testing.T) {
 }
 
 func TestNativePathsRejectConnectionOverrides(t *testing.T) {
-	tests := []storage.SearchCommand{
+	tests := []storage.NativeRequest{
 		{Method: "GET", Path: "http://other/_search"},
 		{Method: "GET", Path: "/products/../_search"},
 		{Method: "GET", Path: "/products/%2e%2e/_search"},
@@ -52,7 +51,7 @@ func TestNativePathsRejectConnectionOverrides(t *testing.T) {
 		{Method: "GET", Path: "/products/_search", Headers: http.Header{"Authorization": {"override"}}},
 	}
 	for _, command := range tests {
-		req := storage.NativeRequest{Search: &command}
+		req := command
 		if _, err := nativeOptions(req); err == nil {
 			t.Errorf("accepted %+v", command)
 		}
@@ -61,8 +60,7 @@ func TestNativePathsRejectConnectionOverrides(t *testing.T) {
 
 func TestNativeAliasManagementPreservesSupportedActions(t *testing.T) {
 	payload := []byte(`{"actions":[{"remove":{"index":"old","alias":"live"}},{"add":{"index":"new","alias":"live"}}]}`)
-	command := &storage.SearchCommand{Method: "POST", Path: "/_aliases", Body: payload}
-	req := storage.NativeRequest{Search: command}
+	req := storage.NativeRequest{Method: "POST", Path: "/_aliases", ContentType: "application/json", Payload: payload}
 	opts, err := nativeOptions(req)
 	if err != nil || string(opts.payload) != string(payload) {
 		t.Fatalf("alias command changed: %s, %v", opts.payload, err)
@@ -85,8 +83,7 @@ func TestNativeScanSplitsPagesWithinDocumentBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := &storage.SearchCommand{Method: "POST", Path: "/products/_search"}
-	native := storage.NativeRequest{Store: "search", Search: command, MaxBytes: 200}
+	native := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_search", MaxBytes: 200}
 	req := storage.ScanRequest{Request: native, BatchSize: 2}
 	seen := 0
 	visit := func(documents []storage.Document) error {
@@ -126,8 +123,7 @@ func TestNativeScanClosesLatestCursorAfterCallbackCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := &storage.SearchCommand{Method: "POST", Path: "/products/_search", Body: []byte(`{}`)}
-	native := storage.NativeRequest{Store: "search", Search: command, MaxBytes: 4096}
+	native := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_search", ContentType: "application/json", Payload: []byte(`{}`), MaxBytes: 4096}
 	req := storage.ScanRequest{Request: native, BatchSize: 1}
 	seen := 0
 	stop := errors.New("stop after two")
@@ -167,8 +163,7 @@ func testIncompleteScanPage(t *testing.T, payload string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := &storage.SearchCommand{Method: "POST", Path: "/products/_search"}
-	native := storage.NativeRequest{Store: "search", Search: command, MaxBytes: 4096}
+	native := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_search", MaxBytes: 4096}
 	req := storage.ScanRequest{Request: native, BatchSize: 1}
 	visit := func(_ []storage.Document) error { t.Error("partial results were delivered"); return nil }
 	if err := store.Scan(t.Context(), req, visit); err == nil {
@@ -195,14 +190,13 @@ func TestNativeExecuteCapsResponseAndDoesNotFollowRedirect(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := &storage.SearchCommand{Method: "GET", Path: "/products/_search"}
-	req := storage.NativeRequest{Store: "search", Search: command, MaxBytes: 100}
+	req := storage.NativeRequest{Store: "search", Method: "GET", Path: "/products/_search", MaxBytes: 100}
 	_, err = store.Execute(t.Context(), req)
 	code, _ := storage.ErrorDetails(err)
 	if code != storage.ErrorCodeResourceExhausted {
 		t.Fatalf("oversize error=%v", err)
 	}
-	command.Query = "redirect=1"
+	req.Query = "redirect=1"
 	result, err := store.Execute(t.Context(), req)
 	if err != nil || result.StatusCode != 302 || targetCalls.Load() != 0 {
 		t.Fatalf("redirect response=%+v err=%v target=%d", result, err, targetCalls.Load())
@@ -210,20 +204,20 @@ func TestNativeExecuteCapsResponseAndDoesNotFollowRedirect(t *testing.T) {
 }
 
 func TestNativeExecuteForwardsArbitraryMethodsPathsAndBodies(t *testing.T) {
-	commands := []storage.SearchCommand{
-		{Method: "POST", Path: "/_bulk", Body: []byte("{\"index\":{\"_index\":\"products\"}}\n{\"value\":1}\n")},
-		{Method: "POST", Path: "/products/_update/id", Body: []byte(`{"doc":{"value":2}}`)},
-		{Method: "PUT", Path: "/products/_doc/a%2Fb%20c", Body: []byte(`{"value":1}`)},
+	commands := []storage.NativeRequest{
+		{Method: "POST", Path: "/_bulk", ContentType: "application/x-ndjson", Payload: []byte("{\"index\":{\"_index\":\"products\"}}\n{\"value\":1}\n")},
+		{Method: "POST", Path: "/products/_update/id", ContentType: "application/json", Payload: []byte(`{"doc":{"value":2}}`)},
+		{Method: "PUT", Path: "/products/_doc/a%2Fb%20c", ContentType: "application/json", Payload: []byte(`{"value":1}`)},
 		{Method: "DELETE", Path: "/products"},
-		{Method: "POST", Path: "/_aliases", Body: []byte(`{"actions":[{"remove_index":{"index":"products"}}]}`)},
-		{Method: "PATCH", Path: "/_plugins/future/endpoint/", Body: []byte("opaque")},
+		{Method: "POST", Path: "/_aliases", ContentType: "application/json", Payload: []byte(`{"actions":[{"remove_index":{"index":"products"}}]}`)},
+		{Method: "PATCH", Path: "/_plugins/future/endpoint/", ContentType: "text/plain", Payload: []byte("opaque")},
 	}
 	for _, command := range commands {
 		t.Run(command.Method+command.Path, func(t *testing.T) {
 			command.Headers = http.Header{"X-Native-Option": {"value"}}
 			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
-				if r.Method != command.Method || r.URL.EscapedPath() != "/prefix"+command.Path || string(body) != string(command.Body) || r.Header.Get("X-Native-Option") != "value" {
+				if r.Method != command.Method || r.URL.EscapedPath() != "/prefix"+command.Path || string(body) != string(command.Payload) || r.Header.Get("X-Native-Option") != "value" {
 					t.Errorf("request changed: %s %s %s", r.Method, r.URL.EscapedPath(), body)
 				}
 				if command.Path == "/_bulk" && r.Header.Get("Content-Type") != "application/x-ndjson" {
@@ -239,7 +233,9 @@ func TestNativeExecuteForwardsArbitraryMethodsPathsAndBodies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			req := storage.NativeRequest{Store: "search", Search: &command, MaxBytes: 4096}
+			req := command
+			req.Store = "search"
+			req.MaxBytes = 4096
 			response, err := store.Execute(t.Context(), req)
 			if err != nil || response.Success || response.StatusCode != 400 || string(response.Payload) != "original backend error\n" {
 				t.Fatalf("response=%+v err=%v", response, err)

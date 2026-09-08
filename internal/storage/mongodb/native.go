@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"mime"
 	"strings"
 	"time"
 
@@ -15,10 +16,20 @@ import (
 
 func validateNativeCommand(req storage.NativeRequest, scan bool) (bson.D, error) {
 	var command bson.D
-	if req.MongoDB == nil || req.Search != nil || strings.TrimSpace(req.MongoDB.Database) == "" {
-		return command, errors.New("MongoDB native requests require a database and BSON command")
+	if strings.TrimSpace(req.Namespace) == "" {
+		return command, errors.New("MongoDB native requests require a namespace")
 	}
-	if err := bson.Unmarshal(req.MongoDB.Command, &command); err != nil {
+	if req.Method != "" || req.Path != "" || req.Query != "" || len(req.Headers) != 0 {
+		return command, errors.New("MongoDB native requests do not use method, path, query or headers")
+	}
+	mediaType, _, err := mime.ParseMediaType(req.ContentType)
+	if err != nil || mediaType != "application/bson" {
+		return command, errors.New("MongoDB native requests require application/bson content_type")
+	}
+	if err := bson.Raw(req.Payload).Validate(); err != nil {
+		return command, fmt.Errorf("invalid BSON command: %w", err)
+	}
+	if err := bson.Unmarshal(req.Payload, &command); err != nil {
 		return command, fmt.Errorf("decode BSON command: %w", err)
 	}
 	if len(command) == 0 {
@@ -86,7 +97,7 @@ func (s *Store) Execute(ctx context.Context, req storage.NativeRequest) (storage
 	if _, err := validateNativeCommand(req, false); err != nil {
 		return empty, storage.InvalidArgumentError(err)
 	}
-	raw, err := s.client.Database(req.MongoDB.Database).RunCommand(ctx, bson.Raw(req.MongoDB.Command)).Raw()
+	raw, err := s.client.Database(req.Namespace).RunCommand(ctx, bson.Raw(req.Payload)).Raw()
 	if len(raw) == 0 {
 		var commandError mongo.CommandError
 		if errors.As(err, &commandError) {
@@ -143,7 +154,7 @@ func (s *Store) Scan(ctx context.Context, req storage.ScanRequest, send func([]s
 		return storage.InvalidArgumentError(err)
 	}
 	command = scanCommand(command, req.BatchSize)
-	cursor, err := s.client.Database(req.Request.MongoDB.Database).RunCommandCursor(ctx, command)
+	cursor, err := s.client.Database(req.Request.Namespace).RunCommandCursor(ctx, command)
 	if err != nil {
 		return storage.BackendError(err)
 	}

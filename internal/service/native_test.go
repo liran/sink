@@ -26,6 +26,23 @@ type nativeFixtureStorage struct {
 	stopped chan struct{}
 	silent  bool
 	flood   bool
+	queries chan storage.QueryRequest
+	counts  chan storage.NativeRequest
+}
+
+func (s *nativeFixtureStorage) Query(_ context.Context, req storage.QueryRequest) (storage.QueryResponse, error) {
+	if s.queries != nil {
+		s.queries <- req
+	}
+	result := storage.QueryResponse{}
+	return result, nil
+}
+
+func (s *nativeFixtureStorage) Count(_ context.Context, req storage.NativeRequest) (uint64, error) {
+	if s.counts != nil {
+		s.counts <- req
+	}
+	return 123, nil
 }
 
 func (s *nativeFixtureStorage) Execute(_ context.Context, _ storage.NativeRequest) (storage.NativeResponse, error) {
@@ -97,9 +114,8 @@ func nativeRPCFixture(t *testing.T, silent bool) (sink.SinkClient, *nativeFixtur
 }
 
 func nativeSearchRequest() *sink.ExecuteRequest {
-	command := &sink.SearchCommand{Method: "POST", Path: "/products/_search", Body: []byte(`{}`)}
-	wrapper := &sink.ExecuteRequest_Search{Search: command}
-	request := &sink.ExecuteRequest{Store: "primary", Command: wrapper}
+	command := &sink.Command{Store: "primary", Method: "POST", Path: "/products/_search", ContentType: "application/json", Payload: []byte(`{}`)}
+	request := &sink.ExecuteRequest{Command: command}
 	return request
 }
 
@@ -108,7 +124,7 @@ func TestNativeRPCSharesAdmissionAndReleasesCanceledScan(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	request := nativeSearchRequest()
-	scanRequest := &sink.ScanRequest{Request: request, BatchSize: 1}
+	scanRequest := &sink.ScanRequest{Command: request.Command, BatchSize: 1}
 	stream, err := client.Scan(ctx, scanRequest)
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +157,7 @@ func TestNativeRPCSharesAdmissionAndReleasesCanceledScan(t *testing.T) {
 	if err != nil || response.GetStatusCode() != 400 || response.GetSuccess() || string(response.GetPayload()) != "{\"error\":\"native\"}\n" || len(response.GetHeaders()[0].GetValues()) != 2 {
 		t.Fatalf("native result=%v err=%v", response, err)
 	}
-	request.Store = "missing"
+	request.Command.Store = "missing"
 	_, err = client.Execute(t.Context(), request)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("unknown store=%v", err)
@@ -150,7 +166,7 @@ func TestNativeRPCSharesAdmissionAndReleasesCanceledScan(t *testing.T) {
 
 func TestNativeScanIdleTimeoutCancelsBackend(t *testing.T) {
 	client, backend := nativeRPCFixture(t, true)
-	request := &sink.ScanRequest{Request: nativeSearchRequest()}
+	request := &sink.ScanRequest{Command: nativeSearchRequest().Command}
 	stream, err := client.Scan(t.Context(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +187,7 @@ func TestNativeScanStopsWhenClientDoesNotReceive(t *testing.T) {
 	backend.flood = true
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	request := &sink.ScanRequest{Request: nativeSearchRequest()}
+	request := &sink.ScanRequest{Command: nativeSearchRequest().Command}
 	_, err := client.Scan(ctx, request)
 	if err != nil {
 		t.Fatal(err)

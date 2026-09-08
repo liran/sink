@@ -519,6 +519,10 @@ func sinkMethod(fullMethod string) (string, bool) {
 		return "Delete", true
 	case sink.Sink_Execute_FullMethodName:
 		return "Execute", true
+	case sink.Sink_Query_FullMethodName:
+		return "Query", true
+	case sink.Sink_Count_FullMethodName:
+		return "Count", true
 	case sink.Sink_Scan_FullMethodName:
 		return "Scan", true
 	default:

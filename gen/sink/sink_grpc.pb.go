@@ -23,6 +23,8 @@ const (
 	Sink_Write_FullMethodName   = "/sink.v1.Sink/Write"
 	Sink_Delete_FullMethodName  = "/sink.v1.Sink/Delete"
 	Sink_Execute_FullMethodName = "/sink.v1.Sink/Execute"
+	Sink_Query_FullMethodName   = "/sink.v1.Sink/Query"
+	Sink_Count_FullMethodName   = "/sink.v1.Sink/Count"
 	Sink_Scan_FullMethodName    = "/sink.v1.Sink/Scan"
 )
 
@@ -39,6 +41,8 @@ type SinkClient interface {
 	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
 	Execute(ctx context.Context, in *ExecuteRequest, opts ...grpc.CallOption) (*ExecuteResponse, error)
+	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResponse, error)
+	Count(ctx context.Context, in *CountRequest, opts ...grpc.CallOption) (*CountResponse, error)
 	Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScanResponse], error)
 }
 
@@ -90,6 +94,26 @@ func (c *sinkClient) Execute(ctx context.Context, in *ExecuteRequest, opts ...gr
 	return out, nil
 }
 
+func (c *sinkClient) Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(QueryResponse)
+	err := c.cc.Invoke(ctx, Sink_Query_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *sinkClient) Count(ctx context.Context, in *CountRequest, opts ...grpc.CallOption) (*CountResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CountResponse)
+	err := c.cc.Invoke(ctx, Sink_Count_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *sinkClient) Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScanResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &Sink_ServiceDesc.Streams[0], Sink_Scan_FullMethodName, cOpts...)
@@ -122,6 +146,8 @@ type SinkServer interface {
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
 	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
 	Execute(context.Context, *ExecuteRequest) (*ExecuteResponse, error)
+	Query(context.Context, *QueryRequest) (*QueryResponse, error)
+	Count(context.Context, *CountRequest) (*CountResponse, error)
 	Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error
 	mustEmbedUnimplementedSinkServer()
 }
@@ -144,6 +170,12 @@ func (UnimplementedSinkServer) Delete(context.Context, *DeleteRequest) (*DeleteR
 }
 func (UnimplementedSinkServer) Execute(context.Context, *ExecuteRequest) (*ExecuteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Execute not implemented")
+}
+func (UnimplementedSinkServer) Query(context.Context, *QueryRequest) (*QueryResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Query not implemented")
+}
+func (UnimplementedSinkServer) Count(context.Context, *CountRequest) (*CountResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Count not implemented")
 }
 func (UnimplementedSinkServer) Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error {
 	return status.Errorf(codes.Unimplemented, "method Scan not implemented")
@@ -241,6 +273,42 @@ func _Sink_Execute_Handler(srv interface{}, ctx context.Context, dec func(interf
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Sink_Query_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SinkServer).Query(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sink_Query_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SinkServer).Query(ctx, req.(*QueryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Sink_Count_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CountRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(SinkServer).Count(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sink_Count_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SinkServer).Count(ctx, req.(*CountRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Sink_Scan_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(ScanRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -274,6 +342,14 @@ var Sink_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Execute",
 			Handler:    _Sink_Execute_Handler,
+		},
+		{
+			MethodName: "Query",
+			Handler:    _Sink_Query_Handler,
+		},
+		{
+			MethodName: "Count",
+			Handler:    _Sink_Count_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
