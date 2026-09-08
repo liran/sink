@@ -53,9 +53,10 @@ func TestQueryAndCountApplyControlsWithoutOpeningCursor(t *testing.T) {
 	if err != nil || len(page.Documents) != 2 || !page.HasMore || calls != 1 {
 		t.Fatalf("page=%+v calls=%d err=%v", page, calls, err)
 	}
-	count, err := store.Count(t.Context(), command)
-	if err != nil || count != 12001 || calls != 2 {
-		t.Fatalf("count=%d calls=%d err=%v", count, calls, err)
+	countRequest := storage.CountRequest{Request: command}
+	count, err := store.Count(t.Context(), countRequest)
+	if err != nil || count.Count != 12001 || count.Estimated || calls != 2 {
+		t.Fatalf("count=%+v calls=%d err=%v", count, calls, err)
 	}
 }
 
@@ -79,8 +80,9 @@ func TestCountRejectsPartialApproximateAndInvalidTotals(t *testing.T) {
 				t.Fatal(err)
 			}
 			command := storage.NativeRequest{Store: "search", Method: "GET", Path: "/products/_search", MaxBytes: 4096}
-			if count, err := store.Count(t.Context(), command); err == nil || count != 0 {
-				t.Fatalf("accepted incomplete count %d: %v", count, err)
+			countRequest := storage.CountRequest{Request: command}
+			if count, err := store.Count(t.Context(), countRequest); err == nil || count.Count != 0 {
+				t.Fatalf("accepted incomplete count %+v: %v", count, err)
 			}
 		})
 	}

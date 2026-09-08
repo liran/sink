@@ -2299,11 +2299,16 @@ func (x *QueryResponse) GetHasMore() bool {
 // Count is an independent query, not an implicit part of Query. It accepts the
 // same sources and counts matches before find/HTTP pagination; for aggregate it
 // counts the output of the supplied pipeline. HTTP counts matching documents
-// before collapse. Partial, timed-out or approximate counts fail the request.
+// before collapse. Partial or timed-out counts fail the request.
 // Count and Query are separate observations and may differ under concurrent writes.
 type CountRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Command       *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Command *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
+	// Allow an estimate instead of the default exact count. MongoDB find with an
+	// absent or empty filter can use collection metadata when no options require
+	// exact execution. Filtered queries, aggregate pipelines and HTTP search
+	// counts remain exact even when this option is enabled.
+	Estimate      bool `protobuf:"varint,2,opt,name=estimate,proto3" json:"estimate,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2345,9 +2350,18 @@ func (x *CountRequest) GetCommand() *Command {
 	return nil
 }
 
+func (x *CountRequest) GetEstimate() bool {
+	if x != nil {
+		return x.Estimate
+	}
+	return false
+}
+
 type CountResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Count         uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Count uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	// True when the backend used an estimate instead of counting matching rows.
+	Estimated     bool `protobuf:"varint,2,opt,name=estimated,proto3" json:"estimated,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2387,6 +2401,13 @@ func (x *CountResponse) GetCount() uint64 {
 		return x.Count
 	}
 	return 0
+}
+
+func (x *CountResponse) GetEstimated() bool {
+	if x != nil {
+		return x.Estimated
+	}
+	return false
 }
 
 // Scan accepts the same Command, limited to adapter-supported read-only cursor
@@ -2627,11 +2648,13 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\aexclude\x18\x02 \x01(\bR\aexclude\"[\n" +
 	"\rQueryResponse\x12/\n" +
 	"\tdocuments\x18\x01 \x03(\v2\x11.sink.v1.DocumentR\tdocuments\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore\":\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"V\n" +
 	"\fCountRequest\x12*\n" +
-	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\"%\n" +
+	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\x12\x1a\n" +
+	"\bestimate\x18\x02 \x01(\bR\bestimate\"C\n" +
 	"\rCountResponse\x12\x14\n" +
-	"\x05count\x18\x01 \x01(\x04R\x05count\"X\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x1c\n" +
+	"\testimated\x18\x02 \x01(\bR\testimated\"X\n" +
 	"\vScanRequest\x12*\n" +
 	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\x12\x1d\n" +
 	"\n" +

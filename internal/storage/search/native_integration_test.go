@@ -66,8 +66,9 @@ func TestNativeSearchQueriesMSearchAndScan(t *testing.T) {
 			}
 		}
 	}
-	if count, err := fixture.store.Count(ctx, native); err != nil || count != 5 {
-		t.Fatalf("count=%d err=%v", count, err)
+	countRequest := storage.CountRequest{Request: native}
+	if count, err := fixture.store.Count(ctx, countRequest); err != nil || count.Count != 5 {
+		t.Fatalf("count=%+v err=%v", count, err)
 	}
 	scan := storage.ScanRequest{Request: native, BatchSize: 2}
 	seen := 2

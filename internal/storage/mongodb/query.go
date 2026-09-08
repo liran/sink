@@ -7,6 +7,7 @@ import (
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
+	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
 
 func appendQueryStages(command bson.D, stages bson.A) (bson.D, error) {
@@ -152,20 +153,68 @@ func countPipeline(command bson.D) (bson.D, error) {
 	return appendQueryStages(command, stages)
 }
 
-func (s *Store) Count(ctx context.Context, req storage.NativeRequest) (uint64, error) {
-	command, err := validateNativeCommand(req, true)
-	if err != nil {
-		return 0, storage.InvalidArgumentError(err)
+// Metadata counts cannot honor query options such as hint or readConcern.
+// Retain the exact path whenever those options are present.
+func canEstimateCount(command bson.D) bool {
+	if command[0].Key != "find" {
+		return false
 	}
-	command, err = countPipeline(command)
-	if err != nil {
-		return 0, storage.InvalidArgumentError(err)
+	collection, ok := command[0].Value.(string)
+	if !ok || collection == "" {
+		return false
 	}
-	req.Payload, err = bson.Marshal(command)
-	if err != nil {
-		return 0, storage.InvalidArgumentError(err)
+	for _, field := range command[1:] {
+		switch field.Key {
+		case "filter":
+			filter, ok := field.Value.(bson.D)
+			if !ok || len(filter) != 0 {
+				return false
+			}
+		case "skip", "limit", "batchSize", "sort", "projection", "comment":
+		default:
+			return false
+		}
 	}
-	var count uint64
+	return true
+}
+
+func (s *Store) Count(ctx context.Context, req storage.CountRequest) (storage.CountResponse, error) {
+	var empty storage.CountResponse
+	request := req.Request
+	if request.Store != s.store {
+		return empty, storage.InvalidArgumentError(errors.New("MongoDB store does not match request"))
+	}
+	command, err := validateNativeCommand(request, true)
+	if err != nil {
+		return empty, storage.InvalidArgumentError(err)
+	}
+	pipeline, err := countPipeline(command)
+	if err != nil {
+		return empty, storage.InvalidArgumentError(err)
+	}
+	if req.Estimate && canEstimateCount(command) {
+		opts := options.EstimatedDocumentCount()
+		for _, field := range command[1:] {
+			if field.Key == "comment" {
+				opts.SetComment(field.Value)
+			}
+		}
+		collection := s.client.Database(request.Namespace).Collection(command[0].Value.(string))
+		count, err := collection.EstimatedDocumentCount(ctx, opts)
+		if err != nil {
+			return empty, storage.BackendError(err)
+		}
+		if count < 0 {
+			return empty, errors.New("invalid estimated count result")
+		}
+		result := storage.CountResponse{Count: uint64(count), Estimated: true}
+		return result, nil
+	}
+	request.Payload, err = bson.Marshal(pipeline)
+	if err != nil {
+		return empty, storage.InvalidArgumentError(err)
+	}
+	result := storage.CountResponse{}
 	seen := false
 	visit := func(documents []storage.Document) error {
 		for _, document := range documents {
@@ -174,13 +223,13 @@ func (s *Store) Count(ctx context.Context, req storage.NativeRequest) (uint64, e
 				return errors.New("invalid native count result")
 			}
 			seen = true
-			count = uint64(value.AsInt64())
+			result.Count = uint64(value.AsInt64())
 		}
 		return nil
 	}
-	scan := storage.ScanRequest{Request: req, BatchSize: 1}
+	scan := storage.ScanRequest{Request: request, BatchSize: 1}
 	if err := s.Scan(ctx, scan, visit); err != nil {
-		return 0, err
+		return empty, err
 	}
-	return count, nil
+	return result, nil
 }

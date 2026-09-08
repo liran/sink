@@ -125,15 +125,25 @@ unique tie-breaker. Concurrent changes may shift pages; this is not a snapshot.
 Deep pages incur backend offset costs and result-window limits, including the
 extra result needed for `has_more`. Use Scan for sustained traversal.
 
-`CountRequest` takes the same Command and returns an exact uint64 `count`.
+`CountRequest` takes the same Command and returns uint64 `count` plus `estimated`.
+Counts are exact by default. With `CountRequest.estimate=true`, MongoDB find with
+a missing or empty document filter uses `EstimatedDocumentCount`, obtaining
+collection metadata without scanning the documents. `estimated=true` identifies
+this fast path. The option permits estimation; it does not force it. Filtered
+finds and aggregate pipelines remain exact. Options that metadata counts cannot honor (such as hint,
+collation, readConcern, let or allowDiskUse) also retain the exact path. Comment
+is forwarded by both paths; presentation options do not affect the total.
+Metadata estimates follow MongoDB's accuracy limitations, including sharded
+collections and recovery; use exact counting when an exact total is required.
+
 MongoDB counts find matches before skip/limit, or the output of a supplied
 read-only aggregate pipeline. Find filters, hints, collation, read concern, let,
 comment and allowDiskUse are supported; other non-pagination find options are
 rejected when they cannot be translated faithfully. HTTP Count obtains exact
 matching-document totals before pagination/collapse, without computing hit
-presentation or aggregations. Partial, timed-out, shard-failed and approximate
-results fail instead of returning a misleading count. Query and Count report
-backend failures as gRPC errors; use Execute when a complete native reply is needed.
+presentation or aggregations (`estimated=false`). Partial, timed-out, shard-failed
+and approximate HTTP results fail instead of returning a misleading count. Query
+and Count report backend failures as gRPC errors; use Execute when a complete native reply is needed.
 
 Count and Query are separate observations and can differ during concurrent writes.
 Neither RPC is automatically retried. Both use the same admission, timeout and

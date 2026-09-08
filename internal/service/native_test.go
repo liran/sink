@@ -27,7 +27,7 @@ type nativeFixtureStorage struct {
 	silent  bool
 	flood   bool
 	queries chan storage.QueryRequest
-	counts  chan storage.NativeRequest
+	counts  chan storage.CountRequest
 }
 
 func (s *nativeFixtureStorage) Query(_ context.Context, req storage.QueryRequest) (storage.QueryResponse, error) {
@@ -38,11 +38,12 @@ func (s *nativeFixtureStorage) Query(_ context.Context, req storage.QueryRequest
 	return result, nil
 }
 
-func (s *nativeFixtureStorage) Count(_ context.Context, req storage.NativeRequest) (uint64, error) {
+func (s *nativeFixtureStorage) Count(_ context.Context, req storage.CountRequest) (storage.CountResponse, error) {
 	if s.counts != nil {
 		s.counts <- req
 	}
-	return 123, nil
+	result := storage.CountResponse{Count: 123, Estimated: req.Estimate}
+	return result, nil
 }
 
 func (s *nativeFixtureStorage) Execute(_ context.Context, _ storage.NativeRequest) (storage.NativeResponse, error) {

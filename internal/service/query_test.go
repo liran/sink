@@ -12,7 +12,7 @@ import (
 func TestQueryAndCountRouteCommonCommandAndPageWithoutOverflow(t *testing.T) {
 	client, backend := nativeRPCFixture(t, false)
 	backend.queries = make(chan storage.QueryRequest, 1)
-	backend.counts = make(chan storage.NativeRequest, 1)
+	backend.counts = make(chan storage.CountRequest, 1)
 	command := nativeSearchRequest().Command
 	header := &sink.Header{Name: "X-Option", Values: []string{"first", "second"}}
 	command.Headers = []*sink.Header{header}
@@ -37,14 +37,19 @@ func TestQueryAndCountRouteCommonCommandAndPageWithoutOverflow(t *testing.T) {
 	if _, err := client.Query(t.Context(), request); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("invalid page size reached backend: %v", err)
 	}
-	countRequest := &sink.CountRequest{Command: command}
+	countRequest := &sink.CountRequest{Command: command, Estimate: true}
 	response, err := client.Count(t.Context(), countRequest)
-	if err != nil || response.GetCount() != 123 {
+	if err != nil || response.GetCount() != 123 || !response.GetEstimated() {
 		t.Fatalf("count=%v err=%v", response, err)
 	}
-	countCommand := <-backend.counts
+	countCommand := (<-backend.counts).Request
 	if countCommand.Store != command.Store || countCommand.ContentType != command.ContentType || string(countCommand.Payload) != string(command.Payload) {
 		t.Fatalf("count command changed: %+v", countCommand)
+	}
+	countRequest.Estimate = false
+	response, err = client.Count(t.Context(), countRequest)
+	if err != nil || response.GetEstimated() || (<-backend.counts).Estimate {
+		t.Fatalf("exact count lost: %v err=%v", response, err)
 	}
 	command.Store = "missing"
 	if _, err := client.Count(t.Context(), countRequest); status.Code(err) != codes.InvalidArgument {

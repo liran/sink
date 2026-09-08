@@ -15,7 +15,7 @@ var ErrNativeUnsupported = errors.New("native operation is not supported")
 type NativeStorage interface {
 	Execute(context.Context, NativeRequest) (NativeResponse, error)
 	Query(context.Context, QueryRequest) (QueryResponse, error)
-	Count(context.Context, NativeRequest) (uint64, error)
+	Count(context.Context, CountRequest) (CountResponse, error)
 	Scan(context.Context, ScanRequest, func([]Document) error) error
 }
 
@@ -50,6 +50,16 @@ type QueryRequest struct {
 	PageSize   int
 	Sort       []SortField
 	Projection *Projection
+}
+
+type CountRequest struct {
+	Request  NativeRequest
+	Estimate bool
+}
+
+type CountResponse struct {
+	Count     uint64
+	Estimated bool
 }
 
 type SortField struct {
@@ -129,10 +139,11 @@ func (r *Router) Query(ctx context.Context, req QueryRequest) (QueryResponse, er
 	return backend.Query(ctx, req)
 }
 
-func (r *Router) Count(ctx context.Context, req NativeRequest) (uint64, error) {
-	backend, err := r.nativeBackend(req.Store)
+func (r *Router) Count(ctx context.Context, req CountRequest) (CountResponse, error) {
+	backend, err := r.nativeBackend(req.Request.Store)
 	if err != nil {
-		return 0, err
+		var empty CountResponse
+		return empty, err
 	}
 	return backend.Count(ctx, req)
 }

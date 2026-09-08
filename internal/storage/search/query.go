@@ -141,13 +141,14 @@ func (s *Store) Query(ctx context.Context, req storage.QueryRequest) (storage.Qu
 	return result, nil
 }
 
-func (s *Store) Count(ctx context.Context, req storage.NativeRequest) (uint64, error) {
-	if req.Store != s.logicalStore {
-		return 0, storage.InvalidArgumentError(errors.New("search store does not match request"))
+func (s *Store) Count(ctx context.Context, req storage.CountRequest) (storage.CountResponse, error) {
+	var empty storage.CountResponse
+	if req.Request.Store != s.logicalStore {
+		return empty, storage.InvalidArgumentError(errors.New("search store does not match request"))
 	}
-	opts, body, err := pageOptions(req)
+	opts, body, err := pageOptions(req.Request)
 	if err != nil {
-		return 0, storage.InvalidArgumentError(err)
+		return empty, storage.InvalidArgumentError(err)
 	}
 	// Count needs matching-document totals, without computing hit presentation,
 	// aggregations or collapsing the hits returned by a normal search.
@@ -163,11 +164,11 @@ func (s *Store) Count(ctx context.Context, req storage.NativeRequest) (uint64, e
 	opts.query.Set("rest_total_hits_as_int", "false")
 	opts.payload, err = json.Marshal(body)
 	if err != nil {
-		return 0, storage.InvalidArgumentError(err)
+		return empty, storage.InvalidArgumentError(err)
 	}
 	page, err := s.performQuery(ctx, opts)
 	if err != nil {
-		return 0, err
+		return empty, err
 	}
 	var total struct {
 		Value    *int64 `json:"value"`
@@ -175,7 +176,8 @@ func (s *Store) Count(ctx context.Context, req storage.NativeRequest) (uint64, e
 	}
 	err = json.Unmarshal(page.Hits.Total, &total)
 	if err != nil || total.Value == nil || *total.Value < 0 || total.Relation != "eq" || len(page.Hits.Hits) != 0 {
-		return 0, errors.New("search count omitted an exact nonnegative total")
+		return empty, errors.New("search count omitted an exact nonnegative total")
 	}
-	return uint64(*total.Value), nil
+	result := storage.CountResponse{Count: uint64(*total.Value)}
+	return result, nil
 }
