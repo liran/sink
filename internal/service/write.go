@@ -50,6 +50,7 @@ type writeGroupCandidate struct {
 }
 
 type writeExecutionOptions struct {
+	returns          *writeReturns
 	completion       *writeCompletion
 	observation      *writeObservation
 	budgets          *requestBudgets
@@ -213,6 +214,21 @@ func (s *Server) executeWriteGroups(
 	puts := make([]writeGroup, 0, len(groups))
 	conditional := make([]writeGroup, 0, len(groups))
 	for _, group := range groups {
+		if len(group.operations) > 1 && group.hasReturns() {
+			// Preserve each operation's own committed result and revision. Keep
+			// the group inside its batcher's existing record ordering barrier.
+			for _, operation := range group.operations {
+				single := writeGroup{operations: []parsedWrite{operation}}
+				if operation.merge != nil {
+					single.merges = 1
+				}
+				err := s.executeWriteGroups(ctx, []writeGroup{single}, results, opts)
+				if err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		s.metrics.ObserveMergeFold(group.merges)
 		if group.directPut() {
 			puts = append(puts, group)
@@ -237,14 +253,25 @@ func (s *Server) executePuts(
 		return nil
 	}
 	storageOperations := make([]storage.WriteOperation, 0, len(groups))
+	appliedGroups := make([]writeGroup, 0, len(groups))
 	for _, group := range groups {
 		operation := group.operations[len(group.operations)-1]
+		if err := opts.returns.reserve(group, operation.put.document); err != nil {
+			failure := storage.WriteResult{Status: storage.WriteStatusFailed, Err: err}
+			applyWriteGroupResult(group, results, failure)
+			opts.completion.group(group, results)
+			continue
+		}
 		storageOperation := storage.WriteOperation{
 			Address:      operation.address,
 			Document:     operation.put.document,
 			Precondition: operation.put.precondition,
 		}
 		storageOperations = append(storageOperations, storageOperation)
+		appliedGroups = append(appliedGroups, group)
+	}
+	if len(storageOperations) == 0 {
+		return nil
 	}
 	request := storage.WriteRequest{
 		Operations:       storageOperations,
@@ -256,12 +283,14 @@ func (s *Server) executePuts(
 	if err != nil {
 		return status.Errorf(codes.Unavailable, "write records: %v", err)
 	}
-	if len(response.Results) != len(groups) {
+	if len(response.Results) != len(appliedGroups) {
 		return status.Error(codes.Internal, "storage returned an invalid write result count")
 	}
 	for index, stored := range response.Results {
-		applyWriteGroupResult(groups[index], results, stored)
-		opts.completion.group(groups[index], results)
+		group := appliedGroups[index]
+		applyWriteGroupResult(group, results, stored)
+		attachWriteDocument(group, results, storageOperations[index].Document)
+		opts.completion.group(group, results)
 	}
 	return nil
 }
@@ -349,6 +378,12 @@ func (s *Server) executeWriteAttempt(
 			candidate, include = s.prepareBatchedWriteGroup(ctx, preparation)
 		}
 		if include {
+			if err := opts.returns.reserve(group, candidate.operation.Document); err != nil {
+				failure := storage.WriteResult{Status: storage.WriteStatusFailed, Err: err}
+				applyWriteGroupResult(group, results, failure)
+				opts.completion.group(group, results)
+				continue
+			}
 			if opts.budgets == nil {
 				if err := outputBudget.Reserve(len(candidate.operation.Document.Payload)); err != nil {
 					failure := storage.WriteResult{Status: storage.WriteStatusFailed, Err: err}
@@ -395,6 +430,7 @@ func (s *Server) executeWriteAttempt(
 			continue
 		}
 		applyWriteGroupResult(group, results, stored)
+		attachWriteDocument(group, results, candidates[index].operation.Document)
 		opts.completion.group(group, results)
 	}
 	return next, nil

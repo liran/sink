@@ -58,6 +58,7 @@ type config struct {
 	luaOptions             merge.LuaOptions
 	shutdownTimeout        time.Duration
 	requestTimeout         time.Duration
+	scanTimeout            time.Duration
 	maxInFlightRequests    int
 	maxInFlightBytes       int
 	maxStoreRequests       int
@@ -141,6 +142,7 @@ type searchConfigFile struct {
 }
 
 type serviceConfigFile struct {
+	ScanTimeoutSeconds    *int               `yaml:"scan_timeout_seconds"`
 	RequestTimeoutSeconds *int               `yaml:"request_timeout_seconds"`
 	MaxInFlightRequests   *int               `yaml:"max_in_flight_requests"`
 	MaxInFlightBytes      *int               `yaml:"max_in_flight_bytes"`

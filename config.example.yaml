@@ -19,6 +19,7 @@ storages:
 
 service:
   request_timeout_seconds: 30
+  scan_timeout_seconds: 900
   max_in_flight_requests: 128
   max_in_flight_bytes: 268435456
   max_store_requests: 32

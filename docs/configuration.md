@@ -245,7 +245,7 @@ Sink metrics:
 | `sink_build_info` | gauge | `version` | Build identity for the running Sink binary. |
 | `sink_grpc_server_requests_total` | counter | `method`, `code` | Completed Sink gRPC requests by method and canonical gRPC status code. |
 | `sink_grpc_server_request_duration_seconds` | histogram | `method` | End-to-end Sink gRPC request latency. |
-| `sink_grpc_server_operation_results_total` | counter | `method`, `status` | Per-operation results returned inside batch responses. |
+| `sink_grpc_server_operation_results_total` | counter | `method`, `status` | Per-operation batch results and native Execute `succeeded`/`failed` outcomes, including database errors delivered over gRPC OK. |
 | `sink_batcher_batches_total` | counter | `method`, `reason` | Synchronous batches dispatched by flush reason. |
 | `sink_batcher_operations` | histogram | `method` | Operations represented by each dispatched batch. |
 | `sink_batcher_bytes` | histogram | `method` | Original encoded request bytes represented by each dispatched batch. |
@@ -426,16 +426,24 @@ counts multiply capacity. Configure the same Kafka policy on servers and workers
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `service.request_timeout_seconds` | `30` | Request timeout including batching queue wait, at most 300 seconds; a shorter caller deadline wins. |
+| `service.request_timeout_seconds` | `30` | Unary request timeout including batching queue wait, and maximum time without a successfully sent Scan page; at most 300 seconds. A shorter caller deadline wins. |
+| `service.scan_timeout_seconds` | `900` | Absolute Scan lifetime, at most 3600 seconds; also subject to the idle and caller deadlines. |
 | `service.max_in_flight_requests` | `128` | Core request count, at most 10000; all completion modes and cross-store calls count. |
 | `service.max_in_flight_bytes` | `268435456` | Admitted request/output reservation bytes, at most 16 GiB. Reads reserve snapshot and response budgets; Merge and folded conditional Put chains reserve current and output budgets; Lua source expansion is charged. This is not an RSS or VM heap limit. |
 | `service.max_store_requests` | `32` | Core requests per configured store, at most 10000. |
-| `service.max_read_bytes` | min(`33554432`, half gRPC send limit) | Per-original-RPC copied read results or folded conditional write snapshot/output per attempt, including repeated read results and all stores; cannot exceed half the gRPC send limit. |
+| `service.max_read_bytes` | min(`33554432`, half gRPC send limit) | Per-original-RPC Read or returned-Write documents, conditional write snapshot/output per attempt, and native Execute response. Scan pages use the smaller of this limit and 4 MiB. Cannot exceed half the gRPC send limit. |
 | `storages[].kafka.dead_letter_retention_hours` | `720` | Independent DLQ retention, 30 days; bounded by Go duration range. |
 | `storages[].kafka.min_insync_replicas` | min(`2`, replication factor) | Minimum ISR, at most replication factor. Publishers require all ISR acknowledgements. |
 | `storages[].kafka.max_record_bytes` | `921600` | Encoded mutation envelope plus key, including expanded Lua source; at most 64 MiB and no larger than the producer buffer. Topic/producer batch limits include an extra 16 KiB for framing and DLQ headers. Broker/replica fetch limits must also support increases. |
 | `storages[].kafka.max_buffered_bytes` | `67108864` | Producer buffer capacity, at most 1 GiB. Full buffers return retryable resource exhaustion. |
 | `storages[].kafka.processing_timeout_milliseconds` | `20000` | Backend work per fetched batch, at most 20 seconds, followed by at most 5 seconds of offset/DLQ settlement. |
+
+Native Execute and Scan share process/store request admission and reserve input
+plus response/page buffers. MongoDB native calls additionally reserve 48 MiB for
+the driver's complete wire response, which arrives before the smaller Sink
+response/page limit can be enforced. Returned writes reserve an additional
+response budget per original RPC before execution. See [native access](native-access.md)
+for cursor cleanup, cancellation, and partial-result behavior.
 
 MongoDB group concurrency is shared across concurrent calls. Sink sets
 `w=majority` and `journal=true` on its client, overriding weaker URI concerns;

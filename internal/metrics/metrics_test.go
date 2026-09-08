@@ -138,6 +138,39 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 	}
 }
 
+func TestMetricsObserveNativeFailureAndScanTermination(t *testing.T) {
+	observed, err := sinkmetrics.New("test-native")
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := &grpc.UnaryServerInfo{FullMethod: sink.Sink_Execute_FullMethodName}
+	handler := func(context.Context, any) (any, error) {
+		response := &sink.ExecuteResponse{Success: false, StatusCode: 400}
+		return response, nil
+	}
+	_, err = observed.UnaryServerInterceptor()(t.Context(), nil, info, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamInfo := &grpc.StreamServerInfo{FullMethod: sink.Sink_Scan_FullMethodName, IsServerStream: true}
+	streamHandler := func(any, grpc.ServerStream) error { return status.Error(codes.DeadlineExceeded, "idle") }
+	err = observed.StreamServerInterceptor()(nil, nil, streamInfo, streamHandler)
+	if status.Code(err) != codes.DeadlineExceeded {
+		t.Fatal(err)
+	}
+	body := scrape(t, observed)
+	for _, want := range []string{
+		`sink_grpc_server_requests_total{code="OK",method="Execute"} 1`,
+		`sink_grpc_server_operation_results_total{method="Execute",status="failed"} 1`,
+		`sink_grpc_server_requests_total{code="DeadlineExceeded",method="Scan"} 1`,
+		`sink_grpc_server_request_duration_seconds_count{method="Scan"} 1`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing metric %s", want)
+		}
+	}
+}
+
 func TestMetricsRecordGRPCFailuresAndIgnoreOtherServices(t *testing.T) {
 	observed, err := sinkmetrics.New("test-version")
 	if err != nil {

@@ -21,6 +21,7 @@ Sink centralizes those concerns:
 | Problem | What Sink provides |
 | --- | --- |
 | Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON or BSON documents |
+| Native queries still need direct database clients | `Execute`, paged `Query`, `Count`, and streaming `Scan` share one command structure and Sink's connections |
 | Every crawler process opens its own database connections | Database connections move into the smaller Sink tier, so connection growth follows Sink replicas instead of crawler processes |
 | Many small calls overload storage | Automatic bounded batching, concurrency limits, and backpressure per store |
 | Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
@@ -67,14 +68,15 @@ key = product-42
 `store` selects a configured backend. For MongoDB, `namespace` and `dataset`
 are the database and collection. For Elasticsearch and OpenSearch, `dataset`
 is the complete existing index or alias name. The application never sends a
-database connection string or storage-specific query through the API.
+database connection string. Native access uses `Execute`, `Query`, `Count`, and
+`Scan` with a common `Command`; the record API remains storage-independent.
 
 Every document declares its encoding. MongoDB stores require BSON, so clients
 apply `bson` struct tags and retain native BSON values such as datetimes.
 Elasticsearch and OpenSearch stores require JSON, so clients apply `json`
 struct tags and send ordinary JSON without Extended JSON wrappers.
 
-All requests are batch-native, but a one-record request is the normal
+Record requests are batch-native, but a one-record request is the normal
 single-record form. Sink can combine concurrent small requests into bounded
 storage batches, preserves the order of operations for the same record, and
 runs independent records and stores concurrently.
@@ -162,14 +164,17 @@ case format, direct flags, BSON examples, CI usage, and coverage guidance.
   does not deduplicate business operations. A timeout can leave the outcome unknown.
 - Kafka is disabled by default per store. When enabled, Sink owns creation and
   reconciliation of that store's source and dead-letter Topics at startup.
-- Sink does not create Elasticsearch or OpenSearch indexes, mappings, or
-  aliases.
+- Record writes do not initialize indexes, mappings, or aliases. Applications
+  can explicitly initialize them through native `Execute` commands.
 - Dependencies recover independently at startup and runtime. Kafka publication
   and consumption remain gated until that store's Topic policy is established.
   Temporary processing failures retain source offsets for automatic recovery.
 
 ## Documentation
 
+- [Native queries and returned writes](docs/native-access.md) — raw BSON/HTTP
+  responses, paged queries with sorting/projection, counts with automatic empty-filter estimates, managed cursors,
+  index setup, and atomic counter results
 - [Document write flow](docs/document-write-flow.md) — follow one document
   through synchronous writes, Kafka workers, Lua merges, batching, and completion
 - [Reliability and recovery](docs/reliability.md) — idempotence responsibility,

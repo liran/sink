@@ -1073,6 +1073,10 @@ func (x *WriteRequest) GetLuaPrograms() []*LuaProgram {
 type WriteOperation struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Address *RecordAddress         `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	// Return the logical document submitted by this operation after its commit.
+	// Only synchronous completion modes support this. These operations do not
+	// share a folded commit with preceding or following operations.
+	ReturnDocument bool `protobuf:"varint,4,opt,name=return_document,json=returnDocument,proto3" json:"return_document,omitempty"`
 	// Types that are valid to be assigned to Action:
 	//
 	//	*WriteOperation_Put
@@ -1117,6 +1121,13 @@ func (x *WriteOperation) GetAddress() *RecordAddress {
 		return x.Address
 	}
 	return nil
+}
+
+func (x *WriteOperation) GetReturnDocument() bool {
+	if x != nil {
+		return x.ReturnDocument
+	}
+	return false
 }
 
 func (x *WriteOperation) GetAction() isWriteOperation_Action {
@@ -1384,6 +1395,7 @@ type WriteResult struct {
 	Status         WriteStatus            `protobuf:"varint,2,opt,name=status,proto3,enum=sink.v1.WriteStatus" json:"status,omitempty"`
 	Revision       *RevisionToken         `protobuf:"bytes,3,opt,name=revision,proto3" json:"revision,omitempty"`
 	Failure        *Failure               `protobuf:"bytes,4,opt,name=failure,proto3" json:"failure,omitempty"`
+	Document       *Document              `protobuf:"bytes,5,opt,name=document,proto3" json:"document,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -1442,6 +1454,13 @@ func (x *WriteResult) GetRevision() *RevisionToken {
 func (x *WriteResult) GetFailure() *Failure {
 	if x != nil {
 		return x.Failure
+	}
+	return nil
+}
+
+func (x *WriteResult) GetDocument() *Document {
+	if x != nil {
+		return x.Document
 	}
 	return nil
 }
@@ -1707,6 +1726,789 @@ func (x *Failure) GetRetryable() bool {
 	return false
 }
 
+// Command is the common input for Execute, Query, Count and Scan. Store configuration selects
+// the adapter, which reads and validates the fields it needs. There is no
+// backend-specific message branch or additional Sink envelope inside payload.
+// Fields not used by an adapter must be empty.
+//
+// Current adapter mappings:
+//   - MongoDB: store, namespace, content_type and payload. Namespace is the
+//     database; payload is the complete ordered BSON command document, including
+//     the command name and collection when applicable. Use application/bson.
+//   - HTTP search: store, method, path, query, headers, content_type and payload.
+//     Payload is the original request body, such as JSON or NDJSON. Namespace is
+//     unused; resource selection is already expressed by path and the native body.
+//
+// These are native operations: payload retains the selected backend's syntax.
+// SDK helpers can serialize native values directly into payload without callers
+// constructing a separate Sink-specific command envelope.
+type Command struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required logical store. Endpoints and credentials come from server config.
+	Store string `protobuf:"bytes,1,opt,name=store,proto3" json:"store,omitempty"`
+	// Execution scope, such as a database name, when the adapter requires one.
+	Namespace string `protobuf:"bytes,2,opt,name=namespace,proto3" json:"namespace,omitempty"`
+	// Request method, such as GET or POST, when the adapter uses request methods.
+	Method string `protobuf:"bytes,3,opt,name=method,proto3" json:"method,omitempty"`
+	// Absolute path within the configured endpoint, never a URL. No host, query,
+	// fragment or traversal segments; escaped resource IDs are supported.
+	Path string `protobuf:"bytes,4,opt,name=path,proto3" json:"path,omitempty"`
+	// URL-encoded query parameters without a leading '?'; repeated keys are valid.
+	Query string `protobuf:"bytes,5,opt,name=query,proto3" json:"query,omitempty"`
+	// Repeated values are preserved. Authentication and transport-owned headers
+	// remain server-controlled. Set Content-Type using content_type, not headers.
+	Headers []*Header `protobuf:"bytes,6,rep,name=headers,proto3" json:"headers,omitempty"`
+	// Payload media type, e.g. application/bson, application/json or
+	// application/x-ndjson. Required when payload is nonempty. This describes the
+	// native encoding, not a separately versioned Sink payload schema.
+	ContentType string `protobuf:"bytes,7,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	// Original command document or request body bytes. Keep native scalar types,
+	// field order and bulk framing intact; no custom protobuf value wrappers.
+	Payload       []byte `protobuf:"bytes,8,opt,name=payload,proto3" json:"payload,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Command) Reset() {
+	*x = Command{}
+	mi := &file_sink_sink_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Command) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Command) ProtoMessage() {}
+
+func (x *Command) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Command.ProtoReflect.Descriptor instead.
+func (*Command) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *Command) GetStore() string {
+	if x != nil {
+		return x.Store
+	}
+	return ""
+}
+
+func (x *Command) GetNamespace() string {
+	if x != nil {
+		return x.Namespace
+	}
+	return ""
+}
+
+func (x *Command) GetMethod() string {
+	if x != nil {
+		return x.Method
+	}
+	return ""
+}
+
+func (x *Command) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *Command) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *Command) GetHeaders() []*Header {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *Command) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *Command) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+type Header struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Values        []string               `protobuf:"bytes,2,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Header) Reset() {
+	*x = Header{}
+	mi := &file_sink_sink_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Header) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Header) ProtoMessage() {}
+
+func (x *Header) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Header.ProtoReflect.Descriptor instead.
+func (*Header) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *Header) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *Header) GetValues() []string {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+// Execute performs one native interaction. It does not provide cross-RPC
+// session affinity. Adapters reject commands requiring session affinity or a
+// client-managed session; supported cursor queries use Scan instead.
+// Other native commands are not restricted to a query/index-only allowlist.
+//
+// Native writes use backend semantics, outside record revisions, Lua merges,
+// batching and asynchronous completion modes. Neither Sink nor its SDK should
+// automatically replay an Execute request after an unknown outcome.
+type ExecuteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Command       *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecuteRequest) Reset() {
+	*x = ExecuteRequest{}
+	mi := &file_sink_sink_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecuteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecuteRequest) ProtoMessage() {}
+
+func (x *ExecuteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecuteRequest.ProtoReflect.Descriptor instead.
+func (*ExecuteRequest) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ExecuteRequest) GetCommand() *Command {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+// A complete native reply retains its original payload, including backend error
+// replies. Such replies use gRPC OK with success=false; validation, transport
+// and capacity failures use gRPC errors. HTTP replies preserve the status,
+// repeated headers and entity bytes; redirects are returned without following.
+type ExecuteResponse struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	ContentType string                 `protobuf:"bytes,1,opt,name=content_type,json=contentType,proto3" json:"content_type,omitempty"`
+	Payload     []byte                 `protobuf:"bytes,2,opt,name=payload,proto3" json:"payload,omitempty"`
+	// Native command success, or HTTP 2xx. Callers must still inspect item-level
+	// failures in batch responses. Document commands also check native write and
+	// write-concern errors.
+	Success bool `protobuf:"varint,3,opt,name=success,proto3" json:"success,omitempty"`
+	// Native transport status when available; zero means no such status exists.
+	StatusCode    uint32    `protobuf:"varint,4,opt,name=status_code,json=statusCode,proto3" json:"status_code,omitempty"`
+	Headers       []*Header `protobuf:"bytes,5,rep,name=headers,proto3" json:"headers,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ExecuteResponse) Reset() {
+	*x = ExecuteResponse{}
+	mi := &file_sink_sink_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ExecuteResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ExecuteResponse) ProtoMessage() {}
+
+func (x *ExecuteResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ExecuteResponse.ProtoReflect.Descriptor instead.
+func (*ExecuteResponse) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *ExecuteResponse) GetContentType() string {
+	if x != nil {
+		return x.ContentType
+	}
+	return ""
+}
+
+func (x *ExecuteResponse) GetPayload() []byte {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *ExecuteResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ExecuteResponse) GetStatusCode() uint32 {
+	if x != nil {
+		return x.StatusCode
+	}
+	return 0
+}
+
+func (x *ExecuteResponse) GetHeaders() []*Header {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+// Query returns an independent page without retaining a cursor between RPCs.
+// Supported sources are find/read-only aggregate command documents and HTTP
+// _search requests. Documents have the same native result shape as Scan.
+// Use a stable native sort with a unique tie-breaker for predictable pages.
+// Concurrent changes may shift results; pagination does not provide a snapshot.
+type QueryRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Command *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
+	// One-based page number; zero selects page 1. Deep pages still incur backend
+	// offset costs and are subject to the backend's result-window limits.
+	Page uint32 `protobuf:"varint,2,opt,name=page,proto3" json:"page,omitempty"`
+	// Zero selects 100; maximum 1000. Query replaces native find skip/limit and
+	// HTTP from/size. For aggregate, pagination follows the supplied pipeline.
+	PageSize uint32 `protobuf:"varint,3,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Ordered sort keys. Empty preserves the native sort; nonempty replaces find
+	// or HTTP sorting. For aggregate, sort follows the supplied pipeline.
+	Sort []*SortField `protobuf:"bytes,4,rep,name=sort,proto3" json:"sort,omitempty"`
+	// Absent preserves native projection. Present replaces find projection or
+	// HTTP _source selection; aggregate applies it after the pipeline and sort,
+	// before pagination. An empty fields list selects all document fields.
+	Projection    *Projection `protobuf:"bytes,5,opt,name=projection,proto3" json:"projection,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryRequest) Reset() {
+	*x = QueryRequest{}
+	mi := &file_sink_sink_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryRequest) ProtoMessage() {}
+
+func (x *QueryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryRequest.ProtoReflect.Descriptor instead.
+func (*QueryRequest) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *QueryRequest) GetCommand() *Command {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+func (x *QueryRequest) GetPage() uint32 {
+	if x != nil {
+		return x.Page
+	}
+	return 0
+}
+
+func (x *QueryRequest) GetPageSize() uint32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *QueryRequest) GetSort() []*SortField {
+	if x != nil {
+		return x.Sort
+	}
+	return nil
+}
+
+func (x *QueryRequest) GetProjection() *Projection {
+	if x != nil {
+		return x.Projection
+	}
+	return nil
+}
+
+type SortField struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Field         string                 `protobuf:"bytes,1,opt,name=field,proto3" json:"field,omitempty"`
+	Descending    bool                   `protobuf:"varint,2,opt,name=descending,proto3" json:"descending,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SortField) Reset() {
+	*x = SortField{}
+	mi := &file_sink_sink_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SortField) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SortField) ProtoMessage() {}
+
+func (x *SortField) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SortField.ProtoReflect.Descriptor instead.
+func (*SortField) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *SortField) GetField() string {
+	if x != nil {
+		return x.Field
+	}
+	return ""
+}
+
+func (x *SortField) GetDescending() bool {
+	if x != nil {
+		return x.Descending
+	}
+	return false
+}
+
+// Field names are native document paths (relative to _source for HTTP search).
+// HTTP hit metadata is unchanged. Document stores retain their native rules for
+// identity-field projection.
+// Database-specific computed projections can remain in Command.payload.
+type Projection struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Fields        []string               `protobuf:"bytes,1,rep,name=fields,proto3" json:"fields,omitempty"`
+	Exclude       bool                   `protobuf:"varint,2,opt,name=exclude,proto3" json:"exclude,omitempty"` // False includes listed fields; true excludes them.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Projection) Reset() {
+	*x = Projection{}
+	mi := &file_sink_sink_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Projection) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Projection) ProtoMessage() {}
+
+func (x *Projection) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Projection.ProtoReflect.Descriptor instead.
+func (*Projection) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *Projection) GetFields() []string {
+	if x != nil {
+		return x.Fields
+	}
+	return nil
+}
+
+func (x *Projection) GetExclude() bool {
+	if x != nil {
+		return x.Exclude
+	}
+	return false
+}
+
+type QueryResponse struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Documents []*Document            `protobuf:"bytes,1,rep,name=documents,proto3" json:"documents,omitempty"`
+	// Determined by fetching one extra result, not by running Count. Result-window
+	// limits apply to this extra result too. A byte limit fails the whole request;
+	// it never produces a silently shortened page.
+	HasMore       bool `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *QueryResponse) Reset() {
+	*x = QueryResponse{}
+	mi := &file_sink_sink_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *QueryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*QueryResponse) ProtoMessage() {}
+
+func (x *QueryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use QueryResponse.ProtoReflect.Descriptor instead.
+func (*QueryResponse) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *QueryResponse) GetDocuments() []*Document {
+	if x != nil {
+		return x.Documents
+	}
+	return nil
+}
+
+func (x *QueryResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
+// Count is an independent query, not an implicit part of Query. It accepts the
+// same sources and counts matches before find/HTTP pagination; for aggregate it
+// counts the output of the supplied pipeline. HTTP counts matching documents
+// before collapse. Partial or timed-out counts fail the request.
+// Count and Query are separate observations and may differ under concurrent writes.
+type CountRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// MongoDB find with an absent or empty filter automatically uses collection
+	// metadata when no options require exact execution. Filtered queries,
+	// aggregate pipelines and HTTP search counts remain exact.
+	Command       *Command `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CountRequest) Reset() {
+	*x = CountRequest{}
+	mi := &file_sink_sink_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CountRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CountRequest) ProtoMessage() {}
+
+func (x *CountRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CountRequest.ProtoReflect.Descriptor instead.
+func (*CountRequest) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *CountRequest) GetCommand() *Command {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+type CountResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Count uint64                 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	// True when the backend used an estimate instead of counting matching rows.
+	Estimated     bool `protobuf:"varint,2,opt,name=estimated,proto3" json:"estimated,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CountResponse) Reset() {
+	*x = CountResponse{}
+	mi := &file_sink_sink_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CountResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CountResponse) ProtoMessage() {}
+
+func (x *CountResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CountResponse.ProtoReflect.Descriptor instead.
+func (*CountResponse) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *CountResponse) GetCount() uint64 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *CountResponse) GetEstimated() bool {
+	if x != nil {
+		return x.Estimated
+	}
+	return false
+}
+
+// Scan accepts the same Command, limited to adapter-supported read-only cursor
+// queries. Sink owns opening, advancing and closing the cursor within the RPC.
+// Completion, cancellation and failures trigger best-effort cursor cleanup.
+// Stateful transactions, change streams and indefinitely tailing cursors are
+// outside this contract. Delivered batches are not replayed after a failure.
+type ScanRequest struct {
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Command *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
+	// Overrides native batch sizes. Zero selects the server default of 100;
+	// maximum 1000 documents per response. Server byte and time limits also apply.
+	BatchSize     uint32 `protobuf:"varint,2,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScanRequest) Reset() {
+	*x = ScanRequest{}
+	mi := &file_sink_sink_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScanRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScanRequest) ProtoMessage() {}
+
+func (x *ScanRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScanRequest.ProtoReflect.Descriptor instead.
+func (*ScanRequest) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ScanRequest) GetCommand() *Command {
+	if x != nil {
+		return x.Command
+	}
+	return nil
+}
+
+func (x *ScanRequest) GetBatchSize() uint32 {
+	if x != nil {
+		return x.BatchSize
+	}
+	return 0
+}
+
+// Documents retain native encodings and result shapes: BSON documents for the
+// document adapter and complete JSON hits for the search adapter. Scan unwraps
+// cursor batches; Execute returns the full native reply instead.
+// Empty results complete successfully without emitting a batch. A terminal
+// error may follow already delivered batches, so callers must check completion.
+type ScanResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Documents     []*Document            `protobuf:"bytes,1,rep,name=documents,proto3" json:"documents,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScanResponse) Reset() {
+	*x = ScanResponse{}
+	mi := &file_sink_sink_proto_msgTypes[32]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScanResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScanResponse) ProtoMessage() {}
+
+func (x *ScanResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_sink_sink_proto_msgTypes[32]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScanResponse.ProtoReflect.Descriptor instead.
+func (*ScanResponse) Descriptor() ([]byte, []int) {
+	return file_sink_sink_proto_rawDescGZIP(), []int{32}
+}
+
+func (x *ScanResponse) GetDocuments() []*Document {
+	if x != nil {
+		return x.Documents
+	}
+	return nil
+}
+
 var File_sink_sink_proto protoreflect.FileDescriptor
 
 const file_sink_sink_proto_rawDesc = "" +
@@ -1753,9 +2555,10 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\n" +
 	"operations\x18\x02 \x03(\v2\x17.sink.v1.WriteOperationR\n" +
 	"operations\x126\n" +
-	"\flua_programs\x18\x03 \x03(\v2\x13.sink.v1.LuaProgramR\vluaPrograms\"\xa8\x01\n" +
+	"\flua_programs\x18\x03 \x03(\v2\x13.sink.v1.LuaProgramR\vluaPrograms\"\xd1\x01\n" +
 	"\x0eWriteOperation\x120\n" +
-	"\aaddress\x18\x01 \x01(\v2\x16.sink.v1.RecordAddressR\aaddress\x12)\n" +
+	"\aaddress\x18\x01 \x01(\v2\x16.sink.v1.RecordAddressR\aaddress\x12'\n" +
+	"\x0freturn_document\x18\x04 \x01(\bR\x0ereturnDocument\x12)\n" +
 	"\x03put\x18\x02 \x01(\v2\x15.sink.v1.PutOperationH\x00R\x03put\x12/\n" +
 	"\x05merge\x18\x03 \x01(\v2\x17.sink.v1.MergeOperationH\x00R\x05mergeB\b\n" +
 	"\x06action\"e\n" +
@@ -1772,12 +2575,13 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x06source\x18\x01 \x01(\fR\x06source\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\fR\x06sha256\"?\n" +
 	"\rWriteResponse\x12.\n" +
-	"\aresults\x18\x01 \x03(\v2\x14.sink.v1.WriteResultR\aresults\"\xc4\x01\n" +
+	"\aresults\x18\x01 \x03(\v2\x14.sink.v1.WriteResultR\aresults\"\xf3\x01\n" +
 	"\vWriteResult\x12'\n" +
 	"\x0foperation_index\x18\x01 \x01(\rR\x0eoperationIndex\x12,\n" +
 	"\x06status\x18\x02 \x01(\x0e2\x14.sink.v1.WriteStatusR\x06status\x122\n" +
 	"\brevision\x18\x03 \x01(\v2\x16.sink.v1.RevisionTokenR\brevision\x12*\n" +
-	"\afailure\x18\x04 \x01(\v2\x10.sink.v1.FailureR\afailure\"\x8b\x01\n" +
+	"\afailure\x18\x04 \x01(\v2\x10.sink.v1.FailureR\afailure\x12-\n" +
+	"\bdocument\x18\x05 \x01(\v2\x11.sink.v1.DocumentR\bdocument\"\x8b\x01\n" +
 	"\rDeleteRequest\x12@\n" +
 	"\x0fcompletion_mode\x18\x01 \x01(\x0e2\x17.sink.v1.CompletionModeR\x0ecompletionMode\x128\n" +
 	"\n" +
@@ -1794,7 +2598,59 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\aFailure\x12(\n" +
 	"\x04code\x18\x01 \x01(\x0e2\x14.sink.v1.FailureCodeR\x04code\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12\x1c\n" +
-	"\tretryable\x18\x03 \x01(\bR\tretryable*m\n" +
+	"\tretryable\x18\x03 \x01(\bR\tretryable\"\xe7\x01\n" +
+	"\aCommand\x12\x14\n" +
+	"\x05store\x18\x01 \x01(\tR\x05store\x12\x1c\n" +
+	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12\x16\n" +
+	"\x06method\x18\x03 \x01(\tR\x06method\x12\x12\n" +
+	"\x04path\x18\x04 \x01(\tR\x04path\x12\x14\n" +
+	"\x05query\x18\x05 \x01(\tR\x05query\x12)\n" +
+	"\aheaders\x18\x06 \x03(\v2\x0f.sink.v1.HeaderR\aheaders\x12!\n" +
+	"\fcontent_type\x18\a \x01(\tR\vcontentType\x12\x18\n" +
+	"\apayload\x18\b \x01(\fR\apayload\"4\n" +
+	"\x06Header\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
+	"\x06values\x18\x02 \x03(\tR\x06values\"<\n" +
+	"\x0eExecuteRequest\x12*\n" +
+	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\"\xb4\x01\n" +
+	"\x0fExecuteResponse\x12!\n" +
+	"\fcontent_type\x18\x01 \x01(\tR\vcontentType\x12\x18\n" +
+	"\apayload\x18\x02 \x01(\fR\apayload\x12\x18\n" +
+	"\asuccess\x18\x03 \x01(\bR\asuccess\x12\x1f\n" +
+	"\vstatus_code\x18\x04 \x01(\rR\n" +
+	"statusCode\x12)\n" +
+	"\aheaders\x18\x05 \x03(\v2\x0f.sink.v1.HeaderR\aheaders\"\xc8\x01\n" +
+	"\fQueryRequest\x12*\n" +
+	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\x12\x12\n" +
+	"\x04page\x18\x02 \x01(\rR\x04page\x12\x1b\n" +
+	"\tpage_size\x18\x03 \x01(\rR\bpageSize\x12&\n" +
+	"\x04sort\x18\x04 \x03(\v2\x12.sink.v1.SortFieldR\x04sort\x123\n" +
+	"\n" +
+	"projection\x18\x05 \x01(\v2\x13.sink.v1.ProjectionR\n" +
+	"projection\"A\n" +
+	"\tSortField\x12\x14\n" +
+	"\x05field\x18\x01 \x01(\tR\x05field\x12\x1e\n" +
+	"\n" +
+	"descending\x18\x02 \x01(\bR\n" +
+	"descending\">\n" +
+	"\n" +
+	"Projection\x12\x16\n" +
+	"\x06fields\x18\x01 \x03(\tR\x06fields\x12\x18\n" +
+	"\aexclude\x18\x02 \x01(\bR\aexclude\"[\n" +
+	"\rQueryResponse\x12/\n" +
+	"\tdocuments\x18\x01 \x03(\v2\x11.sink.v1.DocumentR\tdocuments\x12\x19\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\":\n" +
+	"\fCountRequest\x12*\n" +
+	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\"C\n" +
+	"\rCountResponse\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x1c\n" +
+	"\testimated\x18\x02 \x01(\bR\testimated\"X\n" +
+	"\vScanRequest\x12*\n" +
+	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\x12\x1d\n" +
+	"\n" +
+	"batch_size\x18\x02 \x01(\rR\tbatchSize\"?\n" +
+	"\fScanResponse\x12/\n" +
+	"\tdocuments\x18\x01 \x03(\v2\x11.sink.v1.DocumentR\tdocuments*m\n" +
 	"\x10DocumentEncoding\x12!\n" +
 	"\x1dDOCUMENT_ENCODING_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16DOCUMENT_ENCODING_JSON\x10\x01\x12\x1a\n" +
@@ -1839,11 +2695,15 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x1fFAILURE_CODE_RESOURCE_EXHAUSTED\x10\x05\x12\x1c\n" +
 	"\x18FAILURE_CODE_UNAVAILABLE\x10\x06\x12\"\n" +
 	"\x1eFAILURE_CODE_DEADLINE_EXCEEDED\x10\a\x12\x19\n" +
-	"\x15FAILURE_CODE_INTERNAL\x10\b2\xae\x01\n" +
+	"\x15FAILURE_CODE_INTERNAL\x10\b2\x93\x03\n" +
 	"\x04Sink\x123\n" +
 	"\x04Read\x12\x14.sink.v1.ReadRequest\x1a\x15.sink.v1.ReadResponse\x126\n" +
 	"\x05Write\x12\x15.sink.v1.WriteRequest\x1a\x16.sink.v1.WriteResponse\x129\n" +
-	"\x06Delete\x12\x16.sink.v1.DeleteRequest\x1a\x17.sink.v1.DeleteResponseB%Z#github.com/liran/sink/gen/sink;sinkb\x06proto3"
+	"\x06Delete\x12\x16.sink.v1.DeleteRequest\x1a\x17.sink.v1.DeleteResponse\x12<\n" +
+	"\aExecute\x12\x17.sink.v1.ExecuteRequest\x1a\x18.sink.v1.ExecuteResponse\x126\n" +
+	"\x05Query\x12\x15.sink.v1.QueryRequest\x1a\x16.sink.v1.QueryResponse\x126\n" +
+	"\x05Count\x12\x15.sink.v1.CountRequest\x1a\x16.sink.v1.CountResponse\x125\n" +
+	"\x04Scan\x12\x14.sink.v1.ScanRequest\x1a\x15.sink.v1.ScanResponse0\x01B%Z#github.com/liran/sink/gen/sink;sinkb\x06proto3"
 
 var (
 	file_sink_sink_proto_rawDescOnce sync.Once
@@ -1858,7 +2718,7 @@ func file_sink_sink_proto_rawDescGZIP() []byte {
 }
 
 var file_sink_sink_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
-var file_sink_sink_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_sink_sink_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_sink_sink_proto_goTypes = []any{
 	(DocumentEncoding)(0),    // 0: sink.v1.DocumentEncoding
 	(CompletionMode)(0),      // 1: sink.v1.CompletionMode
@@ -1889,6 +2749,18 @@ var file_sink_sink_proto_goTypes = []any{
 	(*DeleteResponse)(nil),   // 26: sink.v1.DeleteResponse
 	(*DeleteResult)(nil),     // 27: sink.v1.DeleteResult
 	(*Failure)(nil),          // 28: sink.v1.Failure
+	(*Command)(nil),          // 29: sink.v1.Command
+	(*Header)(nil),           // 30: sink.v1.Header
+	(*ExecuteRequest)(nil),   // 31: sink.v1.ExecuteRequest
+	(*ExecuteResponse)(nil),  // 32: sink.v1.ExecuteResponse
+	(*QueryRequest)(nil),     // 33: sink.v1.QueryRequest
+	(*SortField)(nil),        // 34: sink.v1.SortField
+	(*Projection)(nil),       // 35: sink.v1.Projection
+	(*QueryResponse)(nil),    // 36: sink.v1.QueryResponse
+	(*CountRequest)(nil),     // 37: sink.v1.CountRequest
+	(*CountResponse)(nil),    // 38: sink.v1.CountResponse
+	(*ScanRequest)(nil),      // 39: sink.v1.ScanRequest
+	(*ScanResponse)(nil),     // 40: sink.v1.ScanResponse
 }
 var file_sink_sink_proto_depIdxs = []int32{
 	9,  // 0: sink.v1.RecordAddress.key:type_name -> sink.v1.RecordKey
@@ -1916,24 +2788,43 @@ var file_sink_sink_proto_depIdxs = []int32{
 	5,  // 22: sink.v1.WriteResult.status:type_name -> sink.v1.WriteStatus
 	12, // 23: sink.v1.WriteResult.revision:type_name -> sink.v1.RevisionToken
 	28, // 24: sink.v1.WriteResult.failure:type_name -> sink.v1.Failure
-	1,  // 25: sink.v1.DeleteRequest.completion_mode:type_name -> sink.v1.CompletionMode
-	25, // 26: sink.v1.DeleteRequest.operations:type_name -> sink.v1.DeleteOperation
-	8,  // 27: sink.v1.DeleteOperation.address:type_name -> sink.v1.RecordAddress
-	27, // 28: sink.v1.DeleteResponse.results:type_name -> sink.v1.DeleteResult
-	6,  // 29: sink.v1.DeleteResult.status:type_name -> sink.v1.DeleteStatus
-	28, // 30: sink.v1.DeleteResult.failure:type_name -> sink.v1.Failure
-	7,  // 31: sink.v1.Failure.code:type_name -> sink.v1.FailureCode
-	13, // 32: sink.v1.Sink.Read:input_type -> sink.v1.ReadRequest
-	17, // 33: sink.v1.Sink.Write:input_type -> sink.v1.WriteRequest
-	24, // 34: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
-	15, // 35: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
-	22, // 36: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
-	26, // 37: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
-	35, // [35:38] is the sub-list for method output_type
-	32, // [32:35] is the sub-list for method input_type
-	32, // [32:32] is the sub-list for extension type_name
-	32, // [32:32] is the sub-list for extension extendee
-	0,  // [0:32] is the sub-list for field type_name
+	11, // 25: sink.v1.WriteResult.document:type_name -> sink.v1.Document
+	1,  // 26: sink.v1.DeleteRequest.completion_mode:type_name -> sink.v1.CompletionMode
+	25, // 27: sink.v1.DeleteRequest.operations:type_name -> sink.v1.DeleteOperation
+	8,  // 28: sink.v1.DeleteOperation.address:type_name -> sink.v1.RecordAddress
+	27, // 29: sink.v1.DeleteResponse.results:type_name -> sink.v1.DeleteResult
+	6,  // 30: sink.v1.DeleteResult.status:type_name -> sink.v1.DeleteStatus
+	28, // 31: sink.v1.DeleteResult.failure:type_name -> sink.v1.Failure
+	7,  // 32: sink.v1.Failure.code:type_name -> sink.v1.FailureCode
+	30, // 33: sink.v1.Command.headers:type_name -> sink.v1.Header
+	29, // 34: sink.v1.ExecuteRequest.command:type_name -> sink.v1.Command
+	30, // 35: sink.v1.ExecuteResponse.headers:type_name -> sink.v1.Header
+	29, // 36: sink.v1.QueryRequest.command:type_name -> sink.v1.Command
+	34, // 37: sink.v1.QueryRequest.sort:type_name -> sink.v1.SortField
+	35, // 38: sink.v1.QueryRequest.projection:type_name -> sink.v1.Projection
+	11, // 39: sink.v1.QueryResponse.documents:type_name -> sink.v1.Document
+	29, // 40: sink.v1.CountRequest.command:type_name -> sink.v1.Command
+	29, // 41: sink.v1.ScanRequest.command:type_name -> sink.v1.Command
+	11, // 42: sink.v1.ScanResponse.documents:type_name -> sink.v1.Document
+	13, // 43: sink.v1.Sink.Read:input_type -> sink.v1.ReadRequest
+	17, // 44: sink.v1.Sink.Write:input_type -> sink.v1.WriteRequest
+	24, // 45: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
+	31, // 46: sink.v1.Sink.Execute:input_type -> sink.v1.ExecuteRequest
+	33, // 47: sink.v1.Sink.Query:input_type -> sink.v1.QueryRequest
+	37, // 48: sink.v1.Sink.Count:input_type -> sink.v1.CountRequest
+	39, // 49: sink.v1.Sink.Scan:input_type -> sink.v1.ScanRequest
+	15, // 50: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
+	22, // 51: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
+	26, // 52: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
+	32, // 53: sink.v1.Sink.Execute:output_type -> sink.v1.ExecuteResponse
+	36, // 54: sink.v1.Sink.Query:output_type -> sink.v1.QueryResponse
+	38, // 55: sink.v1.Sink.Count:output_type -> sink.v1.CountResponse
+	40, // 56: sink.v1.Sink.Scan:output_type -> sink.v1.ScanResponse
+	50, // [50:57] is the sub-list for method output_type
+	43, // [43:50] is the sub-list for method input_type
+	43, // [43:43] is the sub-list for extension type_name
+	43, // [43:43] is the sub-list for extension extendee
+	0,  // [0:43] is the sub-list for field type_name
 }
 
 func init() { file_sink_sink_proto_init() }
@@ -1957,7 +2848,7 @@ func file_sink_sink_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sink_sink_proto_rawDesc), len(file_sink_sink_proto_rawDesc)),
 			NumEnums:      8,
-			NumMessages:   21,
+			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

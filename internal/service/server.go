@@ -33,6 +33,7 @@ type Options struct {
 	MaxMergeAttempts    int
 	Metrics             *sinkmetrics.Metrics
 	RequestTimeout      time.Duration
+	ScanTimeout         time.Duration
 	MaxInFlightRequests int
 	MaxInFlightBytes    int
 	MaxStoreRequests    int
@@ -50,6 +51,7 @@ type Server struct {
 	maxMergeAttempts    int
 	metrics             *sinkmetrics.Metrics
 	requestTimeout      time.Duration
+	scanTimeout         time.Duration
 	maxInFlightRequests int
 	maxInFlightBytes    int
 	maxStoreRequests    int
@@ -74,11 +76,14 @@ func New(opts Options) (*Server, error) {
 	if opts.MaxMergeAttempts < 0 {
 		return nil, errors.New("create Sink server: max merge attempts cannot be negative")
 	}
-	if opts.RequestTimeout < 0 || opts.MaxInFlightRequests < 0 || opts.MaxInFlightBytes < 0 || opts.MaxStoreRequests < 0 || opts.MaxReadBytes < 0 {
+	if opts.RequestTimeout < 0 || opts.ScanTimeout < 0 || opts.MaxInFlightRequests < 0 || opts.MaxInFlightBytes < 0 || opts.MaxStoreRequests < 0 || opts.MaxReadBytes < 0 {
 		return nil, errors.New("create Sink server: resource limits cannot be negative")
 	}
 	if opts.RequestTimeout == 0 {
 		opts.RequestTimeout = defaultRequestTimeout
+	}
+	if opts.ScanTimeout == 0 {
+		opts.ScanTimeout = 15 * time.Minute
 	}
 	if opts.MaxInFlightRequests == 0 {
 		opts.MaxInFlightRequests = 128
@@ -114,6 +119,7 @@ func New(opts Options) (*Server, error) {
 		maxMergeAttempts:    maxMergeAttempts,
 		metrics:             opts.Metrics,
 		requestTimeout:      opts.RequestTimeout,
+		scanTimeout:         opts.ScanTimeout,
 		maxInFlightRequests: opts.MaxInFlightRequests,
 		maxInFlightBytes:    opts.MaxInFlightBytes,
 		maxStoreRequests:    opts.MaxStoreRequests,
@@ -222,6 +228,9 @@ func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *req
 	if !validCompletionMode(req.GetCompletionMode()) {
 		return nil, status.Error(codes.InvalidArgument, "write request has an invalid completion mode")
 	}
+	if hasWriteReturns(req) && req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED {
+		return nil, status.Error(codes.InvalidArgument, "returned write documents require synchronous completion")
+	}
 	observation := s.newWriteObservation(req)
 	defer observation.finish()
 	admission := admissionRequest{encodedBytes: s.writeExecutionBytesFor(req, budgets.callerCount()), stores: operationStores(req.GetOperations()), wait: budgets != nil}
@@ -274,6 +283,7 @@ func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *req
 
 	groups := buildWriteGroups(operations)
 	executionOptions := writeExecutionOptions{
+		returns:          newWriteReturns(req, budgets, s.maxReadBytes),
 		budgets:          budgets,
 		completion:       completion,
 		observation:      observation,
