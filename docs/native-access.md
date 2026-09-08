@@ -7,11 +7,12 @@ counts matching results, and `Scan` manages streaming cursor queries. Existing `
 returned-document options remain available.
 
 These capabilities are additive to the protocol, not a database wire-protocol
-proxy. Native commands retain backend-specific semantics. Native mutations do
-not participate in Sink's revision checks, Lua merges, record batching, or
-asynchronous completion modes. Applications mixing native MongoDB writes with
-the record API must coordinate them: changing a document without advancing its
-Sink revision can invalidate optimistic concurrency assumptions.
+proxy. Native commands retain backend-specific semantics, subject to the
+revision-protected MongoDB write contract below. Supported MongoDB native writes
+atomically install fresh Sink revisions, so a concurrent record Merge detects
+the changed document and recomputes instead of overwriting an undetected update.
+Native mutations do not run Lua merges or participate in record batching or
+asynchronous completion modes. They are not automatically retried or deduplicated.
 
 ## Execute
 
@@ -51,12 +52,55 @@ The database is provided as `Command.namespace`, separately from the ordered
 BSON command in `Command.payload`, with `content_type=application/bson`. The first BSON field is
 the command name; use a struct, `bson.D`, or `bson.Raw`, not an unordered map.
 
-Execute does not use a command allowlist. Commands such as `count`, `distinct`,
-`explain`, `createIndexes`, `insert`, `update`, `delete`, `findAndModify`, and
-`drop` go to MongoDB, which decides whether they are valid and authorized.
-Unknown commands also reach MongoDB and return its native error.
+MongoDB Execute uses a command allowlist. Supported commands are `insert`,
+`update`, `delete`, `findAndModify` (also `findandmodify`), `count`, `distinct`,
+`explain`, `createIndexes`, `dropIndexes`, `collStats`, `dbStats`, `ping`, `hello`,
+`isMaster`/`ismaster`, `buildInfo`, and `serverStatus`. Database validation and
+write errors still retain their native response envelopes. Unknown commands,
+`drop`, `dropDatabase`, collection renames/conversions, and commands such as
+`applyOps` or `mapReduce` are rejected before execution: they cannot bypass the
+revision protocol through opaque native writes. There is no unsafe passthrough
+fallback. This intentionally narrows the earlier unrestricted Execute contract;
+administrative operations outside this list must use a separately controlled
+database administration path.
 
-Cursor commands are the exception: `find`, `aggregate`, `listIndexes`,
+#### Revision-protected native mutations
+
+Every inserted or replacement document receives a fresh opaque revision in the
+configured `metadata_field` (default `__sink`). Operator updates add that metadata
+with `$set` in the same database update as the business mutation. Update pipelines append a final
+literal metadata assignment, including after `$project`, `$replaceRoot`, or
+`$replaceWith` removes/replaces the original root. The database commits business
+data and the new revision atomically for each document, without a second update.
+`findAndModify` supports the same update forms; `upsert` and `multi` preserve
+their native meanings. Each multi-update statement generates a fresh token shared
+by its matched documents; revisions are compared only for the same record.
+
+Callers cannot explicitly assign, unset, rename, or replace the reserved metadata
+field or its subpaths in inserted/replacement documents, update operators, or
+named pipeline paths. Dynamic root replacement cannot control the final metadata:
+Sink overwrites it in the appended stage. Unknown update operators/pipeline stages,
+duplicate BSON fields, writes to `system.*` collections, and unsafe members are
+rejected while preparing the entire command, before any member is sent to MongoDB.
+Ordinary backend errors may still
+partially apply a native batch according to its `ordered` setting; inspect the
+native write-error envelope. No-op updates may now report a modification because
+the revision changes even when business fields remain equal.
+
+Hard deletes remain native deletes. They invalidate a stale revision match by
+removing the record; subsequent supported inserts/upserts/replacements assign a
+fresh revision, so reusing an `_id` cannot revive a pre-delete revision. This does
+not make an unconditional replacement or delete conditional, provide cross-record
+transactions, or deduplicate retries.
+
+All writers to the same collection must use this protocol and the same
+`metadata_field`, including other Sink deployments and alternate store names.
+Direct database writers, restore tools, and collection administration can still
+bypass it. Isolate their privileges and coordinate such work; Sink cannot enforce
+the protocol on connections it does not own. Native query/command responses can
+include metadata as before; the record API continues to hide it.
+
+Cursor commands such as `find`, `aggregate`, `listIndexes`,
 `listCollections`, `getMore`, `killCursors`, `parallelCollectionScan`, and
 MongoDB's cursor-returning `bulkWrite` are rejected before execution. Execute
 uses the driver's ordinary command path and does not retain a session or pin a
