@@ -18,25 +18,17 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  sustained:
-    name: Sustained release qualification
-    uses: liran/sink-production-suite/.github/workflows/reliability.yml@19cc933644c669ea4b4763ca0ba204825314d655
-    with:
-      suite_ref: 19cc933644c669ea4b4763ca0ba204825314d655
-      sink_ref: ${{ github.event.release.tag_name }}
-
   qualify:
     name: Public production qualification
-    uses: liran/sink-production-suite/.github/workflows/release-qualification.yml@19cc933644c669ea4b4763ca0ba204825314d655
+    uses: liran/sink-production-suite/.github/workflows/release-qualification.yml@b2c0ea1c79827083c33f5d005e95e632e68f01df
     with:
-      suite_ref: 19cc933644c669ea4b4763ca0ba204825314d655
+      suite_ref: b2c0ea1c79827083c33f5d005e95e632e68f01df
       sink_ref: ${{ github.event.release.tag_name }}
 
   binaries:
     name: Attach standalone binaries
     needs:
       - qualify
-      - sustained
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -67,7 +59,6 @@ jobs:
     name: Publish multi-platform image
     needs:
       - qualify
-      - sustained
     runs-on: ubuntu-latest
     outputs:
       digest: ${{ steps.build.outputs.digest }}

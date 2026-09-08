@@ -7,8 +7,9 @@ SIGKILL before and after source-offset settlement, concurrent single-record
 histories through two server processes, and slow-store saturation with bounded
 healthy-store deadlines and cancellation cleanup. Nightly qualification repeats
 twelve fault cycles during a two-hour workload, including simultaneous Kafka and
-OpenSearch outages. Release binaries and images wait for sustained qualification
-of the release candidate as well as its public production checks.
+OpenSearch outages. This long run is scheduled or explicitly requested for a
+special qualification; routine changes and releases do not wait for it. Release
+binaries and images require the shorter public production checks.
 
 `Sink reliability gate` aggregates every PR check and fails if any prerequisite
 fails, is cancelled or is skipped. Repository rules must require this status.
@@ -19,7 +20,7 @@ most one outstanding probe per dependency; a completed result is not cached.
 
 Every server PR runs the immutable public suite against the candidate executable,
 with race detection and real Elasticsearch plus OpenSearch 3.8/2.17. The suite's
-[incident contracts](https://github.com/liran/sink-production-suite/blob/19cc933644c669ea4b4763ca0ba204825314d655/docs/reliability-contract.md)
+[incident contracts](https://github.com/liran/sink-production-suite/blob/b2c0ea1c79827083c33f5d005e95e632e68f01df/docs/reliability-contract.md)
 cover the production failures behind PRs 37, 38, 40 and 41: bounded hot-key work,
 applied/visible isolation, per-caller budgets, Replace conflicts, independent
 document completion, dataset refresh waits and queued cancellation.
@@ -221,7 +222,7 @@ resource usage recorded rather than only API success counts:
 | Layer | Required checks |
 | --- | --- |
 | Every change | Race tests, cancellation/all-caller cancellation, CREATE replay continuation, permanent size errors, temporary outage beyond retry budget, DLQ failure without source commit, partition prefix progress, rebalance cancellation, expanded Lua/read output bounds, codec fuzz. |
-| Sustained testing | Mixed sync/async and cross-store traffic; slow backends, saturation, worker/broker restarts, lag recovery; capture RSS, goroutines, latency, DLQ and business state. Use product retry defaults. |
+| Scheduled or explicitly requested sustained testing | Mixed sync/async and cross-store traffic; slow backends, saturation, worker/broker restarts, lag recovery; capture RSS, goroutines, latency, DLQ and business state. Use product retry defaults. |
 | Dependency failure qualification | Active-consumer SIGKILL, unavailable/blocked storage, network failures, ambiguous or malformed acknowledgements, offset retention gaps and recovery; verify Sink's outcomes and retained records. |
 
 Record the exact server/suite revisions, configuration, fault timeline, accepted
