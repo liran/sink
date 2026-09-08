@@ -20,16 +20,16 @@ env:
 jobs:
   sustained:
     name: Sustained release qualification
-    uses: liran/sink-production-suite/.github/workflows/reliability.yml@ac4e924ccab2658872ba01638415d880d92c9506
+    uses: liran/sink-production-suite/.github/workflows/reliability.yml@19cc933644c669ea4b4763ca0ba204825314d655
     with:
-      suite_ref: ac4e924ccab2658872ba01638415d880d92c9506
+      suite_ref: 19cc933644c669ea4b4763ca0ba204825314d655
       sink_ref: ${{ github.event.release.tag_name }}
 
   qualify:
     name: Public production qualification
-    uses: liran/sink-production-suite/.github/workflows/release-qualification.yml@ac4e924ccab2658872ba01638415d880d92c9506
+    uses: liran/sink-production-suite/.github/workflows/release-qualification.yml@19cc933644c669ea4b4763ca0ba204825314d655
     with:
-      suite_ref: ac4e924ccab2658872ba01638415d880d92c9506
+      suite_ref: 19cc933644c669ea4b4763ca0ba204825314d655
       sink_ref: ${{ github.event.release.tag_name }}
 
   binaries:

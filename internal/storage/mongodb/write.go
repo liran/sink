@@ -183,7 +183,7 @@ func (s *Store) bulkWrite(ctx context.Context, group *writeGroup, results []stor
 	}
 
 	var bulkError mongo.BulkWriteException
-	if !errors.As(err, &bulkError) || bulkError.WriteConcernError != nil {
+	if !errors.As(err, &bulkError) || !validBulkFailures(bulkError, len(group.operations)) {
 		err = storage.BackendError(err)
 		for _, operation := range group.operations {
 			setWriteError(&results[operation.index], err)
@@ -207,7 +207,7 @@ func (s *Store) bulkWrite(ctx context.Context, group *writeGroup, results []stor
 			s.writeUpsert(ctx, operation, &results[operation.index])
 			continue
 		}
-		setWriteError(&results[operation.index], &writeError)
+		setWriteError(&results[operation.index], classifyWriteError(writeError.WriteError))
 	}
 }
 
@@ -220,7 +220,7 @@ func (s *Store) writeUpsert(ctx context.Context, operation writeWork, result *st
 			if mongo.IsDuplicateKeyError(err) {
 				continue
 			}
-			setWriteError(result, storage.BackendError(err))
+			setWriteError(result, classifyOperationError(err))
 			return
 		}
 		if !replaced.Acknowledged {
@@ -275,7 +275,7 @@ func (s *Store) writeOne(ctx context.Context, operation writeWork, result *stora
 	}
 	replaced, err := operation.collection.value.ReplaceOne(ctx, filter, operation.replacement)
 	if err != nil {
-		setWriteError(result, storage.BackendError(err))
+		setWriteError(result, classifyOperationError(err))
 		return
 	}
 	if !replaced.Acknowledged {

@@ -28,7 +28,7 @@ type multiGetRequest struct {
 type multiGetDocument struct {
 	Index       string          `json:"_index"`
 	ID          string          `json:"_id"`
-	Found       bool            `json:"found"`
+	Found       *bool           `json:"found"`
 	Source      json.RawMessage `json:"_source"`
 	Sequence    *int64          `json:"_seq_no"`
 	PrimaryTerm *int64          `json:"_primary_term"`
@@ -79,7 +79,7 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 		}
 		for index, document := range documents {
 			result := &response.Results[batch[index].resultIndex]
-			if document.Found {
+			if document.Found != nil && *document.Found {
 				budget := req.Operations[batch[index].resultIndex].Budget
 				if budget == nil {
 					budget = req.Budget
@@ -136,10 +136,14 @@ func applyMultiGetDocument(result *storage.ReadResult, document multiGetDocument
 			result.Status = storage.ReadStatusNotFound
 			return
 		}
-		setReadError(result, classifySearchError(document.Error))
+		setReadError(result, document.Error)
 		return
 	}
-	if !document.Found {
+	if document.Found == nil {
+		setReadError(result, errors.New("search document has no found flag"))
+		return
+	}
+	if !*document.Found {
 		result.Status = storage.ReadStatusNotFound
 		return
 	}
@@ -166,5 +170,5 @@ func applyMultiGetDocument(result *storage.ReadResult, document multiGetDocument
 
 func setReadError(result *storage.ReadResult, err error) {
 	result.Status = storage.ReadStatusFailed
-	result.Err = err
+	result.Err = storage.BackendError(err)
 }

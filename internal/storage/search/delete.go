@@ -45,7 +45,8 @@ func (s *Store) Delete(ctx context.Context, req storage.DeleteRequest) (storage.
 	}
 	for index, item := range items {
 		result := &response.Results[works[index].resultIndex]
-		if (item.Status >= 200 && item.Status < 300) || item.Status == 404 {
+		if item.Error == nil && ((item.Status >= 200 && item.Status < 300) || item.Status == 404) ||
+			item.Status == 404 && isIndexNotFound(item.Error) {
 			result.Status = storage.DeleteStatusApplied
 			continue
 		}
@@ -77,5 +78,5 @@ func buildDeleteBulk(works []deleteWork) ([]byte, error) {
 
 func setDeleteError(result *storage.DeleteResult, err error) {
 	result.Status = storage.DeleteStatusFailed
-	result.Err = err
+	result.Err = storage.BackendError(err)
 }

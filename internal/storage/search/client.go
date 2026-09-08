@@ -141,50 +141,24 @@ func responseError(driver Driver, response apiResponse) error {
 	detail := decodeResponseError(response.body)
 	var cause error
 	if detail != nil {
-		cause = fmt.Errorf("%s request returned HTTP %d: %s", driver, response.statusCode, detail.Error())
+		cause = fmt.Errorf("%s request returned HTTP %d: %w", driver, response.statusCode, detail)
 	} else {
 		cause = fmt.Errorf("%s request returned HTTP %d", driver, response.statusCode)
 	}
-	var structured *errorDetail
-	if errors.As(detail, &structured) && isRetryableSearchError(structured) {
-		return storage.BackendError(cause)
-	}
+	// A whole-request failure does not identify an invalid individual document.
+	// Retain queued work even when repair requires operator action (e.g. auth).
 	switch response.statusCode {
-	case http.StatusRequestTimeout, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return storage.BackendError(cause)
 	case http.StatusRequestEntityTooLarge, http.StatusTooManyRequests:
 		return storage.ResourceExhaustedError(cause)
-	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
-		return storage.InvalidArgumentError(cause)
 	default:
-		return cause
+		return storage.BackendError(cause)
 	}
-}
-
-func classifySearchError(detail *errorDetail) error {
-	if isRetryableSearchError(detail) {
-		return storage.BackendError(detail)
-	}
-	return detail
-}
-
-func isRetryableSearchError(detail *errorDetail) bool {
-	for detail != nil {
-		switch detail.Type {
-		case "no_shard_available_action_exception", "unavailable_shards_exception":
-			return true
-		}
-		detail = detail.CausedBy
-	}
-	return false
 }
 
 func retryableSearchStatus(statusCode int) bool {
 	return statusCode == http.StatusRequestTimeout ||
 		statusCode == http.StatusTooManyRequests ||
-		statusCode == http.StatusBadGateway ||
-		statusCode == http.StatusServiceUnavailable ||
-		statusCode == http.StatusGatewayTimeout
+		statusCode >= http.StatusInternalServerError
 }
 
 func decodeResponseError(body []byte) error {

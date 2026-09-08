@@ -93,7 +93,7 @@ func (s *Store) deleteGroup(ctx context.Context, group *deleteGroup, results []s
 	}
 
 	var bulkError mongo.BulkWriteException
-	if !errors.As(err, &bulkError) || bulkError.WriteConcernError != nil {
+	if !errors.As(err, &bulkError) || !validBulkFailures(bulkError, len(group.operations)) {
 		err = storage.BackendError(err)
 		for _, operation := range group.operations {
 			setDeleteError(&results[operation.index], err)
@@ -108,7 +108,7 @@ func (s *Store) deleteGroup(ctx context.Context, group *deleteGroup, results []s
 			continue
 		}
 		operation := group.operations[writeError.Index]
-		setDeleteError(&results[operation.index], &writeError)
+		setDeleteError(&results[operation.index], classifyWriteError(writeError.WriteError))
 	}
 }
 

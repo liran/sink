@@ -19,7 +19,7 @@ most one outstanding probe per dependency; a completed result is not cached.
 
 Every server PR runs the immutable public suite against the candidate executable,
 with race detection and real Elasticsearch plus OpenSearch 3.8/2.17. The suite's
-[incident contracts](https://github.com/liran/sink-production-suite/blob/ac4e924ccab2658872ba01638415d880d92c9506/docs/reliability-contract.md)
+[incident contracts](https://github.com/liran/sink-production-suite/blob/19cc933644c669ea4b4763ca0ba204825314d655/docs/reliability-contract.md)
 cover the production failures behind PRs 37, 38, 40 and 41: bounded hot-key work,
 applied/visible isolation, per-caller budgets, Replace conflicts, independent
 document completion, dataset refresh waits and queued cancellation.
@@ -27,15 +27,17 @@ document completion, dataset refresh waits and queued cancellation.
 An independent Go state model checks mixed operations through serial RPCs and
 several batching configurations, then through all seven configured storage
 routes in release qualification. Suite CI requires matching assertion failures
-on five immutable pre-fix server commits, so a passing regression must also have
+on six immutable pre-fix server commits, so a passing regression must also have
 evidence that it detects the historical bug. Empty or skipped conformance runs
 fail qualification. Release artifacts remain blocked on the pinned public suite;
 nightly runs add varying state-machine seeds before the existing two-hour fault
 workload. Keep the PR, release and nightly suite pins synchronized.
 
 These checks establish the listed contracts, not SQLite-level certification.
-The suite records remaining gaps, including broader compound failures, arbitrary
-concurrent-history verification, disk exhaustion and durable replica recovery.
+The suite records remaining Sink-specific gaps, including broader compound
+failures, arbitrary concurrent histories and generated malformed replies. Storage
+fault injection qualifies Sink's acknowledgements, retry, isolation and recovery
+behavior; it does not certify the database's own election or backup implementation.
 Repository rules must require the CI statuses to enforce a pre-merge gate.
 
 ## Delivery and recovery semantics
@@ -75,6 +77,16 @@ Workers commit only resolved contiguous partition prefixes. DLQ or commit
 failure retains the affected source records for replay. Permanent failure of one
 record does not suppress subsequent valid operations for the same address;
 temporary failure does preserve the same-address barrier.
+
+Only confirmed per-record permanent errors belong in DLQ. Whole-request search
+errors (including authentication/authorization failures), index blocks, unknown
+item errors and incomplete replies retain queued work. Unknown/internal/missing
+failure details also preserve the same-record barrier. Retrying these errors does
+not imply that they will repair themselves: permission and index settings may
+need operator action. Search mapping rejections and MongoDB document validation,
+immutable-field and BSON-size rejections remain explicit record failures. A
+malformed read reply must not become a not-found result, and an error embedded in
+a bulk delete result must not become an applied acknowledgement.
 
 Processing defaults to 20 seconds. A pending rebalance cancels backend work and
 allows at most five additional seconds for DLQ/offset settlement before releasing
@@ -210,7 +222,7 @@ resource usage recorded rather than only API success counts:
 | --- | --- |
 | Every change | Race tests, cancellation/all-caller cancellation, CREATE replay continuation, permanent size errors, temporary outage beyond retry budget, DLQ failure without source commit, partition prefix progress, rebalance cancellation, expanded Lua/read output bounds, codec fuzz. |
 | Sustained testing | Mixed sync/async and cross-store traffic; slow backends, saturation, worker/broker restarts, lag recovery; capture RSS, goroutines, latency, DLQ and business state. Use product retry defaults. |
-| Deployment qualification | Multiple brokers/replica-set nodes/fault domains; active-consumer SIGKILL, network partitions, lost acknowledgements, election, full disk, offset retention gaps, backups and restore. |
+| Dependency failure qualification | Active-consumer SIGKILL, unavailable/blocked storage, network failures, ambiguous or malformed acknowledgements, offset retention gaps and recovery; verify Sink's outcomes and retained records. |
 
 Record the exact server/suite revisions, configuration, fault timeline, accepted
 business IDs, final reconciliation, maximum resource usage and backlog drain
