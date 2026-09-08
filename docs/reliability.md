@@ -44,12 +44,10 @@ Repository rules must require the CI statuses to enforce a pre-merge gate.
 ## Delivery and recovery semantics
 
 Sink provides at-least-once asynchronous delivery and per-record conditional
-updates. Ordinary writes, native Execute and deletes do not deduplicate logical
-mutations: retries, lost acknowledgements, worker restarts and DLQ replay can
-repeat business effects. Opted-in [idempotent record writes](idempotency.md)
-atomically commit MongoDB mutations with durable receipts. They require a
-replica set or mongos and a fixed operation ID; unsupported backends fail closed.
-This is bounded deduplication, not end-to-end exactly-once delivery.
+updates. **Business idempotence belongs to the application.** Sink does not
+deduplicate logical mutations. Client retries, lost backend acknowledgements,
+worker restarts, and DLQ replay can repeat business effects. Use a business
+operation ID with atomic check-and-apply logic when repeated effects are unsafe.
 
 Supported MongoDB native writes and record writes share the same revision
 protocol: business changes and fresh revision metadata commit atomically per

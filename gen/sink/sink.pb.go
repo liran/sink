@@ -1077,10 +1077,6 @@ type WriteOperation struct {
 	// Only synchronous completion modes support this. These operations do not
 	// share a folded commit with preceding or following operations.
 	ReturnDocument bool `protobuf:"varint,4,opt,name=return_document,json=returnDocument,proto3" json:"return_document,omitempty"`
-	// v1:<creation Unix milliseconds>:<base64url identity>. The creation time
-	// and identity must remain unchanged for retries. Supported backends retain
-	// atomic receipts for 31 days; expired operations are rejected, not reapplied.
-	OperationId string `protobuf:"bytes,5,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	// Types that are valid to be assigned to Action:
 	//
 	//	*WriteOperation_Put
@@ -1132,13 +1128,6 @@ func (x *WriteOperation) GetReturnDocument() bool {
 		return x.ReturnDocument
 	}
 	return false
-}
-
-func (x *WriteOperation) GetOperationId() string {
-	if x != nil {
-		return x.OperationId
-	}
-	return ""
 }
 
 func (x *WriteOperation) GetAction() isWriteOperation_Action {
@@ -2566,11 +2555,10 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\n" +
 	"operations\x18\x02 \x03(\v2\x17.sink.v1.WriteOperationR\n" +
 	"operations\x126\n" +
-	"\flua_programs\x18\x03 \x03(\v2\x13.sink.v1.LuaProgramR\vluaPrograms\"\xf4\x01\n" +
+	"\flua_programs\x18\x03 \x03(\v2\x13.sink.v1.LuaProgramR\vluaPrograms\"\xd1\x01\n" +
 	"\x0eWriteOperation\x120\n" +
 	"\aaddress\x18\x01 \x01(\v2\x16.sink.v1.RecordAddressR\aaddress\x12'\n" +
-	"\x0freturn_document\x18\x04 \x01(\bR\x0ereturnDocument\x12!\n" +
-	"\foperation_id\x18\x05 \x01(\tR\voperationId\x12)\n" +
+	"\x0freturn_document\x18\x04 \x01(\bR\x0ereturnDocument\x12)\n" +
 	"\x03put\x18\x02 \x01(\v2\x15.sink.v1.PutOperationH\x00R\x03put\x12/\n" +
 	"\x05merge\x18\x03 \x01(\v2\x17.sink.v1.MergeOperationH\x00R\x05mergeB\b\n" +
 	"\x06action\"e\n" +
@@ -2707,11 +2695,10 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x1fFAILURE_CODE_RESOURCE_EXHAUSTED\x10\x05\x12\x1c\n" +
 	"\x18FAILURE_CODE_UNAVAILABLE\x10\x06\x12\"\n" +
 	"\x1eFAILURE_CODE_DEADLINE_EXCEEDED\x10\a\x12\x19\n" +
-	"\x15FAILURE_CODE_INTERNAL\x10\b2\xd5\x03\n" +
+	"\x15FAILURE_CODE_INTERNAL\x10\b2\x93\x03\n" +
 	"\x04Sink\x123\n" +
 	"\x04Read\x12\x14.sink.v1.ReadRequest\x1a\x15.sink.v1.ReadResponse\x126\n" +
-	"\x05Write\x12\x15.sink.v1.WriteRequest\x1a\x16.sink.v1.WriteResponse\x12@\n" +
-	"\x0fWriteIdempotent\x12\x15.sink.v1.WriteRequest\x1a\x16.sink.v1.WriteResponse\x129\n" +
+	"\x05Write\x12\x15.sink.v1.WriteRequest\x1a\x16.sink.v1.WriteResponse\x129\n" +
 	"\x06Delete\x12\x16.sink.v1.DeleteRequest\x1a\x17.sink.v1.DeleteResponse\x12<\n" +
 	"\aExecute\x12\x17.sink.v1.ExecuteRequest\x1a\x18.sink.v1.ExecuteResponse\x126\n" +
 	"\x05Query\x12\x15.sink.v1.QueryRequest\x1a\x16.sink.v1.QueryResponse\x126\n" +
@@ -2821,22 +2808,20 @@ var file_sink_sink_proto_depIdxs = []int32{
 	11, // 42: sink.v1.ScanResponse.documents:type_name -> sink.v1.Document
 	13, // 43: sink.v1.Sink.Read:input_type -> sink.v1.ReadRequest
 	17, // 44: sink.v1.Sink.Write:input_type -> sink.v1.WriteRequest
-	17, // 45: sink.v1.Sink.WriteIdempotent:input_type -> sink.v1.WriteRequest
-	24, // 46: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
-	31, // 47: sink.v1.Sink.Execute:input_type -> sink.v1.ExecuteRequest
-	33, // 48: sink.v1.Sink.Query:input_type -> sink.v1.QueryRequest
-	37, // 49: sink.v1.Sink.Count:input_type -> sink.v1.CountRequest
-	39, // 50: sink.v1.Sink.Scan:input_type -> sink.v1.ScanRequest
-	15, // 51: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
-	22, // 52: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
-	22, // 53: sink.v1.Sink.WriteIdempotent:output_type -> sink.v1.WriteResponse
-	26, // 54: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
-	32, // 55: sink.v1.Sink.Execute:output_type -> sink.v1.ExecuteResponse
-	36, // 56: sink.v1.Sink.Query:output_type -> sink.v1.QueryResponse
-	38, // 57: sink.v1.Sink.Count:output_type -> sink.v1.CountResponse
-	40, // 58: sink.v1.Sink.Scan:output_type -> sink.v1.ScanResponse
-	51, // [51:59] is the sub-list for method output_type
-	43, // [43:51] is the sub-list for method input_type
+	24, // 45: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
+	31, // 46: sink.v1.Sink.Execute:input_type -> sink.v1.ExecuteRequest
+	33, // 47: sink.v1.Sink.Query:input_type -> sink.v1.QueryRequest
+	37, // 48: sink.v1.Sink.Count:input_type -> sink.v1.CountRequest
+	39, // 49: sink.v1.Sink.Scan:input_type -> sink.v1.ScanRequest
+	15, // 50: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
+	22, // 51: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
+	26, // 52: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
+	32, // 53: sink.v1.Sink.Execute:output_type -> sink.v1.ExecuteResponse
+	36, // 54: sink.v1.Sink.Query:output_type -> sink.v1.QueryResponse
+	38, // 55: sink.v1.Sink.Count:output_type -> sink.v1.CountResponse
+	40, // 56: sink.v1.Sink.Scan:output_type -> sink.v1.ScanResponse
+	50, // [50:57] is the sub-list for method output_type
+	43, // [43:50] is the sub-list for method input_type
 	43, // [43:43] is the sub-list for extension type_name
 	43, // [43:43] is the sub-list for extension extendee
 	0,  // [0:43] is the sub-list for field type_name

@@ -22,7 +22,7 @@ func TestSinkServiceContract(t *testing.T) {
 		methodNames = append(methodNames, string(methods.Get(index).Name()))
 	}
 
-	want := []string{"Read", "Write", "WriteIdempotent", "Delete", "Execute", "Query", "Count", "Scan"}
+	want := []string{"Read", "Write", "Delete", "Execute", "Query", "Count", "Scan"}
 	if !slices.Equal(methodNames, want) {
 		t.Fatalf("Sink methods = %v, want %v", methodNames, want)
 	}

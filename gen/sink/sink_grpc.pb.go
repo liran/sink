@@ -19,14 +19,13 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Sink_Read_FullMethodName            = "/sink.v1.Sink/Read"
-	Sink_Write_FullMethodName           = "/sink.v1.Sink/Write"
-	Sink_WriteIdempotent_FullMethodName = "/sink.v1.Sink/WriteIdempotent"
-	Sink_Delete_FullMethodName          = "/sink.v1.Sink/Delete"
-	Sink_Execute_FullMethodName         = "/sink.v1.Sink/Execute"
-	Sink_Query_FullMethodName           = "/sink.v1.Sink/Query"
-	Sink_Count_FullMethodName           = "/sink.v1.Sink/Count"
-	Sink_Scan_FullMethodName            = "/sink.v1.Sink/Scan"
+	Sink_Read_FullMethodName    = "/sink.v1.Sink/Read"
+	Sink_Write_FullMethodName   = "/sink.v1.Sink/Write"
+	Sink_Delete_FullMethodName  = "/sink.v1.Sink/Delete"
+	Sink_Execute_FullMethodName = "/sink.v1.Sink/Execute"
+	Sink_Query_FullMethodName   = "/sink.v1.Sink/Query"
+	Sink_Count_FullMethodName   = "/sink.v1.Sink/Count"
+	Sink_Scan_FullMethodName    = "/sink.v1.Sink/Scan"
 )
 
 // SinkClient is the client API for Sink service.
@@ -40,8 +39,6 @@ const (
 type SinkClient interface {
 	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
-	// Fails closed on older servers. Every operation requires operation_id.
-	WriteIdempotent(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
 	Execute(ctx context.Context, in *ExecuteRequest, opts ...grpc.CallOption) (*ExecuteResponse, error)
 	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResponse, error)
@@ -71,16 +68,6 @@ func (c *sinkClient) Write(ctx context.Context, in *WriteRequest, opts ...grpc.C
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(WriteResponse)
 	err := c.cc.Invoke(ctx, Sink_Write_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *sinkClient) WriteIdempotent(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(WriteResponse)
-	err := c.cc.Invoke(ctx, Sink_WriteIdempotent_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -157,8 +144,6 @@ type Sink_ScanClient = grpc.ServerStreamingClient[ScanResponse]
 type SinkServer interface {
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
-	// Fails closed on older servers. Every operation requires operation_id.
-	WriteIdempotent(context.Context, *WriteRequest) (*WriteResponse, error)
 	Delete(context.Context, *DeleteRequest) (*DeleteResponse, error)
 	Execute(context.Context, *ExecuteRequest) (*ExecuteResponse, error)
 	Query(context.Context, *QueryRequest) (*QueryResponse, error)
@@ -179,9 +164,6 @@ func (UnimplementedSinkServer) Read(context.Context, *ReadRequest) (*ReadRespons
 }
 func (UnimplementedSinkServer) Write(context.Context, *WriteRequest) (*WriteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Write not implemented")
-}
-func (UnimplementedSinkServer) WriteIdempotent(context.Context, *WriteRequest) (*WriteResponse, error) {
-	return nil, status.Errorf(codes.Unimplemented, "method WriteIdempotent not implemented")
 }
 func (UnimplementedSinkServer) Delete(context.Context, *DeleteRequest) (*DeleteResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Delete not implemented")
@@ -251,24 +233,6 @@ func _Sink_Write_Handler(srv interface{}, ctx context.Context, dec func(interfac
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(SinkServer).Write(ctx, req.(*WriteRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _Sink_WriteIdempotent_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(WriteRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(SinkServer).WriteIdempotent(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Sink_WriteIdempotent_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(SinkServer).WriteIdempotent(ctx, req.(*WriteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -370,10 +334,6 @@ var Sink_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Write",
 			Handler:    _Sink_Write_Handler,
-		},
-		{
-			MethodName: "WriteIdempotent",
-			Handler:    _Sink_WriteIdempotent_Handler,
 		},
 		{
 			MethodName: "Delete",

@@ -269,9 +269,6 @@ func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *req
 		return nil, err
 	}
 	defer release()
-	if err := s.checkIdempotency(ctx, req); err != nil {
-		return nil, err
-	}
 	started = time.Now()
 	luaPrograms, err := parseLuaPrograms(req.GetLuaPrograms())
 	if err != nil {

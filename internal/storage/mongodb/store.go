@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -33,8 +32,6 @@ type Store struct {
 	maxConcurrentGroups int
 	groups              chan struct{}
 	writes              chan struct{}
-	receiptMu           sync.Mutex
-	receiptDatabases    map[string]bool
 }
 
 func New(client *mongo.Client, opts Options) (*Store, error) {
@@ -98,9 +95,6 @@ func (s *Store) resolve(address storage.Address) (resolvedCollection, error) {
 	if address.Namespace == "" || address.Dataset == "" {
 		err := errors.New("logical namespace and dataset are required")
 		return resolved, storage.InvalidArgumentError(err)
-	}
-	if address.Dataset == receiptCollection {
-		return resolved, storage.InvalidArgumentError(errors.New("dataset name is reserved for Sink receipts"))
 	}
 
 	resolved.database = address.Namespace

@@ -11,8 +11,6 @@ option go_package = "github.com/liran/sink/gen/sink;sink";
 service Sink {
   rpc Read(ReadRequest) returns (ReadResponse);
   rpc Write(WriteRequest) returns (WriteResponse);
-  // Fails closed on older servers. Every operation requires operation_id.
-  rpc WriteIdempotent(WriteRequest) returns (WriteResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   rpc Execute(ExecuteRequest) returns (ExecuteResponse);
   rpc Query(QueryRequest) returns (QueryResponse);
@@ -128,11 +126,6 @@ message WriteOperation {
   // Only synchronous completion modes support this. These operations do not
   // share a folded commit with preceding or following operations.
   bool return_document = 4;
-
-  // v1:<creation Unix milliseconds>:<base64url identity>. The creation time
-  // and identity must remain unchanged for retries. Supported backends retain
-  // atomic receipts for 31 days; expired operations are rejected, not reapplied.
-  string operation_id = 5;
 
   oneof action {
     PutOperation put = 2;

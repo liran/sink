@@ -47,9 +47,6 @@ func validateNativeCommand(req storage.NativeRequest, scan bool) (bson.D, error)
 		}
 	}
 	name := command[0].Key
-	if collection, ok := command[0].Value.(string); ok && collection == receiptCollection {
-		return command, errors.New("collection is reserved for Sink receipts")
-	}
 	if scan {
 		switch name {
 		case "find", "aggregate", "listIndexes", "listCollections":

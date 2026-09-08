@@ -122,23 +122,8 @@ func (s *Server) writeExecutionBytes(req *sink.WriteRequest) int {
 
 func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int) int {
 	bytes := req.SizeVT()
-	for _, operation := range req.GetOperations() {
-		if operation.GetOperationId() != "" {
-			// Mongo receipt lookups receive a complete driver wire message.
-			// Protected operations execute sequentially inside this admission.
-			bytes += 48 << 20
-			break
-		}
-	}
 	if hasWriteReturns(req) {
 		bytes += s.maxReadBytes * callers
-		for _, operation := range req.GetOperations() {
-			if operation.GetOperationId() != "" {
-				// Receipt encoding/decoding retains another bounded copy.
-				bytes += 2 * s.maxReadBytes * callers
-				break
-			}
-		}
 	}
 	largestSource := 0
 	for _, program := range req.GetLuaPrograms() {
