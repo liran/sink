@@ -16,6 +16,7 @@ type admissionRequest struct {
 	stores       []string
 	wait         bool
 	timeout      time.Duration
+	scan         bool
 }
 
 func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (context.Context, context.CancelFunc, error) {
@@ -25,7 +26,13 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		}
 		s.admissionMu.Lock()
 		full := s.inFlightRequests >= s.maxInFlightRequests || request.encodedBytes > s.maxInFlightBytes-s.inFlightBytes
+		if request.scan && (s.scanRequests >= s.maxScanRequests || request.encodedBytes > s.maxScanBytes-s.scanBytes) {
+			full = true
+		}
 		for _, name := range request.stores {
+			if request.scan && s.storeScanRequests[name] >= s.maxStoreScanRequests {
+				full = true
+			}
 			if count, configured := s.storeRequests[name]; configured && count >= s.maxStoreRequests {
 				full = true
 			}
@@ -46,7 +53,14 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		}
 		s.inFlightRequests++
 		s.inFlightBytes += request.encodedBytes
+		if request.scan {
+			s.scanRequests++
+			s.scanBytes += request.encodedBytes
+		}
 		for _, name := range request.stores {
+			if request.scan {
+				s.storeScanRequests[name]++
+			}
 			if _, configured := s.storeRequests[name]; configured {
 				s.storeRequests[name]++
 			}
@@ -65,7 +79,17 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		s.admissionMu.Lock()
 		s.inFlightRequests--
 		s.inFlightBytes -= request.encodedBytes
+		if request.scan {
+			s.scanRequests--
+			s.scanBytes -= request.encodedBytes
+		}
 		for _, name := range request.stores {
+			if request.scan {
+				s.storeScanRequests[name]--
+				if s.storeScanRequests[name] == 0 {
+					delete(s.storeScanRequests, name)
+				}
+			}
 			if _, configured := s.storeRequests[name]; configured {
 				s.storeRequests[name]--
 			}

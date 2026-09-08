@@ -242,19 +242,22 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		storeNames[index] = configured.name
 	}
 	serverOptions := service.Options{
-		StoreNames:          storeNames,
-		RequestTimeout:      loaded.requestTimeout,
-		ScanTimeout:         loaded.scanTimeout,
-		MaxInFlightRequests: loaded.maxInFlightRequests,
-		MaxInFlightBytes:    loaded.maxInFlightBytes,
-		MaxStoreRequests:    loaded.maxStoreRequests,
-		MaxReadBytes:        loaded.maxReadBytes,
-		Storage:             opened.value,
-		Lua:                 luaEngine,
-		Publisher:           app.publisher,
-		MaxOperations:       loaded.maxOperations,
-		MaxMergeAttempts:    loaded.maxMergeAttempts,
-		Metrics:             observed,
+		StoreNames:           storeNames,
+		RequestTimeout:       loaded.requestTimeout,
+		ScanTimeout:          loaded.scanTimeout,
+		MaxInFlightRequests:  loaded.maxInFlightRequests,
+		MaxInFlightBytes:     loaded.maxInFlightBytes,
+		MaxStoreRequests:     loaded.maxStoreRequests,
+		MaxScanRequests:      loaded.maxScanRequests,
+		MaxScanBytes:         loaded.maxScanBytes,
+		MaxStoreScanRequests: loaded.maxStoreScanRequests,
+		MaxReadBytes:         loaded.maxReadBytes,
+		Storage:              opened.value,
+		Lua:                  luaEngine,
+		Publisher:            app.publisher,
+		MaxOperations:        loaded.maxOperations,
+		MaxMergeAttempts:     loaded.maxMergeAttempts,
+		Metrics:              observed,
 	}
 	sinkServer, err := service.New(serverOptions)
 	if err != nil {

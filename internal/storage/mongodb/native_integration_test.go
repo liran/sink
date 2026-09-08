@@ -209,14 +209,16 @@ func TestNativeMongoWritesPreserveResultsAndWriteErrors(t *testing.T) {
 	}
 	unknown := bson.D{{Key: "sinkUnknownNativeCommand", Value: 1}}
 	req = mongoNativeRequest(t, fixture.database, unknown)
-	response, err = fixture.store.Execute(ctx, req)
-	if err != nil || response.Success || bson.Raw(response.Payload).Lookup("code").AsInt64() != 59 {
-		t.Fatalf("unknown command should reach MongoDB: %+v err=%v", response, err)
+	_, err = fixture.store.Execute(ctx, req)
+	code, _ = storage.ErrorDetails(err)
+	if code != storage.ErrorCodeInvalidArgument {
+		t.Fatalf("unknown command escaped revision protection: %v", err)
 	}
 	drop := bson.D{{Key: "drop", Value: "documents"}}
 	req = mongoNativeRequest(t, fixture.database, drop)
-	response, err = fixture.store.Execute(ctx, req)
-	if err != nil || !response.Success {
-		t.Fatalf("native drop response=%+v err=%v", response, err)
+	_, err = fixture.store.Execute(ctx, req)
+	code, _ = storage.ErrorDetails(err)
+	if code != storage.ErrorCodeInvalidArgument {
+		t.Fatalf("native drop escaped revision protection: %v", err)
 	}
 }

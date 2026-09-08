@@ -26,41 +26,50 @@ const (
 )
 
 type Options struct {
-	Storage             storage.Storage
-	Lua                 *merge.LuaEngine
-	Publisher           queue.Publisher
-	MaxOperations       int
-	MaxMergeAttempts    int
-	Metrics             *sinkmetrics.Metrics
-	RequestTimeout      time.Duration
-	ScanTimeout         time.Duration
-	MaxInFlightRequests int
-	MaxInFlightBytes    int
-	MaxStoreRequests    int
-	MaxReadBytes        int
-	StoreNames          []string
+	Storage              storage.Storage
+	Lua                  *merge.LuaEngine
+	Publisher            queue.Publisher
+	MaxOperations        int
+	MaxMergeAttempts     int
+	Metrics              *sinkmetrics.Metrics
+	RequestTimeout       time.Duration
+	ScanTimeout          time.Duration
+	MaxInFlightRequests  int
+	MaxInFlightBytes     int
+	MaxStoreRequests     int
+	MaxReadBytes         int
+	MaxScanRequests      int
+	MaxScanBytes         int
+	MaxStoreScanRequests int
+	StoreNames           []string
 }
 
 type Server struct {
 	sink.UnimplementedSinkServer
 
-	storage             storage.Storage
-	lua                 *merge.LuaEngine
-	publisher           queue.Publisher
-	maxOperations       int
-	maxMergeAttempts    int
-	metrics             *sinkmetrics.Metrics
-	requestTimeout      time.Duration
-	scanTimeout         time.Duration
-	maxInFlightRequests int
-	maxInFlightBytes    int
-	maxStoreRequests    int
-	maxReadBytes        int
-	admissionMu         sync.Mutex
-	admissionChanged    chan struct{}
-	inFlightRequests    int
-	inFlightBytes       int
-	storeRequests       map[string]int
+	storage              storage.Storage
+	lua                  *merge.LuaEngine
+	publisher            queue.Publisher
+	maxOperations        int
+	maxMergeAttempts     int
+	metrics              *sinkmetrics.Metrics
+	requestTimeout       time.Duration
+	scanTimeout          time.Duration
+	maxInFlightRequests  int
+	maxInFlightBytes     int
+	maxStoreRequests     int
+	maxReadBytes         int
+	admissionMu          sync.Mutex
+	admissionChanged     chan struct{}
+	inFlightRequests     int
+	inFlightBytes        int
+	storeRequests        map[string]int
+	maxScanRequests      int
+	maxScanBytes         int
+	maxStoreScanRequests int
+	scanRequests         int
+	scanBytes            int
+	storeScanRequests    map[string]int
 }
 
 func New(opts Options) (*Server, error) {
@@ -97,6 +106,21 @@ func New(opts Options) (*Server, error) {
 	if opts.MaxReadBytes == 0 {
 		opts.MaxReadBytes = storage.DefaultMaxReadBytes
 	}
+	if opts.MaxScanRequests < 0 || opts.MaxScanBytes < 0 || opts.MaxStoreScanRequests < 0 {
+		return nil, errors.New("create Sink server: scan limits cannot be negative")
+	}
+	if opts.MaxScanRequests == 0 {
+		opts.MaxScanRequests = max(1, opts.MaxInFlightRequests/2)
+	}
+	if opts.MaxScanBytes == 0 {
+		opts.MaxScanBytes = max(1, opts.MaxInFlightBytes/2)
+	}
+	if opts.MaxStoreScanRequests == 0 {
+		opts.MaxStoreScanRequests = max(1, opts.MaxStoreRequests/2)
+	}
+	if opts.MaxScanRequests > opts.MaxInFlightRequests || opts.MaxScanBytes > opts.MaxInFlightBytes || opts.MaxStoreScanRequests > opts.MaxStoreRequests {
+		return nil, errors.New("create Sink server: scan limits cannot exceed total limits")
+	}
 	storeRequests := make(map[string]int, len(opts.StoreNames))
 	for _, name := range opts.StoreNames {
 		storeRequests[name] = 0
@@ -112,20 +136,24 @@ func New(opts Options) (*Server, error) {
 	}
 
 	server := &Server{
-		storage:             opts.Storage,
-		lua:                 opts.Lua,
-		publisher:           opts.Publisher,
-		maxOperations:       maxOperations,
-		maxMergeAttempts:    maxMergeAttempts,
-		metrics:             opts.Metrics,
-		requestTimeout:      opts.RequestTimeout,
-		scanTimeout:         opts.ScanTimeout,
-		maxInFlightRequests: opts.MaxInFlightRequests,
-		maxInFlightBytes:    opts.MaxInFlightBytes,
-		maxStoreRequests:    opts.MaxStoreRequests,
-		maxReadBytes:        opts.MaxReadBytes,
-		storeRequests:       storeRequests,
-		admissionChanged:    make(chan struct{}),
+		storage:              opts.Storage,
+		lua:                  opts.Lua,
+		publisher:            opts.Publisher,
+		maxOperations:        maxOperations,
+		maxMergeAttempts:     maxMergeAttempts,
+		metrics:              opts.Metrics,
+		requestTimeout:       opts.RequestTimeout,
+		scanTimeout:          opts.ScanTimeout,
+		maxInFlightRequests:  opts.MaxInFlightRequests,
+		maxInFlightBytes:     opts.MaxInFlightBytes,
+		maxStoreRequests:     opts.MaxStoreRequests,
+		maxReadBytes:         opts.MaxReadBytes,
+		storeRequests:        storeRequests,
+		admissionChanged:     make(chan struct{}),
+		maxScanRequests:      opts.MaxScanRequests,
+		maxScanBytes:         opts.MaxScanBytes,
+		maxStoreScanRequests: opts.MaxStoreScanRequests,
+		storeScanRequests:    make(map[string]int),
 	}
 	return server, nil
 }

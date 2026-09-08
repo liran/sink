@@ -11,7 +11,8 @@ import (
 var ErrNativeUnsupported = errors.New("native operation is not supported")
 
 // NativeStorage executes backend-native commands and managed cursor queries.
-// Native mutations use database semantics independently of the record API.
+// Native mutations retain database semantics subject to adapter safeguards,
+// including atomic revision maintenance for supported MongoDB writes.
 type NativeStorage interface {
 	Execute(context.Context, NativeRequest) (NativeResponse, error)
 	Query(context.Context, QueryRequest) (QueryResponse, error)

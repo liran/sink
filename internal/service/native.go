@@ -123,7 +123,7 @@ func (s *Server) Scan(req *sink.ScanRequest, stream grpc.ServerStreamingServer[s
 	if !ok {
 		return nativeStatus(storage.ErrNativeUnsupported)
 	}
-	admission := admissionRequest{encodedBytes: nativeExecutionBytes(req.GetCommand(), request), stores: []string{request.Store}, timeout: s.scanTimeout}
+	admission := admissionRequest{encodedBytes: nativeExecutionBytes(req.GetCommand(), request), stores: []string{request.Store}, timeout: s.scanTimeout, scan: true}
 	ctx, release, err := s.admitRequest(stream.Context(), admission)
 	if err != nil {
 		return err

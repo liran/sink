@@ -211,30 +211,51 @@ func (s *Server) executeWriteGroups(
 	results []*sink.WriteResult,
 	opts writeExecutionOptions,
 ) error {
+	// Returned chains need one commit per operation, but must not jump ahead
+	// of independent records. Each round remains batch-native and retains the
+	// original caller budgets; no concurrent snapshot allocations are added.
+	for len(groups) > 0 {
+		wave := make([]writeGroup, 0, len(groups))
+		next := make([]writeGroup, 0)
+		for _, group := range groups {
+			if len(group.operations) > 1 && group.hasReturns() {
+				first := group.operations[0]
+				single := writeGroup{operations: []parsedWrite{first}}
+				if first.merge != nil {
+					single.merges = 1
+					group.merges--
+				}
+				wave = append(wave, single)
+				group.operations = group.operations[1:]
+				next = append(next, group)
+			} else {
+				wave = append(wave, group)
+			}
+		}
+		err := s.executeWriteWave(ctx, wave, results, opts)
+		if err != nil {
+			return err
+		}
+		groups = next
+	}
+	return nil
+}
+
+func (s *Server) executeWriteWave(
+	ctx context.Context,
+	groups []writeGroup,
+	results []*sink.WriteResult,
+	opts writeExecutionOptions,
+) error {
 	puts := make([]writeGroup, 0, len(groups))
 	conditional := make([]writeGroup, 0, len(groups))
 	for _, group := range groups {
-		if len(group.operations) > 1 && group.hasReturns() {
-			// Preserve each operation's own committed result and revision. Keep
-			// the group inside its batcher's existing record ordering barrier.
-			for _, operation := range group.operations {
-				single := writeGroup{operations: []parsedWrite{operation}}
-				if operation.merge != nil {
-					single.merges = 1
-				}
-				err := s.executeWriteGroups(ctx, []writeGroup{single}, results, opts)
-				if err != nil {
-					return err
-				}
-			}
-			continue
-		}
 		s.metrics.ObserveMergeFold(group.merges)
 		if group.directPut() {
 			puts = append(puts, group)
-			continue
+		} else {
+			conditional = append(conditional, group)
 		}
-		conditional = append(conditional, group)
 	}
 	err := s.executePuts(ctx, puts, results, opts)
 	if err != nil {

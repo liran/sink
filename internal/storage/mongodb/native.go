@@ -63,8 +63,13 @@ func validateNativeCommand(req storage.NativeRequest, scan bool) (bson.D, error)
 		return command, fmt.Errorf("command %q uses a cursor; Execute does not manage cursor sessions, use Scan for supported cursor queries", name)
 	case "startSession", "refreshSessions", "endSessions", "commitTransaction", "abortTransaction":
 		return command, fmt.Errorf("command %q requires client-managed sessions, which Execute does not support", name)
+	case "insert", "update", "delete", "findAndModify", "findandmodify",
+		"count", "distinct", "explain", "createIndexes", "dropIndexes",
+		"collStats", "dbStats", "ping", "hello", "isMaster", "ismaster", "buildInfo", "serverStatus":
+		return command, nil
+	default:
+		return command, fmt.Errorf("command %q is not supported by revision-protected MongoDB Execute", name)
 	}
-	return command, nil
 }
 
 func forbiddenNativeValue(value any) bool {
@@ -94,10 +99,15 @@ func (s *Store) Execute(ctx context.Context, req storage.NativeRequest) (storage
 	if req.Store != s.store {
 		return empty, storage.InvalidArgumentError(errors.New("MongoDB store does not match request"))
 	}
-	if _, err := validateNativeCommand(req, false); err != nil {
+	command, err := validateNativeCommand(req, false)
+	if err != nil {
 		return empty, storage.InvalidArgumentError(err)
 	}
-	raw, err := s.client.Database(req.Namespace).RunCommand(ctx, bson.Raw(req.Payload)).Raw()
+	command, err = s.prepareNativeWrite(command)
+	if err != nil {
+		return empty, err
+	}
+	raw, err := s.client.Database(req.Namespace).RunCommand(ctx, command).Raw()
 	if len(raw) == 0 {
 		var commandError mongo.CommandError
 		if errors.As(err, &commandError) {
