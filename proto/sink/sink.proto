@@ -382,13 +382,10 @@ message QueryResponse {
 // before collapse. Partial or timed-out counts fail the request.
 // Count and Query are separate observations and may differ under concurrent writes.
 message CountRequest {
+  // MongoDB find with an absent or empty filter automatically uses collection
+  // metadata when no options require exact execution. Filtered queries,
+  // aggregate pipelines and HTTP search counts remain exact.
   Command command = 1;
-
-  // Allow an estimate instead of the default exact count. MongoDB find with an
-  // absent or empty filter can use collection metadata when no options require
-  // exact execution. Filtered queries, aggregate pipelines and HTTP search
-  // counts remain exact even when this option is enabled.
-  bool estimate = 2;
 }
 
 message CountResponse {

@@ -192,7 +192,7 @@ func (s *Store) Count(ctx context.Context, req storage.CountRequest) (storage.Co
 	if err != nil {
 		return empty, storage.InvalidArgumentError(err)
 	}
-	if req.Estimate && canEstimateCount(command) {
+	if canEstimateCount(command) {
 		opts := options.EstimatedDocumentCount()
 		for _, field := range command[1:] {
 			if field.Key == "comment" {

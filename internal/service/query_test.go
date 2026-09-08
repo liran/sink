@@ -37,7 +37,7 @@ func TestQueryAndCountRouteCommonCommandAndPageWithoutOverflow(t *testing.T) {
 	if _, err := client.Query(t.Context(), request); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("invalid page size reached backend: %v", err)
 	}
-	countRequest := &sink.CountRequest{Command: command, Estimate: true}
+	countRequest := &sink.CountRequest{Command: command}
 	response, err := client.Count(t.Context(), countRequest)
 	if err != nil || response.GetCount() != 123 || !response.GetEstimated() {
 		t.Fatalf("count=%v err=%v", response, err)
@@ -45,11 +45,6 @@ func TestQueryAndCountRouteCommonCommandAndPageWithoutOverflow(t *testing.T) {
 	countCommand := (<-backend.counts).Request
 	if countCommand.Store != command.Store || countCommand.ContentType != command.ContentType || string(countCommand.Payload) != string(command.Payload) {
 		t.Fatalf("count command changed: %+v", countCommand)
-	}
-	countRequest.Estimate = false
-	response, err = client.Count(t.Context(), countRequest)
-	if err != nil || response.GetEstimated() || (<-backend.counts).Estimate {
-		t.Fatalf("exact count lost: %v err=%v", response, err)
 	}
 	command.Store = "missing"
 	if _, err := client.Count(t.Context(), countRequest); status.Code(err) != codes.InvalidArgument {

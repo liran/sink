@@ -42,7 +42,7 @@ func (s *nativeFixtureStorage) Count(_ context.Context, req storage.CountRequest
 	if s.counts != nil {
 		s.counts <- req
 	}
-	result := storage.CountResponse{Count: 123, Estimated: req.Estimate}
+	result := storage.CountResponse{Count: 123, Estimated: true}
 	return result, nil
 }
 

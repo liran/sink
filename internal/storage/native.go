@@ -53,8 +53,7 @@ type QueryRequest struct {
 }
 
 type CountRequest struct {
-	Request  NativeRequest
-	Estimate bool
+	Request NativeRequest
 }
 
 type CountResponse struct {

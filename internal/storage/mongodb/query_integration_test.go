@@ -64,10 +64,15 @@ func TestNativeMongoPagesSortProjectionAndCount(t *testing.T) {
 	if count, err := fixture.store.Count(t.Context(), countRequest); err != nil || count.Count != 4 || count.Estimated {
 		t.Fatalf("pipeline count=%+v err=%v", count, err)
 	}
+	aggregate = bson.D{{Key: "aggregate", Value: "documents"}, {Key: "pipeline", Value: bson.A{}}}
+	countRequest.Request = mongoNativeRequest(t, fixture.database, aggregate)
+	if count, err := fixture.store.Count(t.Context(), countRequest); err != nil || count.Count != 7 || count.Estimated {
+		t.Fatalf("unfiltered pipeline count=%+v err=%v", count, err)
+	}
 	missing := bson.D{{Key: "find", Value: "absent"}}
 	command = mongoNativeRequest(t, fixture.database, missing)
 	countRequest = storage.CountRequest{Request: command}
-	if count, err := fixture.store.Count(t.Context(), countRequest); err != nil || count.Count != 0 || count.Estimated {
+	if count, err := fixture.store.Count(t.Context(), countRequest); err != nil || count.Count != 0 || !count.Estimated {
 		t.Fatalf("empty count=%+v err=%v", count, err)
 	}
 }
@@ -100,23 +105,21 @@ func TestMongoEmptyCountUsesMetadataUnlessExactSemanticsAreRequired(t *testing.T
 	cases := []struct {
 		name      string
 		fields    bson.D
-		estimate  bool
 		estimated bool
 		count     uint64
 	}{
-		{name: "absent filter", estimate: true, estimated: true, count: 2},
-		{name: "empty filter", fields: bson.D{{Key: "filter", Value: bson.D{}}}, estimate: true, estimated: true, count: 2},
-		{name: "presentation ignored", fields: bson.D{{Key: "filter", Value: bson.D{}}, {Key: "skip", Value: 100}, {Key: "limit", Value: 1}}, estimate: true, estimated: true, count: 2},
-		{name: "default exact", count: 2},
-		{name: "filtered", estimate: true, fields: bson.D{{Key: "filter", Value: bson.D{{Key: "number", Value: 1}}}}, count: 1},
-		{name: "hint retained", estimate: true, fields: bson.D{{Key: "hint", Value: "_id_"}}, count: 2},
-		{name: "read concern retained", estimate: true, fields: bson.D{{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}}}, count: 2},
+		{name: "absent filter", estimated: true, count: 2},
+		{name: "empty filter", fields: bson.D{{Key: "filter", Value: bson.D{}}}, estimated: true, count: 2},
+		{name: "presentation ignored", fields: bson.D{{Key: "filter", Value: bson.D{}}, {Key: "skip", Value: 100}, {Key: "limit", Value: 1}}, estimated: true, count: 2},
+		{name: "filtered", fields: bson.D{{Key: "filter", Value: bson.D{{Key: "number", Value: 1}}}}, count: 1},
+		{name: "hint retained", fields: bson.D{{Key: "hint", Value: "_id_"}}, count: 2},
+		{name: "read concern retained", fields: bson.D{{Key: "readConcern", Value: bson.D{{Key: "level", Value: "local"}}}}, count: 2},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
 			command := bson.D{{Key: "find", Value: "documents"}, {Key: "comment", Value: test.name}}
 			command = append(command, test.fields...)
-			request := storage.CountRequest{Request: mongoNativeRequest(t, fixture.database, command), Estimate: test.estimate}
+			request := storage.CountRequest{Request: mongoNativeRequest(t, fixture.database, command)}
 			result, err := store.Count(t.Context(), request)
 			if err != nil || result.Count != test.count || result.Estimated != test.estimated {
 				t.Fatalf("count=%+v err=%v", result, err)
@@ -146,13 +149,13 @@ func TestMongoEmptyCountUsesMetadataUnlessExactSemanticsAreRequired(t *testing.T
 		{{Key: "find", Value: "documents"}, {Key: "filter", Value: nil}},
 	}
 	for _, command := range invalid {
-		request := storage.CountRequest{Request: mongoNativeRequest(t, fixture.database, command), Estimate: true}
+		request := storage.CountRequest{Request: mongoNativeRequest(t, fixture.database, command)}
 		if result, err := store.Count(t.Context(), request); err == nil || result.Count != 0 || result.Estimated {
 			t.Fatalf("invalid count accepted: %s result=%+v err=%v", command, result, err)
 		}
 	}
 	command := bson.D{{Key: "find", Value: "documents"}}
-	request := storage.CountRequest{Request: mongoNativeRequest(t, fixture.database, command), Estimate: true}
+	request := storage.CountRequest{Request: mongoNativeRequest(t, fixture.database, command)}
 	request.Request.Store = "other"
 	if _, err := store.Count(t.Context(), request); err == nil {
 		t.Fatal("estimate bypassed store validation")

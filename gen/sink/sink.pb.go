@@ -2302,13 +2302,11 @@ func (x *QueryResponse) GetHasMore() bool {
 // before collapse. Partial or timed-out counts fail the request.
 // Count and Query are separate observations and may differ under concurrent writes.
 type CountRequest struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	Command *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
-	// Allow an estimate instead of the default exact count. MongoDB find with an
-	// absent or empty filter can use collection metadata when no options require
-	// exact execution. Filtered queries, aggregate pipelines and HTTP search
-	// counts remain exact even when this option is enabled.
-	Estimate      bool `protobuf:"varint,2,opt,name=estimate,proto3" json:"estimate,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// MongoDB find with an absent or empty filter automatically uses collection
+	// metadata when no options require exact execution. Filtered queries,
+	// aggregate pipelines and HTTP search counts remain exact.
+	Command       *Command `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2348,13 +2346,6 @@ func (x *CountRequest) GetCommand() *Command {
 		return x.Command
 	}
 	return nil
-}
-
-func (x *CountRequest) GetEstimate() bool {
-	if x != nil {
-		return x.Estimate
-	}
-	return false
 }
 
 type CountResponse struct {
@@ -2648,10 +2639,9 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\aexclude\x18\x02 \x01(\bR\aexclude\"[\n" +
 	"\rQueryResponse\x12/\n" +
 	"\tdocuments\x18\x01 \x03(\v2\x11.sink.v1.DocumentR\tdocuments\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore\"V\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\":\n" +
 	"\fCountRequest\x12*\n" +
-	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\x12\x1a\n" +
-	"\bestimate\x18\x02 \x01(\bR\bestimate\"C\n" +
+	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\"C\n" +
 	"\rCountResponse\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x1c\n" +
 	"\testimated\x18\x02 \x01(\bR\testimated\"X\n" +

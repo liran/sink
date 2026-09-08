@@ -173,7 +173,7 @@ case format, direct flags, BSON examples, CI usage, and coverage guidance.
 ## Documentation
 
 - [Native queries and returned writes](docs/native-access.md) — raw BSON/HTTP
-  responses, paged queries with sorting/projection, counts with an empty-filter estimate option, managed cursors,
+  responses, paged queries with sorting/projection, counts with automatic empty-filter estimates, managed cursors,
   index setup, and atomic counter results
 - [Document write flow](docs/document-write-flow.md) — follow one document
   through synchronous writes, Kafka workers, Lua merges, batching, and completion

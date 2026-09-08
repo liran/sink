@@ -77,13 +77,10 @@ func (s *Server) Count(ctx context.Context, req *sink.CountRequest) (*sink.Count
 		return nil, err
 	}
 	defer release()
-	countRequest := storage.CountRequest{Request: request, Estimate: req.GetEstimate()}
+	countRequest := storage.CountRequest{Request: request}
 	count, err := backend.Count(ctx, countRequest)
 	if err != nil {
 		return nil, nativeStatus(err)
-	}
-	if !req.GetEstimate() && count.Estimated {
-		return nil, status.Error(codes.Internal, "backend returned an estimate for an exact count")
 	}
 	response := &sink.CountResponse{Count: count.Count, Estimated: count.Estimated}
 	return response, nil

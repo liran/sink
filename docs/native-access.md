@@ -126,15 +126,14 @@ Deep pages incur backend offset costs and result-window limits, including the
 extra result needed for `has_more`. Use Scan for sustained traversal.
 
 `CountRequest` takes the same Command and returns uint64 `count` plus `estimated`.
-Counts are exact by default. With `CountRequest.estimate=true`, MongoDB find with
-a missing or empty document filter uses `EstimatedDocumentCount`, obtaining
-collection metadata without scanning the documents. `estimated=true` identifies
-this fast path. The option permits estimation; it does not force it. Filtered
-finds and aggregate pipelines remain exact. Options that metadata counts cannot honor (such as hint,
+MongoDB find with a missing or empty document filter automatically uses
+`EstimatedDocumentCount`, obtaining collection metadata without scanning the
+documents. `estimated=true` identifies this fast path. Filtered finds and
+aggregate pipelines remain exact. Options that metadata counts cannot honor (such as hint,
 collation, readConcern, let or allowDiskUse) also retain the exact path. Comment
 is forwarded by both paths; presentation options do not affect the total.
 Metadata estimates follow MongoDB's accuracy limitations, including sharded
-collections and recovery; use exact counting when an exact total is required.
+collections and recovery; use an aggregate pipeline when an exact total is required.
 
 MongoDB counts find matches before skip/limit, or the output of a supplied
 read-only aggregate pipeline. Find filters, hints, collation, read concern, let,
