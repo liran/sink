@@ -9,12 +9,12 @@ quickstart. Deployment settings and their validation rules live in the
 
 ## Request path
 
-Applications send JSON record operations over gRPC. Each operation carries a
+Applications send BSON or JSON record operations over gRPC. Each operation carries a
 logical address, and Sink routes it to the configured store with the matching
 name. The selected adapter converts the storage-independent record into native
 MongoDB, Elasticsearch, or OpenSearch work.
 
-The public service exposes three methods:
+The record API exposes three methods:
 
 - `Read` reads one or more records.
 - `Write` performs complete-document puts or Lua-driven merges.
@@ -23,6 +23,12 @@ The public service exposes three methods:
 All three methods are batch-native. A one-operation request is the single-record
 form. Results remain in request order and include their operation index, even
 when Sink executes independent work concurrently.
+
+`Execute` adds native queries and index management on one configured store.
+`Scan` streams native MongoDB documents or search hits while Sink owns the
+database cursor. These methods share service admission with record requests,
+bypass the record micro-batcher and Kafka, and do not accept data mutations.
+See [native access](native-access.md) for supported commands and error semantics.
 
 The default maximum encoded gRPC request and response size is 64 MiB. Operation
 counts and transport sizes are configurable independently.
@@ -105,8 +111,9 @@ formatting whitespace to satisfy Bulk NDJSON framing. It uses
 `_primary_term` as an opaque revision token. Several configured endpoints are
 used for transport failover.
 
-Sink does not create or manage indexes, mappings, or aliases. The address's
-`dataset` must name a complete existing index or alias.
+The address's `dataset` must name a complete existing index or alias. Applications
+can explicitly create indexes and update mappings, settings, and aliases through
+`Execute`; record writes do not initialize them.
 
 ## Ordering, concurrency, and batching
 
@@ -114,7 +121,7 @@ Atomicity is per record, never per request. Operations for the same address run
 in request order. Operations for different records or stores may run
 concurrently.
 
-Synchronous Puts and Merges for one address evaluate in order and share the
+By default, synchronous Puts and Merges for one address evaluate in order and share the
 final commit and revision. Create/Replace conditions apply to the working state.
 All-Upsert chains write their last document without a read; conditional or mixed
 chains use one snapshot and a conditional commit. Repeated Reads fetch once,
@@ -122,6 +129,10 @@ while every returned copy still consumes the response budget. Repeated Deletes
 delete once. Intermediate writes are not individually persisted or validated by
 the backend; see the [folding contract](merge-folding.md) for result, visibility,
 and failure semantics.
+
+If any operation in a same-address chain requests `return_document`, the chain
+instead commits each operation separately in order. A successful requested result
+contains that operation's logical output and own revision, without a later read.
 
 In `server` and `all` modes, Sink automatically coalesces concurrent
 one-operation RPCs into bounded, process-local batches for each store. Reads

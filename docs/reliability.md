@@ -161,7 +161,8 @@ does not roll back an already executed mutation.
 
 For Elasticsearch/OpenSearch, verify index replicas across failure domains,
 `index.translog.durability=request`, shard health, disk watermarks, and snapshot
-restore. Sink does not create/manage index settings. Confirm acknowledgement and
+restore. Sink does not automatically initialize index settings; applications can
+manage them explicitly through native Execute. Confirm acknowledgement and
 visibility semantics against the cluster actually being deployed.
 
 Do not change partition counts online. Pause every publisher, drain and settle
