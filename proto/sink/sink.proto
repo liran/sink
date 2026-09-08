@@ -244,8 +244,9 @@ enum FailureCode {
 }
 
 // Native operations route through a configured store; callers never provide
-// database connection addresses or credentials. Only supported read and index
-// management commands are accepted. Data mutations use Write and Delete.
+// database connection addresses or credentials. Execute forwards native commands
+// with database semantics; MongoDB cursor and session commands are rejected.
+// Use Scan for supported cursor queries and Write/Delete for record semantics.
 message ExecuteRequest {
   string store = 1;
   oneof command {

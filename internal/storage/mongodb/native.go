@@ -48,21 +48,12 @@ func validateNativeCommand(req storage.NativeRequest, scan bool) (bson.D, error)
 		return command, nil
 	}
 	switch name {
-	case "count", "distinct", "collStats", "dbStats", "ping", "createIndexes", "dropIndexes":
-		return command, nil
-	case "explain":
-		inner, ok := command[0].Value.(bson.D)
-		if !ok || len(inner) == 0 {
-			return command, errors.New("explain requires a read command")
-		}
-		switch inner[0].Key {
-		case "find", "aggregate", "count", "distinct":
-			if !forbiddenNativeValue(inner) {
-				return command, nil
-			}
-		}
+	case "find", "aggregate", "listIndexes", "listCollections", "getMore", "killCursors", "parallelCollectionScan", "bulkWrite":
+		return command, fmt.Errorf("command %q uses a cursor; Execute does not manage cursor sessions, use Scan for supported cursor queries", name)
+	case "startSession", "refreshSessions", "endSessions", "commitTransaction", "abortTransaction":
+		return command, fmt.Errorf("command %q requires client-managed sessions, which Execute does not support", name)
 	}
-	return command, fmt.Errorf("command %q is unsupported; use Scan for cursors and Write/Delete for data mutations", name)
+	return command, nil
 }
 
 func forbiddenNativeValue(value any) bool {
@@ -100,6 +91,10 @@ func (s *Store) Execute(ctx context.Context, req storage.NativeRequest) (storage
 		var commandError mongo.CommandError
 		if errors.As(err, &commandError) {
 			raw = commandError.Raw
+		}
+		var writeError mongo.WriteException
+		if errors.As(err, &writeError) {
+			raw = writeError.Raw
 		}
 	}
 	if len(raw) == 0 {

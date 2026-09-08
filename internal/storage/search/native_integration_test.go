@@ -141,3 +141,56 @@ func TestNativeSearchIndexInitialization(t *testing.T) {
 		t.Fatalf("index existence=%+v err=%v", response, err)
 	}
 }
+
+func TestNativeSearchWritesAndIndexDeletion(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	command := &storage.SearchCommand{Method: http.MethodPut, Path: "/" + fixture.index + "/_doc/native%2Fid",
+		Query: "refresh=wait_for", Body: []byte(`{"count":1}`)}
+	req := storage.NativeRequest{Store: "primary", Search: command, MaxBytes: 1 << 20}
+	response, err := fixture.store.Execute(t.Context(), req)
+	if err != nil || !response.Success || response.StatusCode != http.StatusCreated {
+		t.Fatalf("native insert response=%+v err=%v", response, err)
+	}
+	command.Method = http.MethodPost
+	command.Path = "/" + fixture.index + "/_update/native%2Fid"
+	command.Body = []byte(`{"doc":{"count":2}}`)
+	response, err = fixture.store.Execute(t.Context(), req)
+	if err != nil || !response.Success {
+		t.Fatalf("native update response=%+v err=%v", response, err)
+	}
+	command.Method = http.MethodGet
+	command.Path = "/" + fixture.index + "/_source/native%2Fid"
+	command.Query = ""
+	command.Body = nil
+	response, err = fixture.store.Execute(t.Context(), req)
+	var document struct {
+		Count int `json:"count"`
+	}
+	if err != nil || !response.Success {
+		t.Fatalf("native get response=%+v err=%v", response, err)
+	}
+	if err := json.Unmarshal(response.Payload, &document); err != nil || document.Count != 2 {
+		t.Fatalf("native update was not applied: %s err=%v", response.Payload, err)
+	}
+	command.Method = http.MethodPost
+	command.Path = "/" + fixture.index + "/_bulk"
+	command.Body = []byte("{\"index\":{\"_id\":\"bulk\"}}\n{\"count\":3}\n")
+	response, err = fixture.store.Execute(t.Context(), req)
+	var bulk struct {
+		Errors bool              `json:"errors"`
+		Items  []json.RawMessage `json:"items"`
+	}
+	if err != nil || !response.Success {
+		t.Fatalf("native bulk response=%+v err=%v", response, err)
+	}
+	if err := json.Unmarshal(response.Payload, &bulk); err != nil || bulk.Errors || len(bulk.Items) != 1 {
+		t.Fatalf("native bulk payload=%s err=%v", response.Payload, err)
+	}
+	command.Method = http.MethodDelete
+	command.Path = "/" + fixture.index
+	command.Body = nil
+	response, err = fixture.store.Execute(t.Context(), req)
+	if err != nil || !response.Success {
+		t.Fatalf("native index deletion response=%+v err=%v", response, err)
+	}
+}

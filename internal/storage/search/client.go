@@ -20,6 +20,7 @@ var errResponseTooLarge = errors.New("search response exceeds configured byte li
 type requestOptions struct {
 	method      string
 	path        string
+	rawPath     string
 	contentType string
 	payload     []byte
 	query       url.Values
@@ -67,6 +68,9 @@ func (s *Store) perform(ctx context.Context, opts requestOptions) (apiResponse, 
 	var lastErr error
 	for range attempts {
 		state, endpoint := s.endpoint(opts.path)
+		if opts.rawPath != "" {
+			endpoint.RawPath = strings.TrimRight(state.value.EscapedPath(), "/") + opts.rawPath
+		}
 		endpoint.RawQuery = opts.query.Encode()
 		response, err := s.performOnce(ctx, opts, endpoint)
 		if err != nil {

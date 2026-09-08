@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/liran/sink/internal/storage"
+	"golang.org/x/net/http/httpguts"
 )
 
 func nativeOptions(req storage.NativeRequest) (requestOptions, error) {
@@ -20,21 +21,23 @@ func nativeOptions(req storage.NativeRequest) (requestOptions, error) {
 	}
 	command := req.Search
 	path := command.Path
-	if !strings.HasPrefix(path, "/") || strings.ContainsAny(path, "?#%\\\x00\r\n") {
-		return opts, errors.New("native path must be an unescaped absolute endpoint path")
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "?#\\\x00\r\n") {
+		return opts, errors.New("native path must be an absolute endpoint path without a host, query, or fragment")
 	}
-	for _, part := range strings.Split(strings.TrimPrefix(path, "/"), "/") {
-		if part == "." || part == ".." || (part == "" && path != "/") {
-			return opts, errors.New("native path cannot contain empty or dot segments")
+	decoded, err := url.PathUnescape(path)
+	if err != nil {
+		return opts, fmt.Errorf("decode native path: %w", err)
+	}
+	if strings.HasPrefix(decoded, "//") || strings.ContainsAny(decoded, "\\\x00\r\n") {
+		return opts, errors.New("invalid native endpoint path")
+	}
+	for _, part := range strings.Split(decoded, "/") {
+		if part == "." || part == ".." {
+			return opts, errors.New("native path cannot contain dot segments")
 		}
 	}
-	if !allowedNativePath(command.Method, path) {
-		return opts, errors.New("unsupported search command; data mutations require Write/Delete")
-	}
-	if path == "/_aliases" {
-		if err := validateAliasActions(command.Body); err != nil {
-			return opts, err
-		}
+	if command.Method == "" || !httpguts.ValidHeaderFieldName(command.Method) {
+		return opts, errors.New("native HTTP method must be a nonempty token")
 	}
 	query, err := url.ParseQuery(command.Query)
 	if err != nil {
@@ -42,86 +45,27 @@ func nativeOptions(req storage.NativeRequest) (requestOptions, error) {
 	}
 	headers := make(http.Header)
 	for name, values := range command.Headers {
+		if !httpguts.ValidHeaderFieldName(name) {
+			return opts, errors.New("invalid HTTP header name")
+		}
 		switch strings.ToLower(name) {
-		case "accept", "content-type", "x-opaque-id":
-		default:
-			return opts, fmt.Errorf("request header %q is not supported", name)
+		case "authorization", "proxy-authorization", "host", "connection", "proxy-connection", "keep-alive", "te", "trailer", "transfer-encoding", "upgrade", "content-length":
+			return opts, fmt.Errorf("request header %q is managed by Sink's transport", name)
 		}
 		for _, value := range values {
-			if strings.ContainsAny(value, "\r\n\x00") {
+			if !httpguts.ValidHeaderFieldValue(value) {
 				return opts, errors.New("invalid HTTP header value")
 			}
 			headers.Add(name, value)
 		}
 	}
 	contentType := ContentTypeJSON
-	if strings.HasSuffix(path, "/_msearch") {
+	if strings.HasSuffix(decoded, "/_msearch") || strings.HasSuffix(decoded, "/_bulk") {
 		contentType = "application/x-ndjson"
 	}
-	opts = requestOptions{method: command.Method, path: path, payload: command.Body,
+	opts = requestOptions{method: command.Method, path: decoded, rawPath: path, payload: command.Body,
 		query: query, headers: headers, contentType: contentType, maxBytes: int64(req.MaxBytes), native: true}
 	return opts, nil
-}
-
-func validateAliasActions(payload []byte) error {
-	var body struct {
-		Actions []map[string]json.RawMessage `json:"actions"`
-	}
-	if err := json.Unmarshal(payload, &body); err != nil {
-		return errors.New("alias management requires a JSON actions array")
-	}
-	for _, action := range body.Actions {
-		for name := range action {
-			if name != "add" && name != "remove" {
-				return errors.New("alias management only permits add/remove; index deletion is unsupported")
-			}
-		}
-	}
-	return nil
-}
-
-func allowedNativePath(method, path string) bool {
-	parts := strings.Split(strings.Trim(path, "/"), "/")
-	read := method == http.MethodGet || method == http.MethodPost
-	if path == "/" {
-		return method == http.MethodGet || method == http.MethodHead
-	}
-	if path == "/_search/scroll" {
-		return read || method == http.MethodDelete
-	}
-	if path == "/_aliases" {
-		return method == http.MethodPost
-	}
-	if len(parts) == 1 {
-		if read && (parts[0] == "_search" || parts[0] == "_msearch" || parts[0] == "_count") {
-			return true
-		}
-		return !strings.HasPrefix(parts[0], "_") && (method == http.MethodPut || method == http.MethodHead || method == http.MethodGet)
-	}
-	if parts[0] == "_cat" && parts[1] == "indices" && len(parts) <= 3 {
-		return method == http.MethodGet
-	}
-	if len(parts) == 2 && !strings.HasPrefix(parts[0], "_") {
-		switch parts[1] {
-		case "_search", "_msearch", "_count":
-			return read
-		case "_mapping", "_settings":
-			return method == http.MethodGet || method == http.MethodPut
-		case "_alias":
-			return method == http.MethodGet
-		case "_refresh":
-			return method == http.MethodPost
-		}
-	}
-	if len(parts) == 3 && !strings.HasPrefix(parts[0], "_") {
-		switch parts[1] {
-		case "_doc", "_source":
-			return method == http.MethodGet || method == http.MethodHead
-		case "_explain":
-			return read
-		}
-	}
-	return false
 }
 
 func (s *Store) Execute(ctx context.Context, req storage.NativeRequest) (storage.NativeResponse, error) {

@@ -24,11 +24,13 @@ All three methods are batch-native. A one-operation request is the single-record
 form. Results remain in request order and include their operation index, even
 when Sink executes independent work concurrently.
 
-`Execute` adds native queries and index management on one configured store.
+`Execute` forwards native commands on one configured store.
 `Scan` streams native MongoDB documents or search hits while Sink owns the
-database cursor. These methods share service admission with record requests,
-bypass the record micro-batcher and Kafka, and do not accept data mutations.
-See [native access](native-access.md) for supported commands and error semantics.
+database cursor. These methods share service admission with record requests
+and bypass the record micro-batcher and Kafka. Native Execute mutations use
+backend semantics. MongoDB Execute rejects cursor and client-managed session
+commands; Scan owns supported query cursors.
+See [native access](native-access.md) for cursor restrictions and error semantics.
 
 The default maximum encoded gRPC request and response size is 64 MiB. Operation
 counts and transport sizes are configurable independently.

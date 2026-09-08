@@ -7,7 +7,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
-func TestNativeCommandRejectsMutationAndSessionBypasses(t *testing.T) {
+func TestNativeCommandAllowsWritesAndRejectsCursorSessionState(t *testing.T) {
 	tests := []struct {
 		name    string
 		command string
@@ -18,15 +18,29 @@ func TestNativeCommandRejectsMutationAndSessionBypasses(t *testing.T) {
 		{name: "index", command: `{"createIndexes":"products","indexes":[{"key":{"signature":1},"name":"signature","unique":true}]}`, allowed: true},
 		{name: "find", command: `{"find":"products","filter":{}}`, scan: true, allowed: true},
 		{name: "aggregate", command: `{"aggregate":"products","pipeline":[{"$match":{"active":true}}],"cursor":{}}`, scan: true, allowed: true},
-		{name: "update", command: `{"update":"products","updates":[]}`},
+		{name: "update", command: `{"update":"products","updates":[]}`, allowed: true},
 		{name: "cursor requires scan", command: `{"find":"products"}`},
 		{name: "transaction", command: `{"count":"products","autocommit":false}`},
 		{name: "session", command: `{"count":"products","lsid":{}}`},
+		{name: "start session", command: `{"startSession":1}`},
+		{name: "commit transaction", command: `{"commitTransaction":1}`},
 		{name: "database override", command: `{"count":"products","$db":"another"}`},
 		{name: "duplicate command", command: `{"count":"products","count":"another"}`},
+		{name: "insert", command: `{"insert":"products","documents":[]}`, allowed: true},
+		{name: "delete", command: `{"delete":"products","deletes":[]}`, allowed: true},
+		{name: "findAndModify", command: `{"findAndModify":"products","query":{},"update":{"$inc":{"count":1}},"new":true}`, allowed: true},
+		{name: "drop", command: `{"drop":"products"}`, allowed: true},
+		{name: "unknown command forwarded", command: `{"futureCommand":1}`, allowed: true},
+		{name: "getMore", command: `{"getMore":{"$numberLong":"123"},"collection":"products"}`},
+		{name: "killCursors", command: `{"killCursors":"products","cursors":[]}`},
+		{name: "list indexes requires scan", command: `{"listIndexes":"products"}`},
+		{name: "list collections requires scan", command: `{"listCollections":1}`},
+		{name: "aggregate requires scan", command: `{"aggregate":"products","pipeline":[],"cursor":{}}`},
+		{name: "bulkWrite cursor", command: `{"bulkWrite":1,"ops":[],"nsInfo":[]}`},
+		{name: "parallel cursor", command: `{"parallelCollectionScan":"products","numCursors":1}`},
 		{name: "out", command: `{"aggregate":"products","pipeline":[{"$out":"another"}]}`, scan: true},
 		{name: "nested merge", command: `{"aggregate":"products","pipeline":[{"$facet":{"x":[{"$merge":"another"}]}}]}`, scan: true},
-		{name: "explain update", command: `{"explain":{"update":"products","updates":[]}}`},
+		{name: "explain update", command: `{"explain":{"update":"products","updates":[]}}`, allowed: true},
 		{name: "explain find", command: `{"explain":{"find":"products","filter":{}}}`, allowed: true},
 		{name: "tail", command: `{"find":"products","tailable":true}`, scan: true},
 		{name: "single batch", command: `{"find":"products","singleBatch":true}`, scan: true},

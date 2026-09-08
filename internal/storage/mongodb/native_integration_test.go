@@ -174,3 +174,50 @@ func TestMongoReturningMergeCommitsIndependentCounterValues(t *testing.T) {
 		t.Fatal("writes shared a revision")
 	}
 }
+
+func TestNativeMongoWritesPreserveResultsAndWriteErrors(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	ctx := t.Context()
+	document := bson.D{{Key: "_id", Value: "native"}, {Key: "count", Value: int64(1)}}
+	insert := bson.D{{Key: "insert", Value: "documents"}, {Key: "documents", Value: bson.A{document}}}
+	req := mongoNativeRequest(t, fixture.database, insert)
+	response, err := fixture.store.Execute(ctx, req)
+	if err != nil || !response.Success || bson.Raw(response.Payload).Lookup("n").AsInt64() != 1 {
+		t.Fatalf("native insert response=%+v err=%v", response, err)
+	}
+	response, err = fixture.store.Execute(ctx, req)
+	if err != nil || response.Success {
+		t.Fatalf("duplicate insert did not return native failure: %+v err=%v", response, err)
+	}
+	raw := bson.Raw(response.Payload)
+	writeErrors, arrayErr := raw.Lookup("writeErrors").Array().Values()
+	if arrayErr != nil || len(writeErrors) != 1 || writeErrors[0].Document().Lookup("code").AsInt64() != 11000 || raw.Lookup("ok").Double() != 1 {
+		t.Fatalf("write error envelope lost: %s err=%v", raw, arrayErr)
+	}
+	modify := bson.D{{Key: "findAndModify", Value: "documents"}, {Key: "query", Value: bson.D{{Key: "_id", Value: "native"}}},
+		{Key: "update", Value: bson.D{{Key: "$inc", Value: bson.D{{Key: "count", Value: int64(1)}}}}}, {Key: "new", Value: true}}
+	req = mongoNativeRequest(t, fixture.database, modify)
+	response, err = fixture.store.Execute(ctx, req)
+	if err != nil || !response.Success || bson.Raw(response.Payload).Lookup("value", "count").Int64() != 2 {
+		t.Fatalf("findAndModify response=%+v err=%v", response, err)
+	}
+	find := bson.D{{Key: "find", Value: "documents"}, {Key: "batchSize", Value: int32(1)}}
+	req = mongoNativeRequest(t, fixture.database, find)
+	_, err = fixture.store.Execute(ctx, req)
+	code, _ := storage.ErrorDetails(err)
+	if code != storage.ErrorCodeInvalidArgument {
+		t.Fatalf("cursor command must be rejected: %v", err)
+	}
+	unknown := bson.D{{Key: "sinkUnknownNativeCommand", Value: 1}}
+	req = mongoNativeRequest(t, fixture.database, unknown)
+	response, err = fixture.store.Execute(ctx, req)
+	if err != nil || response.Success || bson.Raw(response.Payload).Lookup("code").AsInt64() != 59 {
+		t.Fatalf("unknown command should reach MongoDB: %+v err=%v", response, err)
+	}
+	drop := bson.D{{Key: "drop", Value: "documents"}}
+	req = mongoNativeRequest(t, fixture.database, drop)
+	response, err = fixture.store.Execute(ctx, req)
+	if err != nil || !response.Success {
+		t.Fatalf("native drop response=%+v err=%v", response, err)
+	}
+}

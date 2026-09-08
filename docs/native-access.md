@@ -1,17 +1,17 @@
 # Native queries, streaming scans, and returned writes
 
 Applications can move their database connections and runtime clients into Sink
-while retaining native query languages. Existing `Read`, `Write`, `Delete`, Lua
-Merge, completion modes, and per-record revisions remain the mutation contract.
-`Execute` handles native queries and index setup; `Scan` handles cursor lifetime.
-The Go SDK exposes both methods plus returned-document options on Dataset writes.
+while retaining native query languages. `Execute` sends native commands and
+returns the database response; `Scan` provides managed streaming for cursor
+queries. Existing `Read`, `Write`, `Delete`, Lua Merge, completion modes, and
+returned-document options remain available.
 
-These are additive capabilities, not a database wire-protocol proxy. Native
-queries remain specific to the selected backend. Multi-record transactions,
-client-managed sessions, change streams, and arbitrary native document mutations
-are outside this contract. Business operations confined to one document can use
-a Lua Merge with compare-and-swap retries. Cross-document atomicity requires a
-different data model or an additional transaction contract.
+These capabilities are additive to the protocol, not a database wire-protocol
+proxy. Native commands retain backend-specific semantics. Native mutations do
+not participate in Sink's revision checks, Lua merges, record batching, or
+asynchronous completion modes. Applications mixing native MongoDB writes with
+the record API must coordinate them: changing a document without advancing its
+Sink revision can invalidate optimistic concurrency assumptions.
 
 ## Execute
 
@@ -27,14 +27,16 @@ error with a complete response is a successful gRPC exchange with `success=false
 the SDK returns both the response and a `NativeError` retaining it. Transport,
 validation, cancellation, and capacity failures use gRPC errors without a native
 response. HTTP 2xx marks search success; inspect the raw body for partial errors,
-including failures inside `_msearch` responses.
+including item failures inside `_msearch` and `_bulk` responses.
 
 MongoDB payloads are raw BSON, including BSON datetimes, numeric widths, ObjectIDs,
 binary values, and database error fields. Search payloads retain the native HTTP
 entity bytes and framing, including NDJSON, JSON whitespace, and non-JSON output.
 HTTP transport may decode compression and normalize header names; this is not
 byte-for-byte forwarding of HTTP packets. Redirects are returned without being
-followed. Supported request headers are `Accept`, `Content-Type`, and `X-Opaque-Id`.
+followed. Request headers are forwarded except transport-owned headers:
+`Authorization`, `Proxy-Authorization`, `Host`, `Connection`, `Proxy-Connection`,
+`Keep-Alive`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`, and `Content-Length`.
 The query field uses URL query encoding and preserves repeated parameter values.
 
 ### MongoDB commands
@@ -42,48 +44,49 @@ The query field uses URL query encoding and preserves repeated parameter values.
 The database is separate from an ordered BSON command. The first BSON field is
 the command name; use a struct, `bson.D`, or `bson.Raw`, not an unordered map.
 
-| Method | Commands |
-| --- | --- |
-| Execute | `count`, `distinct`, `collStats`, `dbStats`, `ping`, `createIndexes`, `dropIndexes` |
-| Execute | `explain` wrapping a read-only `find`, `aggregate`, `count`, or `distinct` |
-| Scan | `find`, read-only `aggregate`, `listIndexes`, `listCollections` |
+Execute does not use a command allowlist. Commands such as `count`, `distinct`,
+`explain`, `createIndexes`, `insert`, `update`, `delete`, `findAndModify`, and
+`drop` go to MongoDB, which decides whether they are valid and authorized.
+Unknown commands also reach MongoDB and return its native error.
 
-Filters, sorts, projections, hints, aggregation pipelines, and supported native
-options stay in BSON. For example, index setup can pass `createIndexes` with
-unique, compound, or partial index definitions; the database decides whether an
-existing definition is compatible and returns its original result.
+Cursor commands are the exception: `find`, `aggregate`, `listIndexes`,
+`listCollections`, `getMore`, `killCursors`, `parallelCollectionScan`, and
+MongoDB's cursor-returning `bulkWrite` are rejected before execution. Execute
+uses the driver's ordinary command path and does not retain a session or pin a
+server across RPCs. Use Scan for `find`, read-only `aggregate`, `listIndexes`,
+and `listCollections`. Cursor writes such as `bulkWrite` and data-writing
+aggregations are outside the supported Scan contract; collection-level
+`insert`, `update`, and `delete` commands remain available through Execute.
 
-Duplicate top-level fields and driver-managed `$db`, `lsid`, `txnNumber`,
-`startTransaction`, `autocommit`, `apiVersion`, `apiStrict`, `apiDeprecationErrors`,
-`maxTimeMS`, and `$readPreference` are rejected. Use the RPC context for deadlines.
-Data-writing aggregation stages (`$out`, `$merge`), change streams, tailable
-cursors, `awaitData`, `noCursorTimeout`, and `singleBatch` are rejected. This check
-is deliberately conservative and applies to nested BSON fields as well.
+Client-managed sessions and transactions are also unsupported. `startSession`,
+`refreshSessions`, `endSessions`, `commitTransaction`, and `abortTransaction`
+are rejected. Duplicate top-level fields and driver-managed `$db`, `lsid`,
+`txnNumber`, `startTransaction`, `autocommit`, `apiVersion`, `apiStrict`,
+`apiDeprecationErrors`, `maxTimeMS`, and `$readPreference` fields are rejected.
+Use the RPC context for deadlines. Other filters, sorts, projections, hints,
+write concerns, and native command options remain in BSON.
+
+For example, `Execute` with `{find: "products"}` returns `INVALID_ARGUMENT`
+without opening a database cursor. The same command passed to `Scan` streams
+individual BSON documents and closes the cursor when the stream ends.
+`findAndModify` returns a single response document and is accepted by Execute.
 
 ### Elasticsearch and OpenSearch endpoints
 
-Paths are unescaped absolute endpoint paths with no host, query, empty segments,
-dot segments, or fragment. `{index}` can use the backend's index/alias expressions.
+Execute forwards any valid HTTP method and endpoint path within the configured
+store; there is no endpoint or action allowlist. This includes document writes,
+`_bulk`, index deletion, alias `remove_index`, queries, index management, and
+plugin endpoints. The backend returns its own response for unsupported requests.
 
-| Endpoint | Methods |
-| --- | --- |
-| `/` | GET, HEAD |
-| `/_search`, `/_msearch`, `/_count`, and `/{index}/` equivalents | GET, POST |
-| `/_search/scroll` | GET, POST, DELETE |
-| `/{index}` | GET, HEAD, PUT (explicit index creation) |
-| `/{index}/_mapping`, `/{index}/_settings` | GET, PUT |
-| `/_aliases` | POST, with `add` and `remove` actions only |
-| `/{index}/_alias` | GET |
-| `/{index}/_refresh` | POST |
-| `/_cat/indices`, `/_cat/indices/{index}` | GET |
-| `/{index}/_doc/{id}`, `/{index}/_source/{id}` | GET, HEAD |
-| `/{index}/_explain/{id}` | GET, POST |
+Paths are absolute endpoint paths with no host, query, dot segments, or fragment.
+Percent-encoded document IDs are supported. Supply query parameters separately;
+`{index}` can use the backend's index and alias expressions. Authentication and
+the endpoint host remain configured by Sink.
 
-`_msearch` defaults to `application/x-ndjson`; retain the final newline in the
-body. Other requests default to JSON. The native search DSL preserves queries,
-aggregations, scoring, sorting, pagination, total hits, and raw response metadata.
-Document writes, Bulk writes, index deletion, and alias `remove_index` are
-unsupported so they cannot bypass Sink's revision-aware mutation path.
+`_msearch` and `_bulk` default to `application/x-ndjson`; retain the final newline
+in the body. Other requests default to JSON, overridable with `Content-Type`.
+The body stays opaque. Callers may manage search scrolls or other native
+pagination explicitly through Execute and are responsible for closing them.
 
 ## Scan
 
@@ -94,6 +97,11 @@ failure, timeout, and database errors terminate the scan; cleanup uses a separat
 five-second context even after the original context was canceled. Cleanup is
 best effort if the database is unavailable. Server cursor expiry remains the
 fallback after a lost connection or process termination.
+
+MongoDB Scan accepts `find`, read-only `aggregate`, `listIndexes`, and
+`listCollections`. Data-writing aggregation stages (`$out`, `$merge`), change
+streams, tailable cursors, `awaitData`, `noCursorTimeout`, and `singleBatch` are
+rejected. This check is conservative and applies to nested BSON fields as well.
 
 MongoDB Scan streams each native cursor document as BSON. It overrides the
 initial and subsequent batch sizes. Filters, sort, projection, aggregation, and
@@ -164,6 +172,7 @@ budgets are not an exact process memory limit.
 
 Execute and Scan do not use the record micro-batcher or asynchronous queue. The
 SDK never retries either call. Native search requests use one endpoint attempt;
-MongoDB command execution uses the driver's command path. Index operations can
-have taken effect even when their acknowledgement is lost. Callers should use
-idempotent initialization and inspect native conflicts before retrying.
+MongoDB command execution uses the driver's ordinary command path and its
+configured retry behavior. Native mutations can have taken effect even when an
+acknowledgement is lost. Callers must inspect native results and determine
+whether replay is safe; a timeout does not imply that a write was unapplied.

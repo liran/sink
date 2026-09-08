@@ -43,18 +43,12 @@ func TestNativeExecutePreservesErrorBodyAndHeadersWithoutRetry(t *testing.T) {
 	}
 }
 
-func TestNativePathsRejectWritesAndConnectionOverrides(t *testing.T) {
+func TestNativePathsRejectConnectionOverrides(t *testing.T) {
 	tests := []storage.SearchCommand{
-		{Method: "POST", Path: "/_bulk"},
-		{Method: "POST", Path: "/products/_update/id"},
-		{Method: "PUT", Path: "/products/_doc/id"},
-		{Method: "DELETE", Path: "/products"},
 		{Method: "GET", Path: "http://other/_search"},
 		{Method: "GET", Path: "/products/../_search"},
 		{Method: "GET", Path: "/products/%2e%2e/_search"},
 		{Method: "GET", Path: "//_search"},
-		{Method: "GET", Path: "/products/_search/"},
-		{Method: "POST", Path: "/_aliases", Body: []byte(`{"actions":[{"remove_index":{"index":"products"}}]}`)},
 		{Method: "GET", Path: "/products/_search", Headers: http.Header{"Authorization": {"override"}}},
 	}
 	for _, command := range tests {
@@ -212,5 +206,44 @@ func TestNativeExecuteCapsResponseAndDoesNotFollowRedirect(t *testing.T) {
 	result, err := store.Execute(t.Context(), req)
 	if err != nil || result.StatusCode != 302 || targetCalls.Load() != 0 {
 		t.Fatalf("redirect response=%+v err=%v target=%d", result, err, targetCalls.Load())
+	}
+}
+
+func TestNativeExecuteForwardsArbitraryMethodsPathsAndBodies(t *testing.T) {
+	commands := []storage.SearchCommand{
+		{Method: "POST", Path: "/_bulk", Body: []byte("{\"index\":{\"_index\":\"products\"}}\n{\"value\":1}\n")},
+		{Method: "POST", Path: "/products/_update/id", Body: []byte(`{"doc":{"value":2}}`)},
+		{Method: "PUT", Path: "/products/_doc/a%2Fb%20c", Body: []byte(`{"value":1}`)},
+		{Method: "DELETE", Path: "/products"},
+		{Method: "POST", Path: "/_aliases", Body: []byte(`{"actions":[{"remove_index":{"index":"products"}}]}`)},
+		{Method: "PATCH", Path: "/_plugins/future/endpoint/", Body: []byte("opaque")},
+	}
+	for _, command := range commands {
+		t.Run(command.Method+command.Path, func(t *testing.T) {
+			command.Headers = http.Header{"X-Native-Option": {"value"}}
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				if r.Method != command.Method || r.URL.EscapedPath() != "/prefix"+command.Path || string(body) != string(command.Body) || r.Header.Get("X-Native-Option") != "value" {
+					t.Errorf("request changed: %s %s %s", r.Method, r.URL.EscapedPath(), body)
+				}
+				if command.Path == "/_bulk" && r.Header.Get("Content-Type") != "application/x-ndjson" {
+					t.Error("bulk lost NDJSON content type")
+				}
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte("original backend error\n"))
+			})
+			server := httptest.NewServer(handler)
+			defer server.Close()
+			opts := Options{Driver: DriverOpenSearch, Store: "search", Endpoints: []string{server.URL + "/prefix"}}
+			store, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := storage.NativeRequest{Store: "search", Search: &command, MaxBytes: 4096}
+			response, err := store.Execute(t.Context(), req)
+			if err != nil || response.Success || response.StatusCode != 400 || string(response.Payload) != "original backend error\n" {
+				t.Fatalf("response=%+v err=%v", response, err)
+			}
+		})
 	}
 }

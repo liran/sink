@@ -21,7 +21,7 @@ Sink centralizes those concerns:
 | Problem | What Sink provides |
 | --- | --- |
 | Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON or BSON documents |
-| Queries and index setup still need direct database clients | Native `Execute` and streaming `Scan` reuse Sink's configured connections |
+| Native commands still need direct database clients | Native `Execute` and streaming `Scan` reuse Sink's configured connections |
 | Every crawler process opens its own database connections | Database connections move into the smaller Sink tier, so connection growth follows Sink replicas instead of crawler processes |
 | Many small calls overload storage | Automatic bounded batching, concurrency limits, and backpressure per store |
 | Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
@@ -68,7 +68,7 @@ key = product-42
 `store` selects a configured backend. For MongoDB, `namespace` and `dataset`
 are the database and collection. For Elasticsearch and OpenSearch, `dataset`
 is the complete existing index or alias name. The application never sends a
-database connection string. Native queries use the separate `Execute` and `Scan`
+database connection string. Native commands use the separate `Execute` and `Scan`
 methods; the record API remains storage-independent.
 
 Every document declares its encoding. MongoDB stores require BSON, so clients

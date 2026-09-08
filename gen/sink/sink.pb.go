@@ -1727,8 +1727,9 @@ func (x *Failure) GetRetryable() bool {
 }
 
 // Native operations route through a configured store; callers never provide
-// database connection addresses or credentials. Only supported read and index
-// management commands are accepted. Data mutations use Write and Delete.
+// database connection addresses or credentials. Execute forwards native commands
+// with database semantics; MongoDB cursor and session commands are rejected.
+// Use Scan for supported cursor queries and Write/Delete for record semantics.
 type ExecuteRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Store string                 `protobuf:"bytes,1,opt,name=store,proto3" json:"store,omitempty"`

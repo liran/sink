@@ -9,8 +9,8 @@ import (
 
 var ErrNativeUnsupported = errors.New("native operation is not supported")
 
-// NativeStorage is implemented by adapters that execute native queries. Data
-// mutations stay on Storage so native commands cannot bypass revision checks.
+// NativeStorage executes backend-native commands and managed cursor queries.
+// Native mutations use database semantics independently of the record API.
 type NativeStorage interface {
 	Execute(context.Context, NativeRequest) (NativeResponse, error)
 	Scan(context.Context, ScanRequest, func([]Document) error) error
