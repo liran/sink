@@ -21,7 +21,7 @@ multi-dataset RPCs keep their own boundary and are not combined with other RPCs.
 | One Create or Replace | One direct conditional write, as before |
 | Repeated Create/Replace/Upsert, or Put mixed with Merge | Read once, evaluate in order, commit the final successful document once |
 | Merge only | Read once, execute each Lua program in order, commit once |
-| Any Write in the chain requests `return_document` | Execute each operation separately in order, returning its own committed logical document and revision when requested |
+| Write requesting `return_document` | Commit that operation independently and return its own logical document and revision; other operations may still fold |
 | Repeated Read | Fetch once, return separate result objects from that observation |
 | Repeated synchronous Delete | Delete once, return the same outcome to every operation |
 
@@ -37,10 +37,12 @@ and queues; a Put and a Delete are not folded together.
 
 ## Write commit and result contract
 
-The folding rules below apply when no operation in the chain requests a returned
-document. `return_document` opts the entire same-address chain into separate
-commits, retaining the batcher's ordering barrier. Only APPLIED operations
-requesting a document receive one. Asynchronous completion rejects this option.
+The folding rules below apply to operations that share a commit.
+`return_document` guarantees an independent commit for the operation carrying
+the option, retaining the batcher's ordering barrier. It does not guarantee
+separate commits for every other operation in the same-address chain. A trailing
+run without returned documents may still fold and share a revision. Only APPLIED
+operations requesting a document receive one. Asynchronous completion rejects this option.
 Returned documents are the logical Put/Merge outputs; backend-generated fields
 and ingest transformations are excluded. See [returned writes](native-access.md#returned-writes).
 
@@ -83,9 +85,9 @@ validation, generated/default fields, ingest processing, revision increments,
 change streams, audit events, and visibility apply to the final backend write.
 Lua sees intermediate program or Put output without backend normalization.
 Successful operations may be superseded later in the same chain. Callers needing
-independent commits can request returned documents or issue sequential calls and
-wait for each result. Separate read observations require explicit Reads. Releases containing this
-change must describe these semantics.
+independent commits can request returned documents on each operation or issue
+sequential calls and wait for each result. Separate read observations require
+explicit Reads. Releases containing this change must describe these semantics.
 
 ## Conflicts, failures, and resource bounds
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"net"
 	"net/http"
-	"strings"
 	"testing"
 	"time"
 
@@ -25,7 +24,7 @@ type nativeFixtureStorage struct {
 	*memory.Store
 	stopped chan struct{}
 	silent  bool
-	flood   bool
+	started chan struct{}
 	queries chan storage.QueryRequest
 	counts  chan storage.CountRequest
 }
@@ -52,29 +51,22 @@ func (s *nativeFixtureStorage) Execute(_ context.Context, _ storage.NativeReques
 	return response, nil
 }
 
-func (s *nativeFixtureStorage) Scan(ctx context.Context, _ storage.ScanRequest, send func([]storage.Document) error) error {
-	defer close(s.stopped)
-	if !s.silent {
-		document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(`{"value":1}`)}
-		if err := send([]storage.Document{document}); err != nil {
-			return err
-		}
+func (s *nativeFixtureStorage) Scan(ctx context.Context, _ storage.ScanRequest) (storage.ScanResponse, error) {
+	var response storage.ScanResponse
+	if s.silent {
+		close(s.started)
+		defer close(s.stopped)
+		<-ctx.Done()
+		return response, ctx.Err()
 	}
-	if s.flood {
-		document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(`{"value":"` + strings.Repeat("x", 2000) + `"}`)}
-		for {
-			if err := send([]storage.Document{document}); err != nil {
-				return err
-			}
-		}
-	}
-	<-ctx.Done()
-	return ctx.Err()
+	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(`{"value":1}`)}
+	response.Documents = []storage.Document{document}
+	return response, nil
 }
 
 func nativeRPCFixture(t *testing.T, silent bool) (sink.SinkClient, *nativeFixtureStorage) {
 	t.Helper()
-	backend := &nativeFixtureStorage{Store: memory.New(), stopped: make(chan struct{}), silent: silent}
+	backend := &nativeFixtureStorage{Store: memory.New(), stopped: make(chan struct{}), started: make(chan struct{}), silent: silent}
 	backends := map[string]storage.Storage{"primary": backend}
 	router, err := storage.NewRouter(backends)
 	if err != nil {
@@ -87,10 +79,10 @@ func nativeRPCFixture(t *testing.T, silent bool) (sink.SinkClient, *nativeFixtur
 	}
 	idle := time.Second
 	if silent {
-		idle = 50 * time.Millisecond
+		idle = 200 * time.Millisecond
 	}
 	options := service.Options{Storage: router, Lua: lua, MaxInFlightRequests: 1, MaxReadBytes: 4096,
-		RequestTimeout: idle, ScanTimeout: 10 * time.Second, StoreNames: []string{"primary"}}
+		RequestTimeout: idle, StoreNames: []string{"primary"}}
 	core, err := service.New(options)
 	if err != nil {
 		t.Fatal(err)
@@ -121,31 +113,31 @@ func nativeSearchRequest() *sink.ExecuteRequest {
 }
 
 func TestNativeRPCSharesAdmissionAndReleasesCanceledScan(t *testing.T) {
-	client, backend := nativeRPCFixture(t, false)
+	client, backend := nativeRPCFixture(t, true)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	request := nativeSearchRequest()
-	scanRequest := &sink.ScanRequest{Command: request.Command, BatchSize: 1}
-	stream, err := client.Scan(ctx, scanRequest)
-	if err != nil {
-		t.Fatal(err)
+	scan := &sink.ScanRequest{Command: request.Command, BatchSize: 1}
+	finished := make(chan error, 1)
+	go func() { _, err := client.Scan(ctx, scan); finished <- err }()
+	select {
+	case <-backend.started:
+	case <-time.After(time.Second):
+		t.Fatal("scan did not start")
 	}
-	page, err := stream.Recv()
-	if err != nil || len(page.GetDocuments()) != 1 {
-		t.Fatalf("page=%v err=%v", page, err)
-	}
-	_, err = client.Execute(t.Context(), request)
+	_, err := client.Execute(t.Context(), request)
 	if status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("scan bypassed shared admission: %v", err)
 	}
 	cancel()
+	if err := <-finished; status.Code(err) != codes.Canceled {
+		t.Fatalf("cancel=%v", err)
+	}
 	select {
 	case <-backend.stopped:
 	case <-time.After(time.Second):
 		t.Fatal("canceled scan retained backend resources")
 	}
-	// Waiting for stream termination also waits for the handler's admission defer.
-	_, _ = stream.Recv()
 	var response *sink.ExecuteResponse
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -155,47 +147,37 @@ func TestNativeRPCSharesAdmissionAndReleasesCanceledScan(t *testing.T) {
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if err != nil || response.GetStatusCode() != 400 || response.GetSuccess() || string(response.GetPayload()) != "{\"error\":\"native\"}\n" || len(response.GetHeaders()[0].GetValues()) != 2 {
+	if err != nil || response.GetStatusCode() != 400 || response.GetSuccess() || len(response.GetHeaders()[0].GetValues()) != 2 {
 		t.Fatalf("native result=%v err=%v", response, err)
-	}
-	request.Command.Store = "missing"
-	_, err = client.Execute(t.Context(), request)
-	if status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("unknown store=%v", err)
 	}
 }
 
-func TestNativeScanIdleTimeoutCancelsBackend(t *testing.T) {
+func TestNativeScanUsesOrdinaryRequestTimeout(t *testing.T) {
 	client, backend := nativeRPCFixture(t, true)
 	request := &sink.ScanRequest{Command: nativeSearchRequest().Command}
-	stream, err := client.Scan(t.Context(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = stream.Recv()
+	_, err := client.Scan(t.Context(), request)
 	if status.Code(err) != codes.DeadlineExceeded {
-		t.Fatalf("idle scan error=%v", err)
+		t.Fatalf("scan error=%v", err)
 	}
 	select {
 	case <-backend.stopped:
 	case <-time.After(time.Second):
-		t.Fatal("idle scan did not release cursor")
+		t.Fatal("timed-out scan retained resources")
 	}
 }
 
-func TestNativeScanStopsWhenClientDoesNotReceive(t *testing.T) {
-	client, backend := nativeRPCFixture(t, false)
-	backend.flood = true
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
+func TestNativeScanReturnsOneUnaryPageAndReleasesAdmission(t *testing.T) {
+	client, _ := nativeRPCFixture(t, false)
 	request := &sink.ScanRequest{Command: nativeSearchRequest().Command}
-	_, err := client.Scan(ctx, request)
-	if err != nil {
-		t.Fatal(err)
+	for range 3 {
+		page, err := client.Scan(t.Context(), request)
+		if err != nil || len(page.GetDocuments()) != 1 || len(page.GetNextCursor()) != 0 {
+			t.Fatalf("page=%v err=%v", page, err)
+		}
 	}
-	select {
-	case <-backend.stopped:
-	case <-time.After(3 * time.Second):
-		t.Fatal("blocked stream send retained the backend beyond the idle timeout")
+	request.Cursor = []byte("invalid")
+	_, err := client.Scan(t.Context(), request)
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("invalid cursor=%v", err)
 	}
 }

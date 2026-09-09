@@ -25,11 +25,12 @@ form. Results remain in request order and include their operation index, even
 when Sink executes independent work concurrently.
 
 `Execute` forwards native commands on one configured store.
-`Scan` streams native MongoDB documents or search hits while Sink owns the
-database cursor. These methods share service admission with record requests
+`Scan` returns one live page of MongoDB documents or search hits, with a
+stateless continuation cursor that can resume on another server. These methods share service admission with record requests
 and bypass the record micro-batcher and Kafka. Native Execute mutations use
 backend semantics. MongoDB Execute rejects cursor and client-managed session
-commands; Scan owns supported query cursors.
+commands; Scan uses page-local find cursors or search_after without retaining
+a database session between requests.
 See [native access](native-access.md) for cursor restrictions and error semantics.
 
 The default maximum encoded gRPC request and response size is 64 MiB. Operation
@@ -132,9 +133,10 @@ delete once. Intermediate writes are not individually persisted or validated by
 the backend; see the [folding contract](merge-folding.md) for result, visibility,
 and failure semantics.
 
-If any operation in a same-address chain requests `return_document`, the chain
-instead commits each operation separately in order. A successful requested result
-contains that operation's logical output and own revision, without a later read.
+An operation requesting `return_document` commits independently of the preceding
+and following operations. Its successful result contains that operation's logical
+output and own revision, without a later read. Other operations in the same-address
+chain may still share a folded commit and revision.
 
 In `server` and `all` modes, Sink automatically coalesces concurrent
 one-operation RPCs into bounded, process-local batches for each store. Reads

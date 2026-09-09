@@ -120,7 +120,7 @@ func (s *Store) Query(ctx context.Context, req storage.QueryRequest) (storage.Qu
 		return nil
 	}
 	scan := storage.ScanRequest{Request: request, BatchSize: req.PageSize}
-	if err := s.Scan(ctx, scan, visit); err != nil {
+	if err := s.scanDocuments(ctx, scan, visit); err != nil {
 		return empty, err
 	}
 	return result, nil
@@ -210,6 +210,9 @@ func (s *Store) Count(ctx context.Context, req storage.CountRequest) (storage.Co
 		result := storage.CountResponse{Count: uint64(count), Estimated: true}
 		return result, nil
 	}
+	if countRequiresFind(command) {
+		return s.countFind(ctx, request, command)
+	}
 	request.Payload, err = bson.Marshal(pipeline)
 	if err != nil {
 		return empty, storage.InvalidArgumentError(err)
@@ -228,7 +231,75 @@ func (s *Store) Count(ctx context.Context, req storage.CountRequest) (storage.Co
 		return nil
 	}
 	scan := storage.ScanRequest{Request: request, BatchSize: 1}
-	if err := s.Scan(ctx, scan, visit); err != nil {
+	if err := s.scanDocuments(ctx, scan, visit); err != nil {
+		return empty, err
+	}
+	return result, nil
+}
+
+func countRequiresFind(command bson.D) bool {
+	if command[0].Key != "find" {
+		return false
+	}
+	for _, field := range command[1:] {
+		if field.Key == "filter" {
+			return containsFindOnlyPredicate(field.Value)
+		}
+	}
+	return false
+}
+
+func containsFindOnlyPredicate(value any) bool {
+	switch value := value.(type) {
+	case bson.D:
+		for _, field := range value {
+			switch field.Key {
+			case "$where", "$near", "$nearSphere":
+				return true
+			case "$literal":
+				continue
+			}
+			if containsFindOnlyPredicate(field.Value) {
+				return true
+			}
+		}
+	case bson.A:
+		for _, member := range value {
+			if containsFindOnlyPredicate(member) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Store) countFind(ctx context.Context, request storage.NativeRequest, command bson.D) (storage.CountResponse, error) {
+	var empty storage.CountResponse
+	find := make(bson.D, 0, len(command)+1)
+	for _, field := range command {
+		switch field.Key {
+		case "skip", "limit", "batchSize", "sort", "projection":
+			continue
+		}
+		find = append(find, field)
+	}
+	// Return one small constant per match, regardless of document or _id size.
+	literal := bson.D{{Key: "$literal", Value: int32(1)}}
+	projection := bson.D{{Key: "_id", Value: int32(0)}, {Key: "count", Value: literal}}
+	field := bson.E{Key: "projection", Value: projection}
+	find = append(find, field)
+	var err error
+	request.Payload, err = bson.Marshal(find)
+	if err != nil {
+		return empty, storage.InvalidArgumentError(err)
+	}
+	result := storage.CountResponse{}
+	visit := func(documents []storage.Document) error {
+		result.Count += uint64(len(documents))
+		return nil
+	}
+	scan := storage.ScanRequest{Request: request, BatchSize: 1000}
+	if err := s.scanDocuments(ctx, scan, visit); err != nil {
 		return empty, err
 	}
 	return result, nil

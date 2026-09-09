@@ -5,7 +5,6 @@ package search_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"testing"
@@ -90,14 +89,26 @@ func TestNativeSearchQueriesMSearchAndScan(t *testing.T) {
 		}
 		return nil
 	}
-	if err := fixture.store.Scan(ctx, scan, visit); err != nil || seen != 7 {
-		t.Fatalf("scan seen=%d err=%v", seen, err)
+	for {
+		page, err := fixture.store.Scan(ctx, scan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := visit(page.Documents); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.NextCursor) == 0 {
+			break
+		}
+		scan.Cursor = page.NextCursor
 	}
-	stop := errors.New("stop scan")
+	if seen != 7 {
+		t.Fatalf("scan seen=%d", seen)
+	}
 	canceled, cancel := context.WithCancel(ctx)
-	visit = func(_ []storage.Document) error { cancel(); return stop }
-	if err := fixture.store.Scan(canceled, scan, visit); !errors.Is(err, stop) {
-		t.Fatalf("canceled scan=%v", err)
+	cancel()
+	if _, err := fixture.store.Scan(canceled, scan); err == nil {
+		t.Fatal("canceled scan succeeded")
 	}
 	statusCode, payload := fixture.request(t, http.MethodGet, "/"+fixture.index+"/_stats/search", nil)
 	var stats struct {
@@ -134,17 +145,22 @@ func TestNativeSearchQueriesMSearchAndScan(t *testing.T) {
 	}
 }
 
-func TestNativeSearchIndexInitialization(t *testing.T) {
+func TestNativeSearchRejectsIndexAndAliasCreation(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	index := fixture.index + "-native"
 	t.Cleanup(func() { fixture.request(t, http.MethodDelete, "/"+index, nil) })
 	native := storage.NativeRequest{Store: "primary", Method: http.MethodPut, Path: "/" + index,
 		ContentType: "application/json", Payload: []byte(`{"settings":{"number_of_shards":1,"number_of_replicas":0}}`), MaxBytes: 1 << 20}
 	response, err := fixture.store.Execute(t.Context(), native)
-	if err != nil || !response.Success {
-		t.Fatalf("create index=%+v err=%v", response, err)
+	code, _ := storage.ErrorDetails(err)
+	if code != storage.ErrorCodeInvalidArgument || response.Success {
+		t.Fatalf("native index creation was accepted: %+v err=%v", response, err)
 	}
-	native.Path += "/_mapping"
+	statusCode, _ := fixture.request(t, http.MethodHead, "/"+index, nil)
+	if statusCode != http.StatusNotFound {
+		t.Fatalf("rejected index creation reached backend: status=%d", statusCode)
+	}
+	native.Path = "/" + fixture.index + "/_mapping"
 	native.Payload = []byte(`{"properties":{"signature":{"type":"keyword"}}}`)
 	response, err = fixture.store.Execute(t.Context(), native)
 	if err != nil || !response.Success {
@@ -152,21 +168,22 @@ func TestNativeSearchIndexInitialization(t *testing.T) {
 	}
 	native.Path = "/_aliases"
 	native.Method = http.MethodPost
-	native.Payload = fmt.Appendf(nil, `{"actions":[{"add":{"index":%q,"alias":%q}}]}`, index, index+"-alias")
+	native.Payload = fmt.Appendf(nil, `{"actions":[{"add":{"index":%q,"alias":%q}}]}`, fixture.index, index+"-alias")
 	response, err = fixture.store.Execute(t.Context(), native)
-	if err != nil || !response.Success {
-		t.Fatalf("alias=%+v err=%v", response, err)
+	code, _ = storage.ErrorDetails(err)
+	if code != storage.ErrorCodeInvalidArgument || response.Success {
+		t.Fatalf("native alias creation was accepted: %+v err=%v", response, err)
 	}
 	native.Method = http.MethodHead
 	native.Path = "/" + index + "-alias"
 	native.Payload = nil
 	response, err = fixture.store.Execute(t.Context(), native)
-	if err != nil || !response.Success || response.StatusCode != 200 || len(response.Payload) != 0 {
-		t.Fatalf("index existence=%+v err=%v", response, err)
+	if err != nil || response.Success || response.StatusCode != 404 || len(response.Payload) != 0 {
+		t.Fatalf("rejected alias creation reached backend: %+v err=%v", response, err)
 	}
 }
 
-func TestNativeSearchWritesAndIndexDeletion(t *testing.T) {
+func TestNativeSearchWritesAndIndexDeletionProtection(t *testing.T) {
 	fixture := newIntegrationFixture(t)
 	req := storage.NativeRequest{Store: "primary", Method: http.MethodPut, Path: "/" + fixture.index + "/_doc/native%2Fid",
 		Query: "refresh=wait_for", ContentType: "application/json", Payload: []byte(`{"count":1}`), MaxBytes: 1 << 20}
@@ -214,7 +231,13 @@ func TestNativeSearchWritesAndIndexDeletion(t *testing.T) {
 	req.Path = "/" + fixture.index
 	req.Payload = nil
 	response, err = fixture.store.Execute(t.Context(), req)
+	code, _ := storage.ErrorDetails(err)
+	if code != storage.ErrorCodeInvalidArgument || response.Success {
+		t.Fatalf("native index deletion was accepted: %+v err=%v", response, err)
+	}
+	req.Method = http.MethodHead
+	response, err = fixture.store.Execute(t.Context(), req)
 	if err != nil || !response.Success {
-		t.Fatalf("native index deletion response=%+v err=%v", response, err)
+		t.Fatalf("rejected deletion removed index: %+v err=%v", response, err)
 	}
 }

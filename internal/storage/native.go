@@ -17,7 +17,7 @@ type NativeStorage interface {
 	Execute(context.Context, NativeRequest) (NativeResponse, error)
 	Query(context.Context, QueryRequest) (QueryResponse, error)
 	Count(context.Context, CountRequest) (CountResponse, error)
-	Scan(context.Context, ScanRequest, func([]Document) error) error
+	Scan(context.Context, ScanRequest) (ScanResponse, error)
 }
 
 type NativeRequest struct {
@@ -43,6 +43,12 @@ type NativeResponse struct {
 type ScanRequest struct {
 	Request   NativeRequest
 	BatchSize int
+	Cursor    []byte
+}
+
+type ScanResponse struct {
+	Documents  []Document
+	NextCursor []byte
 }
 
 type QueryRequest struct {
@@ -122,12 +128,13 @@ func (r *Router) Execute(ctx context.Context, req NativeRequest) (NativeResponse
 	return backend.Execute(ctx, req)
 }
 
-func (r *Router) Scan(ctx context.Context, req ScanRequest, send func([]Document) error) error {
+func (r *Router) Scan(ctx context.Context, req ScanRequest) (ScanResponse, error) {
 	backend, err := r.nativeBackend(req.Request.Store)
 	if err != nil {
-		return err
+		var empty ScanResponse
+		return empty, err
 	}
-	return backend.Scan(ctx, req, send)
+	return backend.Scan(ctx, req)
 }
 
 func (r *Router) Query(ctx context.Context, req QueryRequest) (QueryResponse, error) {

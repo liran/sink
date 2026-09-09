@@ -152,9 +152,11 @@ func TestMetricsObserveNativeFailureAndScanTermination(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	streamInfo := &grpc.StreamServerInfo{FullMethod: sink.Sink_Scan_FullMethodName, IsServerStream: true}
-	streamHandler := func(any, grpc.ServerStream) error { return status.Error(codes.DeadlineExceeded, "idle") }
-	err = observed.StreamServerInterceptor()(nil, nil, streamInfo, streamHandler)
+	scanInfo := &grpc.UnaryServerInfo{FullMethod: sink.Sink_Scan_FullMethodName}
+	scanHandler := func(context.Context, any) (any, error) {
+		return nil, status.Error(codes.DeadlineExceeded, "page timed out")
+	}
+	_, err = observed.UnaryServerInterceptor()(t.Context(), nil, scanInfo, scanHandler)
 	if status.Code(err) != codes.DeadlineExceeded {
 		t.Fatal(err)
 	}

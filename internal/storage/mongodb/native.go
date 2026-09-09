@@ -152,7 +152,7 @@ func scanCommand(command bson.D, batchSize int) bson.D {
 	return filtered
 }
 
-func (s *Store) Scan(ctx context.Context, req storage.ScanRequest, send func([]storage.Document) error) error {
+func (s *Store) scanDocuments(ctx context.Context, req storage.ScanRequest, send func([]storage.Document) error) error {
 	if req.BatchSize < 1 || req.BatchSize > 1000 {
 		return storage.InvalidArgumentError(errors.New("scan batch size must be between 1 and 1000"))
 	}

@@ -426,8 +426,7 @@ counts multiply capacity. Configure the same Kafka policy on servers and workers
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `service.request_timeout_seconds` | `30` | Unary request timeout including batching queue wait, and maximum time without a successfully sent Scan page; at most 300 seconds. A shorter caller deadline wins. |
-| `service.scan_timeout_seconds` | `900` | Absolute Scan lifetime, at most 3600 seconds; also subject to the idle and caller deadlines. |
+| `service.request_timeout_seconds` | `30` | Unary request timeout including batching queue wait and each Scan page; at most 300 seconds. A shorter caller deadline wins. |
 | `service.max_in_flight_requests` | `128` | Core request count, at most 10000; all completion modes and cross-store calls count. |
 | `service.max_in_flight_bytes` | `268435456` | Admitted request/output reservation bytes, at most 16 GiB. Reads reserve snapshot and response budgets; Merge and folded conditional Put chains reserve current and output budgets; Lua source expansion is charged. This is not an RSS or VM heap limit. |
 | `service.max_store_requests` | `32` | Core requests per configured store, at most 10000. |
@@ -446,7 +445,7 @@ plus response/page buffers. MongoDB native calls additionally reserve 48 MiB for
 the driver's complete wire response, which arrives before the smaller Sink
 response/page limit can be enforced. Returned writes reserve an additional
 response budget per original RPC before execution. See [native access](native-access.md)
-for cursor cleanup, cancellation, and partial-result behavior.
+for stateless Scan checkpoints, page-local cleanup, cancellation and retry semantics.
 
 MongoDB group concurrency is shared across concurrent calls. Sink sets
 `w=majority` and `journal=true` on its client, overriding weaker URI concerns;

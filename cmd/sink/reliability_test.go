@@ -133,23 +133,3 @@ func TestReliabilityConfigurationRejectsIncompatibleLimits(t *testing.T) {
 		t.Fatal("min ISR exceeded replica factor")
 	}
 }
-
-func TestScanTimeoutConfiguration(t *testing.T) {
-	for _, seconds := range []int{0, 1, 900, 3600, 3601, -1} {
-		file := serviceConfigFile{ScanTimeoutSeconds: &seconds}
-		loaded := config{grpcMaxSendBytes: 64 << 20}
-		err := loaded.loadReliabilityConfig(file)
-		valid := seconds > 0 && seconds <= 3600
-		if (err == nil) != valid {
-			t.Fatalf("scan timeout %d: %v", seconds, err)
-		}
-		if valid && loaded.scanTimeout != time.Duration(seconds)*time.Second {
-			t.Fatalf("scan timeout=%s", loaded.scanTimeout)
-		}
-	}
-	file := serviceConfigFile{}
-	loaded := config{grpcMaxSendBytes: 64 << 20}
-	if err := loaded.loadReliabilityConfig(file); err != nil || loaded.scanTimeout != 15*time.Minute {
-		t.Fatalf("default scan timeout=%s err=%v", loaded.scanTimeout, err)
-	}
-}

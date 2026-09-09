@@ -1910,11 +1910,13 @@ func (x *Header) GetValues() []string {
 // Execute performs one native interaction. It does not provide cross-RPC
 // session affinity. Adapters reject commands requiring session affinity or a
 // client-managed session; supported cursor queries use Scan instead.
-// Other native commands are not restricted to a query/index-only allowlist.
+// Each adapter validates its supported operations before forwarding. MongoDB
+// protects revisions on supported writes; HTTP search rejects index lifecycle
+// and alias management, including unknown administrative write endpoints.
 //
-// Native writes use backend semantics, outside record revisions, Lua merges,
-// batching and asynchronous completion modes. Neither Sink nor its SDK should
-// automatically replay an Execute request after an unknown outcome.
+// Permitted writes retain backend semantics subject to adapter safeguards. They
+// do not run Lua merges, record batching or asynchronous completion. Neither
+// Sink nor its SDK should automatically replay Execute after an unknown outcome.
 type ExecuteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Command       *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
@@ -2401,17 +2403,19 @@ func (x *CountResponse) GetEstimated() bool {
 	return false
 }
 
-// Scan accepts the same Command, limited to adapter-supported read-only cursor
-// queries. Sink owns opening, advancing and closing the cursor within the RPC.
-// Completion, cancellation and failures trigger best-effort cursor cleanup.
-// Stateful transactions, change streams and indefinitely tailing cursors are
-// outside this contract. Delivered batches are not replayed after a failure.
+// Scan returns one live page. Supply the same Command on every call and pass
+// next_cursor back as cursor after processing a page. Cursors carry the seek
+// position across server restarts and do not expire; no database session
+// survives a request. Task deadlines and checkpoint retention belong to callers.
+// Concurrent changes can affect later pages and retries. Scan is not a snapshot.
 type ScanRequest struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Command *Command               `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`
-	// Overrides native batch sizes. Zero selects the server default of 100;
-	// maximum 1000 documents per response. Server byte and time limits also apply.
-	BatchSize     uint32 `protobuf:"varint,2,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	// Zero selects 100; maximum 1000. The byte limit may produce a smaller page.
+	BatchSize uint32 `protobuf:"varint,2,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	// Empty starts a new scan. Treat this continuation marker as opaque; it is
+	// bound to Command and is not an authorization credential.
+	Cursor        []byte `protobuf:"bytes,3,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2460,14 +2464,22 @@ func (x *ScanRequest) GetBatchSize() uint32 {
 	return 0
 }
 
-// Documents retain native encodings and result shapes: BSON documents for the
-// document adapter and complete JSON hits for the search adapter. Scan unwraps
-// cursor batches; Execute returns the full native reply instead.
-// Empty results complete successfully without emitting a batch. A terminal
-// error may follow already delivered batches, so callers must check completion.
+func (x *ScanRequest) GetCursor() []byte {
+	if x != nil {
+		return x.Cursor
+	}
+	return nil
+}
+
+// Documents retain native encodings: BSON documents or complete JSON hits.
+// Failed requests return no page; callers may retry from their last saved
+// cursor, with live-query semantics and idempotent business processing.
 type ScanResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Documents     []*Document            `protobuf:"bytes,1,rep,name=documents,proto3" json:"documents,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Documents []*Document            `protobuf:"bytes,1,rep,name=documents,proto3" json:"documents,omitempty"`
+	// Empty means the scan reached the end observed by this request. Commit a
+	// checkpoint only after processing documents. No explicit close is needed.
+	NextCursor    []byte `protobuf:"bytes,2,opt,name=next_cursor,json=nextCursor,proto3" json:"next_cursor,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2505,6 +2517,13 @@ func (*ScanResponse) Descriptor() ([]byte, []int) {
 func (x *ScanResponse) GetDocuments() []*Document {
 	if x != nil {
 		return x.Documents
+	}
+	return nil
+}
+
+func (x *ScanResponse) GetNextCursor() []byte {
+	if x != nil {
+		return x.NextCursor
 	}
 	return nil
 }
@@ -2644,13 +2663,16 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\"C\n" +
 	"\rCountResponse\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\x12\x1c\n" +
-	"\testimated\x18\x02 \x01(\bR\testimated\"X\n" +
+	"\testimated\x18\x02 \x01(\bR\testimated\"p\n" +
 	"\vScanRequest\x12*\n" +
 	"\acommand\x18\x01 \x01(\v2\x10.sink.v1.CommandR\acommand\x12\x1d\n" +
 	"\n" +
-	"batch_size\x18\x02 \x01(\rR\tbatchSize\"?\n" +
+	"batch_size\x18\x02 \x01(\rR\tbatchSize\x12\x16\n" +
+	"\x06cursor\x18\x03 \x01(\fR\x06cursor\"`\n" +
 	"\fScanResponse\x12/\n" +
-	"\tdocuments\x18\x01 \x03(\v2\x11.sink.v1.DocumentR\tdocuments*m\n" +
+	"\tdocuments\x18\x01 \x03(\v2\x11.sink.v1.DocumentR\tdocuments\x12\x1f\n" +
+	"\vnext_cursor\x18\x02 \x01(\fR\n" +
+	"nextCursor*m\n" +
 	"\x10DocumentEncoding\x12!\n" +
 	"\x1dDOCUMENT_ENCODING_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16DOCUMENT_ENCODING_JSON\x10\x01\x12\x1a\n" +
@@ -2695,15 +2717,15 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x1fFAILURE_CODE_RESOURCE_EXHAUSTED\x10\x05\x12\x1c\n" +
 	"\x18FAILURE_CODE_UNAVAILABLE\x10\x06\x12\"\n" +
 	"\x1eFAILURE_CODE_DEADLINE_EXCEEDED\x10\a\x12\x19\n" +
-	"\x15FAILURE_CODE_INTERNAL\x10\b2\x93\x03\n" +
+	"\x15FAILURE_CODE_INTERNAL\x10\b2\x91\x03\n" +
 	"\x04Sink\x123\n" +
 	"\x04Read\x12\x14.sink.v1.ReadRequest\x1a\x15.sink.v1.ReadResponse\x126\n" +
 	"\x05Write\x12\x15.sink.v1.WriteRequest\x1a\x16.sink.v1.WriteResponse\x129\n" +
 	"\x06Delete\x12\x16.sink.v1.DeleteRequest\x1a\x17.sink.v1.DeleteResponse\x12<\n" +
 	"\aExecute\x12\x17.sink.v1.ExecuteRequest\x1a\x18.sink.v1.ExecuteResponse\x126\n" +
 	"\x05Query\x12\x15.sink.v1.QueryRequest\x1a\x16.sink.v1.QueryResponse\x126\n" +
-	"\x05Count\x12\x15.sink.v1.CountRequest\x1a\x16.sink.v1.CountResponse\x125\n" +
-	"\x04Scan\x12\x14.sink.v1.ScanRequest\x1a\x15.sink.v1.ScanResponse0\x01B%Z#github.com/liran/sink/gen/sink;sinkb\x06proto3"
+	"\x05Count\x12\x15.sink.v1.CountRequest\x1a\x16.sink.v1.CountResponse\x123\n" +
+	"\x04Scan\x12\x14.sink.v1.ScanRequest\x1a\x15.sink.v1.ScanResponseB%Z#github.com/liran/sink/gen/sink;sinkb\x06proto3"
 
 var (
 	file_sink_sink_proto_rawDescOnce sync.Once

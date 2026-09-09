@@ -7,7 +7,7 @@ option go_package = "github.com/liran/sink/gen/sink;sink";
 // Sink provides database-independent record reads and mutations.
 //
 // Record requests are batch-native. Atomicity is guaranteed per record, never
-// for the whole request. Native queries use Execute or the streaming Scan RPC.
+// for the whole request. Native queries use Execute, Query, Count or paged Scan.
 service Sink {
   rpc Read(ReadRequest) returns (ReadResponse);
   rpc Write(WriteRequest) returns (WriteResponse);
@@ -15,7 +15,7 @@ service Sink {
   rpc Execute(ExecuteRequest) returns (ExecuteResponse);
   rpc Query(QueryRequest) returns (QueryResponse);
   rpc Count(CountRequest) returns (CountResponse);
-  rpc Scan(ScanRequest) returns (stream ScanResponse);
+  rpc Scan(ScanRequest) returns (ScanResponse);
 }
 
 // RecordAddress identifies a record without exposing a physical database,
@@ -300,11 +300,13 @@ message Header {
 // Execute performs one native interaction. It does not provide cross-RPC
 // session affinity. Adapters reject commands requiring session affinity or a
 // client-managed session; supported cursor queries use Scan instead.
-// Other native commands are not restricted to a query/index-only allowlist.
+// Each adapter validates its supported operations before forwarding. MongoDB
+// protects revisions on supported writes; HTTP search rejects index lifecycle
+// and alias management, including unknown administrative write endpoints.
 //
-// Native writes use backend semantics, outside record revisions, Lua merges,
-// batching and asynchronous completion modes. Neither Sink nor its SDK should
-// automatically replay an Execute request after an unknown outcome.
+// Permitted writes retain backend semantics subject to adapter safeguards. They
+// do not run Lua merges, record batching or asynchronous completion. Neither
+// Sink nor its SDK should automatically replay Execute after an unknown outcome.
 message ExecuteRequest {
   Command command = 1;
 }
@@ -394,24 +396,29 @@ message CountResponse {
   bool estimated = 2;
 }
 
-// Scan accepts the same Command, limited to adapter-supported read-only cursor
-// queries. Sink owns opening, advancing and closing the cursor within the RPC.
-// Completion, cancellation and failures trigger best-effort cursor cleanup.
-// Stateful transactions, change streams and indefinitely tailing cursors are
-// outside this contract. Delivered batches are not replayed after a failure.
+// Scan returns one live page. Supply the same Command on every call and pass
+// next_cursor back as cursor after processing a page. Cursors carry the seek
+// position across server restarts and do not expire; no database session
+// survives a request. Task deadlines and checkpoint retention belong to callers.
+// Concurrent changes can affect later pages and retries. Scan is not a snapshot.
 message ScanRequest {
   Command command = 1;
 
-  // Overrides native batch sizes. Zero selects the server default of 100;
-  // maximum 1000 documents per response. Server byte and time limits also apply.
+  // Zero selects 100; maximum 1000. The byte limit may produce a smaller page.
   uint32 batch_size = 2;
+
+  // Empty starts a new scan. Treat this continuation marker as opaque; it is
+  // bound to Command and is not an authorization credential.
+  bytes cursor = 3;
 }
 
-// Documents retain native encodings and result shapes: BSON documents for the
-// document adapter and complete JSON hits for the search adapter. Scan unwraps
-// cursor batches; Execute returns the full native reply instead.
-// Empty results complete successfully without emitting a batch. A terminal
-// error may follow already delivered batches, so callers must check completion.
+// Documents retain native encodings: BSON documents or complete JSON hits.
+// Failed requests return no page; callers may retry from their last saved
+// cursor, with live-query semantics and idempotent business processing.
 message ScanResponse {
   repeated Document documents = 1;
+
+  // Empty means the scan reached the end observed by this request. Commit a
+  // checkpoint only after processing documents. No explicit close is needed.
+  bytes next_cursor = 2;
 }
