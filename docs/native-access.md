@@ -188,6 +188,9 @@ MongoDB retains its native `_id` projection rules.
 
 MongoDB Query supports `find` and read-only `aggregate`. For find, Query replaces
 native skip/limit, and explicit sort/projection replace their native counterparts.
+`allowPartialResults: true` is rejected: a page must not silently omit unavailable
+shards. The lookahead document used only for `has_more` does not consume MongoDB's
+returned-document byte budget; the driver wire limit still applies.
 For aggregate, explicit sort and projection follow the supplied pipeline, then
 skip/limit apply to its output. HTTP Query requires `_search`, replaces from/size,
 and maps explicit sort/projection to sort and `_source` selection.
@@ -197,6 +200,12 @@ short-lived MongoDB cursor is closed before returning. Search does not open a
 scroll or PIT; manual pagination inputs (`scroll`, `pit`, `search_after`) and
 response-truncating `filter_path` are rejected. Use a stable native sort with a
 unique tie-breaker. Concurrent changes may shift pages; this is not a snapshot.
+Search Query, Count and Scan require explicit timeout and shard-completion
+fields. Missing or inconsistent completion evidence fails the entire RPC without
+returning a page, total or continuation cursor.
+When cross-cluster metadata is present, every requested cluster must have
+succeeded; skipped, running, partial or failed clusters reject the response even
+if the HTTP status is 200 and all reported shards succeeded.
 Deep pages incur backend offset costs and result-window limits, including the
 extra result needed for `has_more`. Use Scan for sustained traversal.
 
