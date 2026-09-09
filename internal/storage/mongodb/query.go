@@ -1,9 +1,11 @@
 package mongodb
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -99,28 +101,38 @@ func (s *Store) Query(ctx context.Context, req storage.QueryRequest) (storage.Qu
 	default:
 		return empty, storage.InvalidArgumentError(errors.New("Query requires find or read-only aggregate"))
 	}
-	request := req.Request
-	request.Payload, err = bson.Marshal(command)
+	if req.Request.Store != s.store {
+		return empty, storage.InvalidArgumentError(errors.New("MongoDB store does not match request"))
+	}
+	command = scanCommand(command, req.PageSize)
+	cursor, err := s.client.Database(req.Request.Namespace).RunCommandCursor(ctx, command)
 	if err != nil {
-		return empty, storage.InvalidArgumentError(err)
+		return empty, storage.BackendError(err)
 	}
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
+		_ = cursor.Close(cleanup)
+	}()
 	result := storage.QueryResponse{}
-	budget := storage.NewReadBudget(request.MaxBytes)
-	visit := func(documents []storage.Document) error {
-		for _, document := range documents {
-			if len(result.Documents) == req.PageSize {
-				result.HasMore = true
-				continue
-			}
-			if err := budget.Reserve(len(document.Payload)); err != nil {
-				return err
-			}
-			result.Documents = append(result.Documents, document)
+	budget := storage.NewReadBudget(req.Request.MaxBytes)
+	for cursor.Next(ctx) {
+		// Lookahead proves HasMore but is never retained or returned to the
+		// caller, so a large following document must not reject this page.
+		if len(result.Documents) == req.PageSize {
+			result.HasMore = true
+			break
 		}
-		return nil
+		if err := budget.Reserve(len(cursor.Current)); err != nil {
+			return empty, err
+		}
+		document := storage.Document{Encoding: storage.DocumentEncodingBSON, Payload: bytes.Clone(cursor.Current)}
+		result.Documents = append(result.Documents, document)
 	}
-	scan := storage.ScanRequest{Request: request, BatchSize: req.PageSize}
-	if err := s.scanDocuments(ctx, scan, visit); err != nil {
+	if err := cursor.Err(); err != nil {
+		return empty, storage.BackendError(err)
+	}
+	if err := ctx.Err(); err != nil {
 		return empty, err
 	}
 	return result, nil

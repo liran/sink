@@ -103,11 +103,21 @@ func (s *Store) Execute(ctx context.Context, req storage.NativeRequest) (storage
 type scanPage struct {
 	ScrollID        string    `json:"_scroll_id"`
 	Hits            *scanHits `json:"hits"`
-	TimedOut        bool      `json:"timed_out"`
+	TimedOut        *bool     `json:"timed_out"`
 	TerminatedEarly bool      `json:"terminated_early"`
-	Shards          struct {
-		Failed int `json:"failed"`
+	Shards          *struct {
+		Total      *int `json:"total"`
+		Successful *int `json:"successful"`
+		Failed     *int `json:"failed"`
 	} `json:"_shards"`
+	Clusters *struct {
+		Total      *int `json:"total"`
+		Successful *int `json:"successful"`
+		Skipped    *int `json:"skipped"`
+		Running    int  `json:"running"`
+		Partial    int  `json:"partial"`
+		Failed     int  `json:"failed"`
+	} `json:"_clusters"`
 }
 
 type scanHits struct {

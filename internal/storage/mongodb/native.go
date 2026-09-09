@@ -56,6 +56,11 @@ func validateNativeCommand(req storage.NativeRequest, scan bool) (bson.D, error)
 		if forbiddenNativeValue(command) {
 			return command, errors.New("scan does not permit data-writing stages or tailable cursors")
 		}
+		for _, field := range command {
+			if field.Key == "allowPartialResults" && field.Value != false {
+				return command, errors.New("native queries require complete results from every shard")
+			}
+		}
 		return command, nil
 	}
 	switch name {

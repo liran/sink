@@ -28,12 +28,12 @@ func TestQueryAndCountApplyControlsWithoutOpeningCursor(t *testing.T) {
 			if string(body["from"]) != "2" || string(body["size"]) != "3" || string(body["sort"]) != `[{"number":"desc"},{"uid":"asc"}]` || string(body["_source"]) != `{"includes":["number"]}` || r.URL.Query().Has("sort") || r.URL.Query().Has("_source") {
 				t.Errorf("page controls not applied: %s %s", r.URL.RawQuery, body)
 			}
-			_, _ = w.Write([]byte(`{"hits":{"hits":[{"_id":"4","_source":{"number":4}},{"_id":"3","_source":{"number":3}},{"_id":"2","_source":{"number":2}}]}}`))
+			_, _ = w.Write([]byte(`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"_id":"4","_source":{"number":4}},{"_id":"3","_source":{"number":3}},{"_id":"2","_source":{"number":2}}]}}`))
 		} else {
 			if string(body["size"]) != "0" || string(body["track_total_hits"]) != "true" || body["from"] != nil || body["aggs"] != nil || r.URL.Query().Has("track_total_hits") {
 				t.Errorf("count did not request an exact unpaged total: %s", body)
 			}
-			_, _ = w.Write([]byte(`{"hits":{"total":{"value":12001,"relation":"eq"},"hits":[]}}`))
+			_, _ = w.Write([]byte(`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"total":{"value":12001,"relation":"eq"},"hits":[]}}`))
 		}
 	})
 	server := httptest.NewServer(handler)
@@ -65,9 +65,9 @@ func TestCountRejectsPartialApproximateAndInvalidTotals(t *testing.T) {
 		`{"timed_out":true,"hits":{"total":{"value":3,"relation":"eq"},"hits":[]}}`,
 		`{"_shards":{"failed":1},"hits":{"total":{"value":3,"relation":"eq"},"hits":[]}}`,
 		`{"terminated_early":true,"hits":{"total":{"value":3,"relation":"eq"},"hits":[]}}`,
-		`{"hits":{"total":{"value":10000,"relation":"gte"},"hits":[]}}`,
-		`{"hits":{"total":{"value":-1,"relation":"eq"},"hits":[]}}`,
-		`{"hits":{"total":{"relation":"eq"},"hits":[]}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"total":{"value":10000,"relation":"gte"},"hits":[]}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"total":{"value":-1,"relation":"eq"},"hits":[]}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"total":{"relation":"eq"},"hits":[]}}`,
 	}
 	for _, payload := range payloads {
 		t.Run(payload, func(t *testing.T) {
@@ -105,5 +105,84 @@ func TestCommonCommandRejectsUnusedFieldsAndConflictingContentTypes(t *testing.T
 		if _, _, err := pageOptions(command); err == nil {
 			t.Fatalf("accepted stateful or incomplete query %s", query)
 		}
+	}
+}
+
+func TestNativePagesRequireCompletionEvidence(t *testing.T) {
+	for _, payload := range []string{
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"_clusters":{"total":2,"successful":1,"skipped":1},"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"_clusters":{"total":2,"successful":1,"skipped":0,"partial":1},"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"timed_out":false,"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"timed_out":null,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"timed_out":false,"_shards":{"total":2,"successful":1,"failed":0},"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1},"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":-1},"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`,
+	} {
+		t.Run(payload, func(t *testing.T) {
+			var calls int
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				_, _ = w.Write([]byte(payload))
+			})
+			backend := httptest.NewServer(handler)
+			defer backend.Close()
+			opts := Options{Driver: DriverOpenSearch, Store: "search", Endpoints: []string{backend.URL}}
+			store, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_search", ContentType: ContentTypeJSON, Payload: []byte(`{"sort":["uid"]}`), MaxBytes: 4096}
+			query := storage.QueryRequest{Request: command, PageSize: 1}
+			if page, err := store.Query(t.Context(), query); err == nil || len(page.Documents) != 0 || page.HasMore {
+				t.Errorf("Query accepted an unproven complete page: %+v err=%v", page, err)
+			}
+			count := storage.CountRequest{Request: command}
+			if result, err := store.Count(t.Context(), count); err == nil || result.Count != 0 {
+				t.Errorf("Count accepted an unproven total: %+v err=%v", result, err)
+			}
+			scan := storage.ScanRequest{Request: command, BatchSize: 1}
+			if page, err := store.Scan(t.Context(), scan); err == nil || len(page.Documents) != 0 || len(page.NextCursor) != 0 {
+				t.Errorf("Scan accepted an unproven end of data: %+v err=%v", page, err)
+			}
+			if calls != 3 {
+				t.Fatalf("failed native reads were retried: calls=%d", calls)
+			}
+		})
+	}
+}
+
+func TestNativePagesAcceptCompleteClusterResults(t *testing.T) {
+	for _, clusters := range []string{
+		`{"total":2,"successful":2,"skipped":0}`,
+		`{"total":2,"successful":2,"skipped":0,"running":0,"partial":0,"failed":0}`,
+	} {
+		t.Run(clusters, func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				payload := `{"timed_out":false,"_shards":{"total":2,"successful":2,"failed":0},"_clusters":` + clusters + `,"hits":{"hits":[],"total":{"value":0,"relation":"eq"}}}`
+				_, _ = w.Write([]byte(payload))
+			})
+			backend := httptest.NewServer(handler)
+			defer backend.Close()
+			opts := Options{Driver: DriverOpenSearch, Store: "search", Endpoints: []string{backend.URL}}
+			store, err := New(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			command := storage.NativeRequest{Store: "search", Method: "POST", Path: "/local,remote:products/_search", ContentType: ContentTypeJSON, Payload: []byte(`{"sort":["uid"]}`), MaxBytes: 4096}
+			query := storage.QueryRequest{Request: command, PageSize: 1}
+			if page, err := store.Query(t.Context(), query); err != nil || len(page.Documents) != 0 || page.HasMore {
+				t.Fatalf("complete Query rejected: %+v err=%v", page, err)
+			}
+			count := storage.CountRequest{Request: command}
+			if result, err := store.Count(t.Context(), count); err != nil || result.Count != 0 {
+				t.Fatalf("complete Count rejected: %+v err=%v", result, err)
+			}
+			scan := storage.ScanRequest{Request: command, BatchSize: 1}
+			if page, err := store.Scan(t.Context(), scan); err != nil || len(page.Documents) != 0 || len(page.NextCursor) != 0 {
+				t.Fatalf("complete Scan rejected: %+v err=%v", page, err)
+			}
+		})
 	}
 }

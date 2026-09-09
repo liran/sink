@@ -36,10 +36,10 @@ func TestScanRejectsPartialResultsAndAmbiguousBoundary(t *testing.T) {
 	for _, payload := range []string{
 		`{"timed_out":true,"hits":{"hits":[]}}`,
 		`{"_shards":{"failed":1},"hits":{"hits":[]}}`,
-		`{"hits":{"hits":[{"_id":"1"}]}}`,
-		`{"hits":{"hits":[{"sort":[null]}]}}`,
-		`{"hits":{"hits":[{"sort":[1]},{"sort":[1]}]}}`,
-		`{"hits":{"hits":[{"sort":[1]},{"sort":[2]},{"sort":[2]}]}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"_id":"1"}]}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"sort":[null]}]}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"sort":[1]},{"sort":[1]}]}}`,
+		`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"sort":[1]},{"sort":[2]},{"sort":[2]}]}}`,
 	} {
 		t.Run(payload, func(t *testing.T) {
 			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(payload)) })
@@ -69,13 +69,13 @@ func TestScanByteLimitedPageResumesWithoutSkipping(t *testing.T) {
 			t.Error(err)
 		}
 		if len(body.After) == 0 {
-			_, _ = w.Write([]byte(`{"hits":{"hits":[{"sort":[1]},{"sort":[2]},{"sort":[3]}]}}`))
+			_, _ = w.Write([]byte(`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"sort":[1]},{"sort":[2]},{"sort":[3]}]}}`))
 			return
 		}
 		if body.After[0] != 2 {
 			t.Errorf("wrong checkpoint: %v", body.After)
 		}
-		_, _ = w.Write([]byte(`{"hits":{"hits":[{"sort":[3]}]}}`))
+		_, _ = w.Write([]byte(`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"sort":[3]}]}}`))
 	})
 	backend := httptest.NewServer(handler)
 	defer backend.Close()
