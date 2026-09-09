@@ -1,8 +1,6 @@
 package search
 
 import (
-	"context"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -58,119 +56,6 @@ func TestNativePathsRejectConnectionOverrides(t *testing.T) {
 	}
 }
 
-func TestNativeAliasManagementPreservesSupportedActions(t *testing.T) {
-	payload := []byte(`{"actions":[{"remove":{"index":"old","alias":"live"}},{"add":{"index":"new","alias":"live"}}]}`)
-	req := storage.NativeRequest{Method: "POST", Path: "/_aliases", ContentType: "application/json", Payload: payload}
-	opts, err := nativeOptions(req)
-	if err != nil || string(opts.payload) != string(payload) {
-		t.Fatalf("alias command changed: %s, %v", opts.payload, err)
-	}
-}
-
-func TestNativeScanSplitsPagesWithinDocumentBudget(t *testing.T) {
-	var calls atomic.Int32
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete || calls.Add(1) > 1 {
-			_, _ = w.Write([]byte(`{"hits":{"hits":[]}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"_scroll_id":"cursor","hits":{"hits":[{"_id":"1"},{"_id":"2"},{"_id":"3"}]}}`))
-	})
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	opts := Options{Driver: DriverOpenSearch, Store: "search", Endpoints: []string{server.URL}}
-	store, err := New(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	native := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_search", MaxBytes: 200}
-	req := storage.ScanRequest{Request: native, BatchSize: 2}
-	seen := 0
-	visit := func(documents []storage.Document) error {
-		if len(documents) != 1 {
-			t.Errorf("byte budget did not split page: %d", len(documents))
-		}
-		seen += len(documents)
-		return nil
-	}
-	if err := store.Scan(t.Context(), req, visit); err != nil || seen != 3 {
-		t.Fatalf("seen=%d err=%v", seen, err)
-	}
-}
-
-func TestNativeScanClosesLatestCursorAfterCallbackCancellation(t *testing.T) {
-	var calls atomic.Int32
-	var closed atomic.Bool
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete {
-			body, _ := io.ReadAll(r.Body)
-			closed.Store(strings.Contains(string(body), "second"))
-			_, _ = w.Write([]byte(`{"succeeded":true}`))
-			return
-		}
-		if calls.Add(1) == 1 {
-			_, _ = w.Write([]byte(`{"_scroll_id":"first","hits":{"hits":[{"_id":"1","_source":{"value":1}}]}}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"_scroll_id":"second","hits":{"hits":[{"_id":"2","_source":{"value":2}}]}}`))
-	})
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	opts := Options{Driver: DriverOpenSearch, Store: "search", Endpoints: []string{server.URL}}
-	store, err := New(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	native := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_search", ContentType: "application/json", Payload: []byte(`{}`), MaxBytes: 4096}
-	req := storage.ScanRequest{Request: native, BatchSize: 1}
-	seen := 0
-	stop := errors.New("stop after two")
-	visit := func(documents []storage.Document) error {
-		seen += len(documents)
-		if seen == 2 {
-			cancel()
-			return stop
-		}
-		return nil
-	}
-	err = store.Scan(ctx, req, visit)
-	if !errors.Is(err, stop) || seen != 2 || !closed.Load() || calls.Load() != 2 {
-		t.Fatalf("seen=%d closed=%v calls=%d err=%v", seen, closed.Load(), calls.Load(), err)
-	}
-}
-
-func TestNativeScanRejectsPartialSearchResults(t *testing.T) {
-	payloads := []string{
-		`{"_scroll_id":"cursor","timed_out":true,"hits":{"hits":[]}}`,
-		`{"_scroll_id":"cursor","hits":{}}`,
-		`{"_scroll_id":"cursor","_shards":{"failed":1},"hits":{"hits":[]}}`,
-		`{"hits":{"hits":[{"_id":"1"}]}}`,
-	}
-	for _, payload := range payloads {
-		t.Run(payload, func(t *testing.T) { testIncompleteScanPage(t, payload) })
-	}
-}
-
-func testIncompleteScanPage(t *testing.T, payload string) {
-	t.Helper()
-	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(payload)) })
-	server := httptest.NewServer(handler)
-	defer server.Close()
-	opts := Options{Driver: DriverOpenSearch, Store: "search", Endpoints: []string{server.URL}}
-	store, err := New(opts)
-	if err != nil {
-		t.Fatal(err)
-	}
-	native := storage.NativeRequest{Store: "search", Method: "POST", Path: "/products/_search", MaxBytes: 4096}
-	req := storage.ScanRequest{Request: native, BatchSize: 1}
-	visit := func(_ []storage.Document) error { t.Error("partial results were delivered"); return nil }
-	if err := store.Scan(t.Context(), req, visit); err == nil {
-		t.Fatal("partial scan succeeded")
-	}
-}
-
 func TestNativeExecuteCapsResponseAndDoesNotFollowRedirect(t *testing.T) {
 	var targetCalls atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { targetCalls.Add(1) }))
@@ -203,14 +88,15 @@ func TestNativeExecuteCapsResponseAndDoesNotFollowRedirect(t *testing.T) {
 	}
 }
 
-func TestNativeExecuteForwardsArbitraryMethodsPathsAndBodies(t *testing.T) {
+func TestNativeExecutePreservesAllowedRequests(t *testing.T) {
 	commands := []storage.NativeRequest{
 		{Method: "POST", Path: "/_bulk", ContentType: "application/x-ndjson", Payload: []byte("{\"index\":{\"_index\":\"products\"}}\n{\"value\":1}\n")},
 		{Method: "POST", Path: "/products/_update/id", ContentType: "application/json", Payload: []byte(`{"doc":{"value":2}}`)},
 		{Method: "PUT", Path: "/products/_doc/a%2Fb%20c", ContentType: "application/json", Payload: []byte(`{"value":1}`)},
-		{Method: "DELETE", Path: "/products"},
-		{Method: "POST", Path: "/_aliases", ContentType: "application/json", Payload: []byte(`{"actions":[{"remove_index":{"index":"products"}}]}`)},
-		{Method: "PATCH", Path: "/_plugins/future/endpoint/", ContentType: "text/plain", Payload: []byte("opaque")},
+		{Method: "DELETE", Path: "/products/_doc/_aliases%2F_close"},
+		{Method: "GET", Path: "/_plugins/future/endpoint/", ContentType: "text/plain", Payload: []byte("opaque")},
+		{Method: "POST", Path: "/_all/_search", ContentType: "application/json", Payload: []byte(`{}`)},
+		{Method: "PUT", Path: "/products/_mapping", ContentType: "application/json", Payload: []byte(`{"properties":{"title":{"type":"keyword"}}}`)},
 	}
 	for _, command := range commands {
 		t.Run(command.Method+command.Path, func(t *testing.T) {

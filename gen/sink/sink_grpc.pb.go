@@ -35,7 +35,7 @@ const (
 // Sink provides database-independent record reads and mutations.
 //
 // Record requests are batch-native. Atomicity is guaranteed per record, never
-// for the whole request. Native queries use Execute or the streaming Scan RPC.
+// for the whole request. Native queries use Execute, Query, Count or paged Scan.
 type SinkClient interface {
 	Read(ctx context.Context, in *ReadRequest, opts ...grpc.CallOption) (*ReadResponse, error)
 	Write(ctx context.Context, in *WriteRequest, opts ...grpc.CallOption) (*WriteResponse, error)
@@ -43,7 +43,7 @@ type SinkClient interface {
 	Execute(ctx context.Context, in *ExecuteRequest, opts ...grpc.CallOption) (*ExecuteResponse, error)
 	Query(ctx context.Context, in *QueryRequest, opts ...grpc.CallOption) (*QueryResponse, error)
 	Count(ctx context.Context, in *CountRequest, opts ...grpc.CallOption) (*CountResponse, error)
-	Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScanResponse], error)
+	Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (*ScanResponse, error)
 }
 
 type sinkClient struct {
@@ -114,24 +114,15 @@ func (c *sinkClient) Count(ctx context.Context, in *CountRequest, opts ...grpc.C
 	return out, nil
 }
 
-func (c *sinkClient) Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ScanResponse], error) {
+func (c *sinkClient) Scan(ctx context.Context, in *ScanRequest, opts ...grpc.CallOption) (*ScanResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Sink_ServiceDesc.Streams[0], Sink_Scan_FullMethodName, cOpts...)
+	out := new(ScanResponse)
+	err := c.cc.Invoke(ctx, Sink_Scan_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
-	x := &grpc.GenericClientStream[ScanRequest, ScanResponse]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
+	return out, nil
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Sink_ScanClient = grpc.ServerStreamingClient[ScanResponse]
 
 // SinkServer is the server API for Sink service.
 // All implementations must embed UnimplementedSinkServer
@@ -140,7 +131,7 @@ type Sink_ScanClient = grpc.ServerStreamingClient[ScanResponse]
 // Sink provides database-independent record reads and mutations.
 //
 // Record requests are batch-native. Atomicity is guaranteed per record, never
-// for the whole request. Native queries use Execute or the streaming Scan RPC.
+// for the whole request. Native queries use Execute, Query, Count or paged Scan.
 type SinkServer interface {
 	Read(context.Context, *ReadRequest) (*ReadResponse, error)
 	Write(context.Context, *WriteRequest) (*WriteResponse, error)
@@ -148,7 +139,7 @@ type SinkServer interface {
 	Execute(context.Context, *ExecuteRequest) (*ExecuteResponse, error)
 	Query(context.Context, *QueryRequest) (*QueryResponse, error)
 	Count(context.Context, *CountRequest) (*CountResponse, error)
-	Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error
+	Scan(context.Context, *ScanRequest) (*ScanResponse, error)
 	mustEmbedUnimplementedSinkServer()
 }
 
@@ -177,8 +168,8 @@ func (UnimplementedSinkServer) Query(context.Context, *QueryRequest) (*QueryResp
 func (UnimplementedSinkServer) Count(context.Context, *CountRequest) (*CountResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method Count not implemented")
 }
-func (UnimplementedSinkServer) Scan(*ScanRequest, grpc.ServerStreamingServer[ScanResponse]) error {
-	return status.Errorf(codes.Unimplemented, "method Scan not implemented")
+func (UnimplementedSinkServer) Scan(context.Context, *ScanRequest) (*ScanResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method Scan not implemented")
 }
 func (UnimplementedSinkServer) mustEmbedUnimplementedSinkServer() {}
 func (UnimplementedSinkServer) testEmbeddedByValue()              {}
@@ -309,16 +300,23 @@ func _Sink_Count_Handler(srv interface{}, ctx context.Context, dec func(interfac
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Sink_Scan_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ScanRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
+func _Sink_Scan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ScanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
 	}
-	return srv.(SinkServer).Scan(m, &grpc.GenericServerStream[ScanRequest, ScanResponse]{ServerStream: stream})
+	if interceptor == nil {
+		return srv.(SinkServer).Scan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Sink_Scan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(SinkServer).Scan(ctx, req.(*ScanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Sink_ScanServer = grpc.ServerStreamingServer[ScanResponse]
 
 // Sink_ServiceDesc is the grpc.ServiceDesc for Sink service.
 // It's only intended for direct use with grpc.RegisterService,
@@ -351,13 +349,11 @@ var Sink_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Count",
 			Handler:    _Sink_Count_Handler,
 		},
-	},
-	Streams: []grpc.StreamDesc{
 		{
-			StreamName:    "Scan",
-			Handler:       _Sink_Scan_Handler,
-			ServerStreams: true,
+			MethodName: "Scan",
+			Handler:    _Sink_Scan_Handler,
 		},
 	},
+	Streams:  []grpc.StreamDesc{},
 	Metadata: "sink/sink.proto",
 }

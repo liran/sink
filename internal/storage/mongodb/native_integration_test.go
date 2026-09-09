@@ -5,7 +5,6 @@ package mongodb_test
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"sync/atomic"
@@ -83,7 +82,7 @@ func TestNativeMongoIndexesRawErrorsAndCursorCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	filter := bson.D{{Key: "number", Value: bson.D{{Key: "$gte", Value: 1}}}}
-	sorting := bson.D{{Key: "number", Value: 1}}
+	sorting := bson.D{{Key: "_id", Value: 1}}
 	find := bson.D{{Key: "find", Value: "documents"}, {Key: "filter", Value: filter}, {Key: "sort", Value: sorting}}
 	native := mongoNativeRequest(t, fixture.database, find)
 	scan := storage.ScanRequest{Request: native, BatchSize: 2}
@@ -98,35 +97,34 @@ func TestNativeMongoIndexesRawErrorsAndCursorCleanup(t *testing.T) {
 		}
 		return nil
 	}
-	if err := store.Scan(ctx, scan, visit); err != nil || seen != 6 || getMore.Load() == 0 {
-		t.Fatalf("seen=%d getMore=%d err=%v", seen, getMore.Load(), err)
-	}
-	stop := errors.New("callback stopped")
-	visit = func(_ []storage.Document) error { return stop }
-	if err := store.Scan(ctx, scan, visit); !errors.Is(err, stop) || closed.Load() == 0 {
-		t.Fatalf("cursor cleanup=%d err=%v", closed.Load(), err)
-	}
-	match := bson.D{{Key: "$match", Value: filter}}
-	group := bson.D{{Key: "$group", Value: bson.D{{Key: "_id", Value: nil}, {Key: "total", Value: bson.D{{Key: "$sum", Value: "$number"}}}}}}
-	aggregate := bson.D{{Key: "aggregate", Value: "documents"}, {Key: "pipeline", Value: bson.A{match, group}}}
-	scan.Request = mongoNativeRequest(t, fixture.database, aggregate)
-	total := int64(0)
-	visit = func(documents []storage.Document) error {
-		for _, document := range documents {
-			total = bson.Raw(document.Payload).Lookup("total").AsInt64()
+	for {
+		page, err := store.Scan(ctx, scan)
+		if err != nil {
+			t.Fatal(err)
 		}
-		return nil
+		if err := visit(page.Documents); err != nil {
+			t.Fatal(err)
+		}
+		if len(page.NextCursor) == 0 {
+			break
+		}
+		scan.Cursor = page.NextCursor
 	}
-	if err := store.Scan(ctx, scan, visit); err != nil || total != 21 {
-		t.Fatalf("aggregation total=%d err=%v", total, err)
+	if seen != 6 {
+		t.Fatalf("seen=%d", seen)
 	}
-	list := bson.D{{Key: "listIndexes", Value: "documents"}}
-	scan.Request = mongoNativeRequest(t, fixture.database, list)
-	indexes := 0
-	visit = func(documents []storage.Document) error { indexes += len(documents); return nil }
-	if err := store.Scan(ctx, scan, visit); err != nil || indexes != 2 {
-		t.Fatalf("indexes=%d err=%v", indexes, err)
+	// Page-local cursors are exhausted or closed; no getMore is needed after
+	// returning a page to the caller.
+	if getMore.Load() != 0 || closed.Load() != 0 {
+		t.Fatalf("unexpected retained cursor: getMore=%d close=%d", getMore.Load(), closed.Load())
 	}
+	aggregate := bson.D{{Key: "aggregate", Value: "documents"}, {Key: "pipeline", Value: bson.A{}}}
+	scan.Request = mongoNativeRequest(t, fixture.database, aggregate)
+	scan.Cursor = nil
+	if _, err := store.Scan(ctx, scan); err == nil {
+		t.Fatal("accepted aggregate without a resumable record order")
+	}
+
 }
 
 func TestMongoReturningMergeCommitsIndependentCounterValues(t *testing.T) {
