@@ -49,6 +49,8 @@ func TestNativeCommandAllowsWritesAndRejectsCursorSessionState(t *testing.T) {
 		{name: "explain find", command: `{"explain":{"find":"products","filter":{}}}`, allowed: true},
 		{name: "tail", command: `{"find":"products","tailable":true}`, scan: true},
 		{name: "single batch", command: `{"find":"products","singleBatch":true}`, scan: true},
+		{name: "partial shard results", command: `{"find":"products","allowPartialResults":true}`, scan: true},
+		{name: "complete shard results", command: `{"find":"products","allowPartialResults":false}`, scan: true, allowed: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
