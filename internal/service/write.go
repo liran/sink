@@ -211,9 +211,9 @@ func (s *Server) executeWriteGroups(
 	results []*sink.WriteResult,
 	opts writeExecutionOptions,
 ) error {
-	// Returned chains need one commit per operation, but must not jump ahead
-	// of independent records. Each round remains batch-native and retains the
-	// original caller budgets; no concurrent snapshot allocations are added.
+	// Execute separately through the last operation requesting a document;
+	// the remaining tail can fold. Each round remains batch-native and retains
+	// the original caller budgets without extra concurrent snapshots.
 	for len(groups) > 0 {
 		wave := make([]writeGroup, 0, len(groups))
 		next := make([]writeGroup, 0)
