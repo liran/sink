@@ -65,8 +65,22 @@ func (s *Store) performQuery(ctx context.Context, opts requestOptions) (scanPage
 	if err := json.Unmarshal(response.body, &page); err != nil {
 		return page, fmt.Errorf("decode search query: %w", err)
 	}
-	if page.ScrollID != "" || page.Hits == nil || page.Hits.Hits == nil || page.TimedOut || page.TerminatedEarly || page.Shards.Failed != 0 {
+	if page.ScrollID != "" || page.Hits == nil || page.Hits.Hits == nil || page.TimedOut == nil || *page.TimedOut || page.TerminatedEarly {
 		return page, errors.New("search query returned incomplete results, failed shards or an unexpected cursor")
+	}
+	shards := page.Shards
+	if shards == nil || shards.Total == nil || shards.Successful == nil || shards.Failed == nil ||
+		*shards.Total < 0 || *shards.Successful != *shards.Total || *shards.Failed != 0 {
+		return page, errors.New("search query returned incomplete results, failed shards or an unexpected cursor")
+	}
+	// Cross-cluster search can return HTTP 200 with every reported shard
+	// successful while omitting an unavailable remote cluster entirely.
+	if clusters := page.Clusters; clusters != nil {
+		if clusters.Total == nil || clusters.Successful == nil || clusters.Skipped == nil ||
+			*clusters.Total < 0 || *clusters.Successful != *clusters.Total || *clusters.Skipped != 0 ||
+			clusters.Running != 0 || clusters.Partial != 0 || clusters.Failed != 0 {
+			return page, errors.New("search query returned incomplete cluster results")
+		}
 	}
 	return page, nil
 }

@@ -24,7 +24,7 @@ func TestScanResumesOnAnotherServerWithHeadersAndExactSortValues(t *testing.T) {
 			t.Error(err)
 		}
 		if len(body.After) == 0 {
-			_, _ = w.Write([]byte(`{"hits":{"hits":[{"_id":"1","sort":[9007199254740992]},{"_id":"2","sort":[9007199254740993]},{"_id":"3","sort":[9007199254740994]}]}}`))
+			_, _ = w.Write([]byte(`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"_id":"1","sort":[9007199254740992]},{"_id":"2","sort":[9007199254740993]},{"_id":"3","sort":[9007199254740994]}]}}`))
 			return
 		}
 		if string(body.After) != "[9007199254740993]" {
@@ -34,7 +34,7 @@ func TestScanResumesOnAnotherServerWithHeadersAndExactSortValues(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
-		_, _ = w.Write([]byte(`{"hits":{"hits":[{"_id":"3","sort":[9007199254740994]}]}}`))
+		_, _ = w.Write([]byte(`{"timed_out":false,"_shards":{"total":1,"successful":1,"failed":0},"hits":{"hits":[{"_id":"3","sort":[9007199254740994]}]}}`))
 	})
 	backend := httptest.NewServer(handler)
 	defer backend.Close()
