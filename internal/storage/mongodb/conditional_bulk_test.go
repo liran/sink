@@ -2,11 +2,38 @@ package mongodb
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/liran/sink/internal/storage"
+	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo"
 )
+
+func TestReplacementPipelineKeepsSmallAndUnusualDocumentsOnOriginalPath(t *testing.T) {
+	padding := strings.Repeat("x", 32<<10)
+	cases := []struct {
+		name  string
+		value bson.D
+		want  bool
+	}{
+		{name: "small", value: bson.D{{Key: "value", Value: 1}}},
+		{name: "large literal", value: bson.D{{Key: "padding", Value: padding}, {Key: "value", Value: "$field"}}, want: true},
+		{name: "dollar field", value: bson.D{{Key: "padding", Value: padding}, {Key: "$field", Value: 1}}},
+		{name: "duplicate field", value: bson.D{{Key: "padding", Value: padding}, {Key: "value", Value: 1}, {Key: "value", Value: 2}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := bson.Marshal(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if useReplacementPipeline(raw) != tc.want {
+				t.Fatal("selected a replacement path with different document semantics")
+			}
+		})
+	}
+}
 
 func TestConditionalBulkResultsKeepOriginalIndexes(t *testing.T) {
 	revision := storage.Revision{Data: []byte("committed")}

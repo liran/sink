@@ -241,7 +241,8 @@ func (s *Store) writeConditional(
 	if len(operations) == 0 {
 		return
 	}
-	if len(operations) > 1 && s.supportsClientBulk(ctx) {
+	clientBulk := len(operations) > 1 || useReplacementPipeline(operations[0].replacement)
+	if clientBulk && s.supportsClientBulk(ctx) {
 		s.writeConditionalBulk(ctx, operations, results)
 		return
 	}

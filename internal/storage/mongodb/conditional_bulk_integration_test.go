@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -20,7 +21,8 @@ import (
 
 func TestMongoDBConditionalBulkKeepsPerRecordOutcomes(t *testing.T) {
 	fixture := newIntegrationFixture(t)
-	initialValue := bson.D{{Key: "value", Value: 0}}
+	padding := strings.Repeat("x", 32<<10)
+	initialValue := bson.D{{Key: "padding", Value: padding}, {Key: "value", Value: 0}}
 	initial := bsonStorageDocument(t, initialValue)
 	seed := storage.WriteRequest{}
 	for index := range 6 {
@@ -49,7 +51,7 @@ func TestMongoDBConditionalBulkKeepsPerRecordOutcomes(t *testing.T) {
 	if err := fixture.client.Database(fixture.database).RunCommand(t.Context(), command).Err(); err != nil {
 		t.Fatal(err)
 	}
-	changedValue := bson.D{{Key: "value", Value: 1}}
+	changedValue := bson.D{{Key: "padding", Value: padding}, {Key: "value", Value: 1}}
 	changed := bsonStorageDocument(t, changedValue)
 	request := storage.WriteRequest{}
 	for index, seeded := range seed.Operations {
@@ -64,7 +66,7 @@ func TestMongoDBConditionalBulkKeepsPerRecordOutcomes(t *testing.T) {
 		}
 		operation := storage.WriteOperation{Address: seeded.Address, Document: changed, Precondition: precondition}
 		if index == 4 {
-			invalid := bson.D{{Key: "value", Value: 99}}
+			invalid := bson.D{{Key: "padding", Value: padding}, {Key: "value", Value: 99}}
 			operation.Document = bsonStorageDocument(t, invalid)
 		}
 		request.Operations = append(request.Operations, operation)
@@ -166,7 +168,8 @@ func TestMongoDBConditionalWritesSelectCapabilityAndPreserveDurabilityErrors(t *
 				t.Fatal(err)
 			}
 			seed := storage.WriteRequest{}
-			initial := bson.D{{Key: "value", Value: 0}}
+			padding := strings.Repeat("x", 32<<10)
+			initial := bson.D{{Key: "padding", Value: padding}, {Key: "value", Value: 0}}
 			for index := range 2 {
 				operation := storage.WriteOperation{Address: fixture.address(fmt.Sprintf("concern-%d", index)), Document: bsonStorageDocument(t, initial)}
 				seed.Operations = append(seed.Operations, operation)
@@ -176,7 +179,7 @@ func TestMongoDBConditionalWritesSelectCapabilityAndPreserveDurabilityErrors(t *
 				t.Fatal(err)
 			}
 			request := storage.WriteRequest{}
-			changed := bson.D{{Key: "value", Value: 1}}
+			changed := bson.D{{Key: "padding", Value: padding}, {Key: "value", Value: 1}}
 			for index, operation := range seed.Operations {
 				if created.Results[index].Status != storage.WriteStatusApplied {
 					t.Fatalf("seed: %+v", created.Results[index])

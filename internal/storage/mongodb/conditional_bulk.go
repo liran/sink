@@ -3,6 +3,7 @@ package mongodb
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -48,7 +49,15 @@ func (s *Store) writeConditionalBulk(ctx context.Context, operations []writeWork
 			setWriteError(&results[operation.index], err)
 			continue
 		}
-		model := mongo.NewClientReplaceOneModel().SetFilter(filter).SetReplacement(operation.replacement)
+		var model mongo.ClientWriteModel
+		if useReplacementPipeline(operation.replacement) {
+			literal := bson.D{{Key: "$literal", Value: operation.replacement}}
+			stage := bson.D{{Key: "$replaceWith", Value: literal}}
+			pipeline := mongo.Pipeline{stage}
+			model = mongo.NewClientUpdateOneModel().SetFilter(filter).SetUpdate(pipeline)
+		} else {
+			model = mongo.NewClientReplaceOneModel().SetFilter(filter).SetReplacement(operation.replacement)
+		}
 		write := mongo.ClientBulkWrite{Database: operation.collection.database, Collection: operation.collection.collection, Model: model}
 		writes = append(writes, write)
 		prepared = append(prepared, operation)
@@ -77,8 +86,8 @@ func (s *Store) writeConditionalBulk(ctx context.Context, operations []writeWork
 	response, err := s.client.BulkWrite(ctx, writes, bulkOptions)
 	<-s.writes
 	if unsupportedClientBulk(response, err) {
-		// Feature compatibility settings can disable a command even when the
-		// server advertises a new wire version. Retry only a command rejection
+		// Command availability can differ from cached wire-version discovery,
+		// for example after a primary changes. Retry only a command rejection
 		// with no evidence that any item ran; never retry ambiguous outcomes.
 		s.clientBulkCapability.Store(clientBulkUnavailable)
 		s.writeConditional(ctx, prepared, results)
@@ -86,6 +95,29 @@ func (s *Store) writeConditionalBulk(ctx context.Context, operations []writeWork
 	}
 	outcome := conditionalBulkOutcome{operations: prepared, results: results, response: response, err: err}
 	applyConditionalBulkOutcome(outcome)
+}
+
+func useReplacementPipeline(document bson.Raw) bool {
+	// A literal replacement pipeline preserves the complete document while
+	// letting MongoDB log a small delta instead of copying large unchanged
+	// fields into the oplog. Small documents keep the cheaper replacement path.
+	if len(document) < 16<<10 {
+		return false
+	}
+	elements, err := document.Elements()
+	if err != nil {
+		return false
+	}
+	seen := make(map[string]bool, len(elements))
+	for _, element := range elements {
+		key := element.Key()
+		// Keep the original validation and representation of unusual documents.
+		if strings.HasPrefix(key, "$") || seen[key] {
+			return false
+		}
+		seen[key] = true
+	}
+	return true
 }
 
 func unsupportedClientBulk(response *mongo.ClientBulkWriteResult, err error) bool {
