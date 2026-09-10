@@ -29,6 +29,7 @@ import (
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"google.golang.org/grpc"
 	_ "google.golang.org/grpc/balancer/roundrobin"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/resolver/dns"
 	"google.golang.org/grpc/status"
@@ -81,6 +82,7 @@ type worker struct {
 	latencies         []time.Duration
 	wire              []time.Duration
 	errors            map[string]int64
+	operationFailures map[string]string
 	rpcs              int64
 	succeeded         int64
 	ops               int64
@@ -99,10 +101,11 @@ type secondReport struct {
 }
 
 type workerFailure struct {
-	Worker              int              `json:"worker"`
-	Channel             int              `json:"channel"`
-	Errors              map[string]int64 `json:"errors"`
-	FirstFailureSeconds []float64        `json:"first_failure_seconds"`
+	Worker              int               `json:"worker"`
+	Channel             int               `json:"channel"`
+	Errors              map[string]int64  `json:"errors"`
+	FirstFailureSeconds []float64         `json:"first_failure_seconds"`
+	OperationFailures   map[string]string `json:"operation_failure_samples,omitempty"`
 }
 
 type report struct {
@@ -350,7 +353,7 @@ func execute(ctx context.Context, opts settings) (report, error) {
 			result.Errors[code] += count
 		}
 		if len(entry.errors) != 0 {
-			failure := workerFailure{Worker: entry.index, Channel: entry.index % len(clients), Errors: entry.errors, FirstFailureSeconds: entry.failures}
+			failure := workerFailure{Worker: entry.index, Channel: entry.index % len(clients), Errors: entry.errors, FirstFailureSeconds: entry.failures, OperationFailures: entry.operationFailures}
 			result.WorkerFailures = append(result.WorkerFailures, failure)
 		}
 	}
@@ -642,6 +645,13 @@ func (w *worker) write(ctx context.Context, opts settings, keys []int) bool {
 		if item.Status != sink.WriteStatus_WRITE_STATUS_APPLIED {
 			code := item.Status.String() + ":" + item.GetFailure().GetCode().String()
 			w.errors[code]++
+			if w.operationFailures == nil {
+				w.operationFailures = make(map[string]string)
+			}
+			if _, found := w.operationFailures[code]; !found {
+				detail := item.GetFailure().String()
+				w.operationFailures[code] = detail[:min(len(detail), 2048)]
+			}
 			if w.index == 0 && w.errors[code] == 1 {
 				fmt.Fprintf(os.Stderr, "first operation failure: %v\n", item.GetFailure())
 			}
@@ -680,7 +690,7 @@ func verify(ctx context.Context, opts settings, workers []*worker) (bool, int64,
 	padding := strings.Repeat("x", opts.Padding)
 	fields := extraFields(opts.Fields)
 	batchSize := min(128, max(1, (16<<20)/(opts.Padding+512)))
-	for begin := 0; begin < opts.Keys; begin += batchSize {
+	for begin := 0; begin < opts.Keys; {
 		request := &sink.ReadRequest{}
 		for key := begin; key < min(opts.Keys, begin+batchSize); key++ {
 			operation := &sink.ReadOperation{Address: address(opts, key)}
@@ -689,6 +699,16 @@ func verify(ctx context.Context, opts settings, workers []*worker) (bool, int64,
 		call, cancel := context.WithTimeout(ctx, 30*time.Second)
 		response, err := workers[0].client.Read(call, request)
 		cancel()
+		limited := status.Code(err) == codes.ResourceExhausted
+		for _, item := range response.GetResults() {
+			limited = limited || item.GetFailure().GetCode() == sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED
+		}
+		// Deployments intentionally tune their read/response byte limit. Retry
+		// only the read, before accounting any record from this response.
+		if limited && len(request.Operations) > 1 {
+			batchSize = max(1, len(request.Operations)/2)
+			continue
+		}
 		if err != nil {
 			return false, reconciled, fmt.Errorf("reconciliation read: %w", err)
 		}
@@ -697,7 +717,8 @@ func verify(ctx context.Context, opts settings, workers []*worker) (bool, int64,
 		}
 		for offset, item := range response.Results {
 			if item.Status != sink.ReadStatus_READ_STATUS_FOUND {
-				return false, reconciled, errors.New("reconciliation record is missing")
+				return false, reconciled, fmt.Errorf("reconciliation record %d: %s, %s: %s", begin+offset,
+					item.Status, item.GetFailure().GetCode(), item.GetFailure().GetMessage())
 			}
 			stored, err := decodeDocument(item.Document)
 			if err != nil {
@@ -731,6 +752,7 @@ func verify(ctx context.Context, opts settings, workers []*worker) (bool, int64,
 				return false, reconciled, fmt.Errorf("record %d did not reconcile: value=%d want=%d padding=%d", key, stored.Value, expected, len(stored.Padding))
 			}
 		}
+		begin += len(request.Operations)
 	}
 	return true, reconciled, nil
 }
