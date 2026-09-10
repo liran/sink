@@ -241,6 +241,10 @@ func (s *Store) writeConditional(
 	if len(operations) == 0 {
 		return
 	}
+	if len(operations) > 1 && s.supportsClientBulk(ctx) {
+		s.writeConditionalBulk(ctx, operations, results)
+		return
+	}
 	workerCount := min(s.maxConcurrentWrites, len(operations))
 	workChannel := make(chan writeWork)
 	var workers sync.WaitGroup
