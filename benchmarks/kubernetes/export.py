@@ -125,7 +125,7 @@ def main():
     destination = pathlib.Path(opts.output)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", newline="") as output:
-        writer = csv.DictWriter(output, fieldnames=list(rows[0]))
+        writer = csv.DictWriter(output, fieldnames=list(rows[0]), lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     print(f"Exported {len(rows)} anonymous measurements")
@@ -133,7 +133,7 @@ def main():
         destination = pathlib.Path(opts.flush_output)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with destination.open("w", newline="") as output:
-            writer = csv.DictWriter(output, fieldnames=list(flush_rows[0]))
+            writer = csv.DictWriter(output, fieldnames=list(flush_rows[0]), lineterminator="\n")
             writer.writeheader()
             writer.writerows(flush_rows)
         print(f"Exported {len(flush_rows)} anonymous flush observations")
