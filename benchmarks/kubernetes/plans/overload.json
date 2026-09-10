@@ -80,7 +80,8 @@
       "rate": 4000,
       "error-backoff": "100ms",
       "search-replicas": 1,
-      "active-shards": "all"
+      "active-shards": "all",
+      "search-shards": 3
     }
   },
   {
@@ -110,7 +111,8 @@
       "fields": 32,
       "full-incoming": true,
       "search-replicas": 1,
-      "active-shards": "all"
+      "active-shards": "all",
+      "search-shards": 3
     }
   }
 ]

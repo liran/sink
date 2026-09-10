@@ -27,7 +27,7 @@
     }
   },
   {
-    "label": "soak-single2-rich-search",
+    "label": "soak-single2-rich-search-three-shards",
     "server": {
       "binary-name": "sink-candidate",
       "cpu": "2",
@@ -52,8 +52,10 @@
       "fields": 32,
       "full-incoming": true,
       "search-replicas": 1,
-      "active-shards": "all"
-    }
+      "active-shards": "all",
+      "search-shards": 3
+    },
+    "search_stats": true
   },
   {
     "label": "soak-single2-large-delta-mongo",

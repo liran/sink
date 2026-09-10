@@ -197,14 +197,14 @@ stores. This is an intentional exception to running only one load at a time:
 ```sh
 python3 benchmarks/kubernetes/run.py --state "$SINK_BENCH_STATE" \
   --output "$SINK_BENCH_DIR/shared-mongo.json" --label shared-mongo -- \
-  --store mongo --concurrency 128 --duration 300s --rate 1750 \
+  --store mongo --concurrency 128 --duration 600s --rate 1750 \
   --random-padding --fields 32 --full-incoming &
 SINK_MONGO_RUN=$!
 python3 benchmarks/kubernetes/run.py --state "$SINK_BENCH_STATE" \
   --output "$SINK_BENCH_DIR/shared-search.json" --label shared-search -- \
-  --store search --concurrency 128 --duration 300s --rate 1500 \
+  --store search --concurrency 128 --duration 600s --rate 1500 \
   --random-padding --fields 32 --full-incoming \
-  --search-replicas 1 --active-shards all &
+  --search-replicas 1 --search-shards 3 --active-shards all &
 SINK_SEARCH_RUN=$!
 wait "$SINK_MONGO_RUN"
 wait "$SINK_SEARCH_RUN"

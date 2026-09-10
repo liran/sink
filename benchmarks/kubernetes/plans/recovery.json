@@ -104,8 +104,9 @@
       "wait-ms": 2,
       "replicas": 2,
       "rolling": true,
-      "prestop-seconds": 5,
-      "min-ready-seconds": 5
+      "prestop-seconds": 40,
+      "min-ready-seconds": 5,
+      "grace-seconds": 90
     },
     "load": {
       "store": "mongo",
@@ -133,8 +134,9 @@
       "wait-ms": 2,
       "replicas": 2,
       "rolling": true,
-      "prestop-seconds": 5,
-      "min-ready-seconds": 5
+      "prestop-seconds": 40,
+      "min-ready-seconds": 5,
+      "grace-seconds": 90
     },
     "load": {
       "store": "search",
@@ -146,7 +148,8 @@
       "rate": 3000,
       "search-replicas": 1,
       "active-shards": "all",
-      "error-backoff": "100ms"
+      "error-backoff": "100ms",
+      "search-shards": 3
     },
     "fault": "search-terminate"
   }

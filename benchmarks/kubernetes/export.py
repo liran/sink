@@ -51,6 +51,8 @@ def row_for(result):
            "search_flush_mib": settings.get("search_flush_mib", 0),
            "search_active_shards": settings.get("search_active_shards", "1"),
            "offered_rpcs_per_second": settings["offered_rpcs_per_second"], "elapsed_seconds": result.get("elapsed_seconds"),
+           "rpc_timeout_seconds": settings.get("rpc_timeout_ns", 5_000_000_000) / 1e9,
+           "error_backoff_seconds": settings.get("error_backoff_ns", 10_000_000) / 1e9,
            "successful_rpcs_per_second": result.get("rpcs_per_second"), "successful_operations_per_second": result.get("operations_per_second"),
            "p50_ms": result.get("p50_ms"), "p95_ms": result.get("p95_ms"), "p99_ms": result.get("p99_ms"), "max_ms": result.get("max_ms"),
            "execution_p99_ms": result.get("execution_p99_ms", ""),

@@ -36,7 +36,8 @@ def inject_fault(namespace, kind, pods, dataset):
         command = ["-n", namespace, "exec", pod, "-c", role, "--", "sh", "-c", "kill -ABRT 1"]
     elif kind == "mongo-stepdown":
         seeds = ",".join(p["name"] + ".mongodb:27017" for p in candidates)
-        command = ["-n", namespace, "exec", pod, "--", "mongosh", "--quiet", "--host", "rs0/" + seeds, "--eval", "rs.stepDown(15, true)"]
+        script = "const stepdown = {replSetStepDown: 15, force: true}; db.adminCommand(stepdown)"
+        command = ["-n", namespace, "exec", pod, "--", "mongosh", "--quiet", "--host", "rs0/" + seeds, "--eval", script]
     else:
         command = ["-n", namespace, "delete", "pod", pod, "--wait=false"]
     return cluster.kubectl(command)
