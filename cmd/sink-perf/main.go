@@ -56,6 +56,7 @@ type settings struct {
 	ReturnDocument  bool          `json:"return_document"`
 	Replicas        int           `json:"search_replicas"`
 	Shards          int           `json:"search_shards"`
+	SearchFlushMiB  int           `json:"search_flush_mib"`
 	ActiveShards    string        `json:"search_active_shards"`
 	Connections     int           `json:"connections"`
 	WarmConnections bool          `json:"warm_connections"`
@@ -168,6 +169,7 @@ func main() {
 	flag.BoolVar(&opts.ReturnDocument, "return-document", false, "Return committed write documents")
 	flag.IntVar(&opts.Replicas, "search-replicas", 0, "Search index replicas; all copies must be active before load")
 	flag.IntVar(&opts.Shards, "search-shards", 1, "Search primary shards")
+	flag.IntVar(&opts.SearchFlushMiB, "search-flush-mib", 0, "Search translog flush threshold in MiB; zero retains the backend default")
 	flag.StringVar(&opts.ActiveShards, "active-shards", "1", "Search write availability requirement: 1 or all")
 	flag.IntVar(&opts.Connections, "connections", 4, "Independent gRPC channels, all using round_robin")
 	flag.BoolVar(&opts.WarmConnections, "warm-connections", true, "Connect every gRPC channel before measuring; disable to test cold starts")
@@ -216,6 +218,9 @@ func validateSettings(opts *settings) error {
 	}
 	if opts.HotKeys > 1_000_000 || opts.Shards < 1 || opts.Replicas < 0 || opts.Replicas > 2 {
 		return errors.New("invalid key or replica limits")
+	}
+	if opts.SearchFlushMiB < 0 {
+		return errors.New("search flush threshold must not be negative")
 	}
 	if opts.ActiveShards != "" && opts.ActiveShards != "1" && opts.ActiveShards != "all" {
 		return errors.New("active shards must be 1 or all")
@@ -387,6 +392,9 @@ func percentile(values []time.Duration, percent int) float64 {
 func seed(ctx context.Context, opts settings, client sink.SinkClient) error {
 	if opts.Store == "search" {
 		indexOptions := map[string]any{"number_of_shards": opts.Shards, "number_of_replicas": opts.Replicas, "refresh_interval": "1s", "mapping.total_fields.limit": max(1000, opts.Concurrency+opts.Fields+32), "translog.durability": "request"}
+		if opts.SearchFlushMiB > 0 {
+			indexOptions["translog.flush_threshold_size"] = fmt.Sprintf("%dmb", opts.SearchFlushMiB)
+		}
 		if opts.ActiveShards != "" {
 			indexOptions["write.wait_for_active_shards"] = opts.ActiveShards
 		}
