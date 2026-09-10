@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.stderr
+state*.json
+raw*/
+binaries/
