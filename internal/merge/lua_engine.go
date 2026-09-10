@@ -12,7 +12,6 @@ import (
 
 	"github.com/iceisfun/golua/compiler"
 	"github.com/iceisfun/golua/parser"
-	"github.com/iceisfun/golua/stdlib"
 	"github.com/iceisfun/golua/vm"
 )
 
@@ -38,10 +37,11 @@ type LuaOptions struct {
 }
 
 type LuaEngine struct {
-	options LuaOptions
-	mu      sync.Mutex
-	entries map[[sha256.Size]byte]*list.Element
-	recent  list.List
+	options     LuaOptions
+	environment *luaEnvironment
+	mu          sync.Mutex
+	entries     map[[sha256.Size]byte]*list.Element
+	recent      list.List
 }
 
 type cachedProgram struct {
@@ -82,8 +82,9 @@ func NewLuaEngine(options LuaOptions) (*LuaEngine, error) {
 		options.MaxStackSlots = defaultMaxStackSlots
 	}
 	engine := &LuaEngine{
-		options: options,
-		entries: make(map[[sha256.Size]byte]*list.Element),
+		options:     options,
+		environment: newLuaEnvironment(),
+		entries:     make(map[[sha256.Size]byte]*list.Element),
 	}
 	return engine, nil
 }
@@ -252,11 +253,9 @@ func (e *LuaEngine) newVM(ctx context.Context, observedAt time.Time) (*vm.VM, *l
 	}
 	options := []vm.VMOption{vm.WithContext(ctx), vm.WithLimits(limits)}
 	luaVM := vm.New(options...)
-	stdlib.Open(luaVM)
-	addUnicodeTextFunctions(luaVM)
+	e.environment.install(luaVM)
 	bridge := newLuaJSONBridge(luaVM)
 	addSinkV1Functions(luaVM, bridge, observedAt)
-	restrictLuaEnvironment(luaVM)
 	return luaVM, bridge
 }
 
