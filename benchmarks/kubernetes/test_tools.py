@@ -59,6 +59,19 @@ class OwnershipTests(unittest.TestCase):
 
 
 class ExportTests(unittest.TestCase):
+    def test_flush_export_omits_absolute_time_and_cluster_details(self):
+        result = {"label": "example", "started_unix_ns": 10_000_000_000, "elapsed_seconds": 60,
+                  "settings": {"search_shards": 3, "dataset": "do-not-export"}}
+        stats = {"flush": {"total": 2, "total_time_in_millis": 500},
+                 "translog": {"uncommitted_size_in_bytes": 1 << 20}, "private": "do-not-export"}
+        samples = [{"unix_ns": 15_000_000_000, "stats": {"_all": {"primaries": stats, "total": stats}},
+                    "node": "do-not-export"}]
+        rows = export.flush_rows_for(result, samples)
+        self.assertEqual(rows[0]["observed_after_seconds"], 5)
+        self.assertEqual(rows[0]["primary_uncommitted_translog_mib"], 1)
+        self.assertNotIn("do-not-export", json.dumps(rows))
+        self.assertNotIn("unix_ns", json.dumps(rows))
+
     def test_export_omits_connection_and_cluster_details(self):
         settings = {"store": "mongo", "workload": "merge", "concurrency": 1, "keys": 1, "hot_keys": 0,
                     "padding_bytes": 1024, "operations_per_rpc": 1, "wait_until_visible": False,

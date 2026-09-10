@@ -50,6 +50,8 @@ def main():
             previous_server = server
         print(f"Measuring: {label}", flush=True)
         command = [sys.executable, str(root / "run.py"), "--state", opts.state, "--output", str(destination), "--label", label]
+        if scenario.get("search_stats"):
+            command.append("--search-stats")
         if scenario.get("fault"):
             command.extend(["--fault", scenario["fault"], "--fault-after-seconds", str(scenario.get("fault_after_seconds", 20))])
         command.extend(["--", *flags(scenario["load"])])

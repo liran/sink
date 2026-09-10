@@ -48,6 +48,7 @@ def row_for(result):
            "visible": settings["wait_until_visible"], "return_document": settings["return_document"],
            "backend_members": len(databases), "search_shards": settings.get("search_shards", 1),
            "search_replicas": settings.get("search_replicas", 0), "client_connections": settings.get("connections", 4),
+           "search_flush_mib": settings.get("search_flush_mib", 0),
            "search_active_shards": settings.get("search_active_shards", "1"),
            "offered_rpcs_per_second": settings["offered_rpcs_per_second"], "elapsed_seconds": result.get("elapsed_seconds"),
            "successful_rpcs_per_second": result.get("rpcs_per_second"), "successful_operations_per_second": result.get("operations_per_second"),
@@ -74,21 +75,49 @@ def row_for(result):
            "sink_peak_sampled_rss_mib": max((m.get("peak_sampled_main_rss_bytes", 0) for m in servers), default=0) / (1 << 20),
            "pod_replaced": any(m.get("pod_replaced", False) for m in metrics),
            "oom_kills": sum(m.get("oom_kills", 0) for m in metrics), "sampling_errors": result.get("sampling_errors", 0),
+           "search_stats_samples": result.get("search_stats_samples", 0), "search_stats_sampling_errors": result.get("search_stats_sampling_errors", 0),
            "server_binary_sha256": environments[0].get("binary_sha256", "") if environments else "",
            "load_binary_sha256": result.get("load_binary_sha256", "")}
     return row
+
+
+def flush_rows_for(result, samples):
+    rows = []
+    for sample in samples:
+        elapsed = (sample["unix_ns"] - result["started_unix_ns"]) / 1e9
+        if not 0 <= elapsed <= result["elapsed_seconds"]:
+            continue
+        stats = sample.get("stats", {}).get("_all", {})
+        primary = stats.get("primaries", {})
+        total = stats.get("total", {})
+        if "flush" not in primary or "translog" not in primary:
+            continue
+        row = {"case": result["label"], "observed_after_seconds": elapsed,
+               "search_shards": result["settings"].get("search_shards", 1),
+               "primary_flushes": primary["flush"]["total"],
+               "primary_flush_time_ms": primary["flush"]["total_time_in_millis"],
+               "all_copy_flushes": total.get("flush", {}).get("total", ""),
+               "all_copy_flush_time_ms": total.get("flush", {}).get("total_time_in_millis", ""),
+               "primary_uncommitted_translog_mib": primary["translog"]["uncommitted_size_in_bytes"] / (1 << 20),
+               "primary_indexed_operations": primary.get("indexing", {}).get("index_total", "")}
+        rows.append(row)
+    return rows
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--flush-output", help="Optional anonymous index flush observations")
     opts = parser.parse_args()
-    rows = []
+    rows, flush_rows = [], []
     for filename in sorted(pathlib.Path(opts.input_dir).glob("*.json")):
         result = json.loads(filename.read_text())
         if isinstance(result, dict) and result.get("settings") and "resource_metrics" in result:
             rows.append(row_for(result))
+            flush_file = filename.with_suffix(".flush-stats.json")
+            if opts.flush_output and flush_file.exists():
+                flush_rows.extend(flush_rows_for(result, json.loads(flush_file.read_text())))
     if not rows:
         raise SystemExit("No measured results found")
     destination = pathlib.Path(opts.output)
@@ -98,6 +127,14 @@ def main():
         writer.writeheader()
         writer.writerows(rows)
     print(f"Exported {len(rows)} anonymous measurements")
+    if opts.flush_output and flush_rows:
+        destination = pathlib.Path(opts.flush_output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("w", newline="") as output:
+            writer = csv.DictWriter(output, fieldnames=list(flush_rows[0]))
+            writer.writeheader()
+            writer.writerows(flush_rows)
+        print(f"Exported {len(flush_rows)} anonymous flush observations")
 
 
 if __name__ == "__main__":

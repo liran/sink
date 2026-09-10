@@ -7,7 +7,7 @@
       "memory": "2Gi",
       "go-memory": "1536MiB",
       "gogc": 400,
-      "batch-operations": 128,
+      "batch-operations": 32,
       "execution-mib": 512,
       "read-mib": 32,
       "wait-ms": 2,
@@ -23,21 +23,21 @@
       "random-padding": true,
       "fields": 32,
       "full-incoming": true,
-      "rate": 2500,
+      "rate": 3500,
       "error-backoff": "100ms",
       "dns-min-interval": "30s"
     },
     "fault": "sink-terminate"
   },
   {
-    "label": "recovery-sink-rollout-dns30",
+    "label": "recovery-sink-rollout-fresh-dns30",
     "server": {
       "binary-name": "sink-candidate",
       "cpu": "2",
       "memory": "2Gi",
       "go-memory": "1536MiB",
       "gogc": 400,
-      "batch-operations": 128,
+      "batch-operations": 32,
       "execution-mib": 512,
       "read-mib": 32,
       "wait-ms": 2,
@@ -53,11 +53,12 @@
       "random-padding": true,
       "fields": 32,
       "full-incoming": true,
-      "rate": 2500,
+      "rate": 3500,
       "error-backoff": "100ms",
       "dns-min-interval": "30s"
     },
-    "fault": "sink-rollout"
+    "fault": "sink-rollout",
+    "fault_after_seconds": 0
   },
   {
     "label": "recovery-sink-crash-dns30",
@@ -67,7 +68,7 @@
       "memory": "2Gi",
       "go-memory": "1536MiB",
       "gogc": 400,
-      "batch-operations": 128,
+      "batch-operations": 32,
       "execution-mib": 512,
       "read-mib": 32,
       "wait-ms": 2,
@@ -83,7 +84,7 @@
       "random-padding": true,
       "fields": 32,
       "full-incoming": true,
-      "rate": 2500,
+      "rate": 3500,
       "error-backoff": "100ms",
       "dns-min-interval": "30s"
     },
@@ -97,7 +98,7 @@
       "memory": "2Gi",
       "go-memory": "1536MiB",
       "gogc": 400,
-      "batch-operations": 128,
+      "batch-operations": 32,
       "execution-mib": 512,
       "read-mib": 32,
       "wait-ms": 2,
@@ -126,7 +127,7 @@
       "memory": "2Gi",
       "go-memory": "1536MiB",
       "gogc": 400,
-      "batch-operations": 128,
+      "batch-operations": 32,
       "execution-mib": 512,
       "read-mib": 32,
       "wait-ms": 2,
@@ -142,7 +143,7 @@
       "random-padding": true,
       "fields": 32,
       "full-incoming": true,
-      "rate": 3500,
+      "rate": 3000,
       "search-replicas": 1,
       "active-shards": "all",
       "error-backoff": "100ms"

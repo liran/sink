@@ -1,0 +1,116 @@
+[
+  {
+    "label": "overload-bounded-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 40,
+      "grace-seconds": 90,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 512,
+      "batch": 100,
+      "duration": "45s",
+      "rate": 4000,
+      "error-backoff": "100ms"
+    }
+  },
+  {
+    "label": "overload-recovery-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 40,
+      "grace-seconds": 90,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 128,
+      "duration": "120s",
+      "rate": 2000,
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true
+    }
+  },
+  {
+    "label": "overload-bounded-search",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 40,
+      "grace-seconds": 90,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 512,
+      "batch": 100,
+      "duration": "45s",
+      "rate": 4000,
+      "error-backoff": "100ms",
+      "search-replicas": 1,
+      "active-shards": "all"
+    }
+  },
+  {
+    "label": "overload-recovery-search",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 40,
+      "grace-seconds": 90,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 128,
+      "duration": "120s",
+      "rate": 2000,
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "search-replicas": 1,
+      "active-shards": "all"
+    }
+  }
+]

@@ -110,6 +110,11 @@ Its total-field limit is raised when needed to fit the synthetic per-writer
 sequence fields (`max(1000, concurrency + extra fields + 32)`). This prevents
 the generator's bookkeeping from exceeding the mapping limit; it does not
 disable indexing of those fields or of the payload.
+`--search-flush-mib` optionally sets the fresh index's translog flush threshold;
+zero retains the backend default. This changes flush frequency while keeping
+`translog.durability=request`. Measure recovery as well as throughput before
+adopting a larger threshold. The [flush comparison plan](plans/search-flush.json)
+combines sampled flush counters with fixed-rate workloads.
 The default Merge carries only a small counter delta. Add `--full-incoming`
 to transmit and merge the padding and fields on each mutation as well.
 
@@ -126,6 +131,12 @@ When available, cgroup I/O counters report backend block-device read/write
 rates during the same interval. These are container observations, not a storage
 service throughput guarantee. Use a multi-minute run spanning database
 checkpoints before drawing conclusions about sustained storage capacity.
+For search diagnostics, pass `--search-stats` before `--` to collect index flush,
+translog and indexing counters alongside cgroup samples. The runner saves a
+private `.flush-stats.json` next to the result; `--flush-output` on `export.py`
+exports only relative times and numeric observations. Compare flush increments
+with throughput dips in the workload's one-second timeline. Statistics are
+sampled, so an observation time is not the exact start time of a flush.
 
 `matrix.py` accepts a JSON list of scenarios. Each object contains `label`,
 `server` flags for `cluster.py server`, and `load` flags for `sink-perf`. It
@@ -174,6 +185,35 @@ one 4 CPU Sink and two 2 CPU Sinks, including richer documents, search shard
 count, visible completion and shared keys. It assumes both database clusters
 already have three members; it does not scale the databases itself.
 
+The [soak plan](plans/soak.json) uses one 2 CPU / 2 GiB Sink and fixed offered
+rates for two ten-minute small-document runs and a five-minute 16 KiB MongoDB
+run. It assumes the replicated database topology. Review zero errors, zero
+unissued requests, reconciliation and P99 before accepting a rate. The plan
+finishing successfully does not by itself establish a latency SLO.
+
+After that plan, keep the same single-Sink configuration to check simultaneous
+stores. This is an intentional exception to running only one load at a time:
+
+```sh
+python3 benchmarks/kubernetes/run.py --state "$SINK_BENCH_STATE" \
+  --output "$SINK_BENCH_DIR/shared-mongo.json" --label shared-mongo -- \
+  --store mongo --concurrency 128 --duration 300s --rate 1750 \
+  --random-padding --fields 32 --full-incoming &
+SINK_MONGO_RUN=$!
+python3 benchmarks/kubernetes/run.py --state "$SINK_BENCH_STATE" \
+  --output "$SINK_BENCH_DIR/shared-search.json" --label shared-search -- \
+  --store search --concurrency 128 --duration 300s --rate 1500 \
+  --random-padding --fields 32 --full-incoming \
+  --search-replicas 1 --active-shards all &
+SINK_SEARCH_RUN=$!
+wait "$SINK_MONGO_RUN"
+wait "$SINK_SEARCH_RUN"
+```
+
+Verify both results and their measurement-window overlap using the local
+`started_unix_ns` and `elapsed_seconds`. The Sink and load cgroup measurements
+include both workloads; do not add their duplicated CPU or memory figures.
+
 For an explicit recovery test, `run.py` also accepts `--fault sink-crash`,
 `--fault sink-terminate`, `--fault sink-rollout`, `--fault mongo-stepdown`, or `--fault search-terminate`
 before `--`, with `--fault-after-seconds 20`. Use a workload of at least 120 s
@@ -195,6 +235,12 @@ plus the server's 30 second graceful shutdown budget; for example, a 40 second
 pre-stop requires at least 70 seconds, with 90 seconds allowing extra margin.
 The helper rejects a shorter grace period. Evaluate the delay together with
 the client's DNS refresh behavior and the time available for rollout.
+The [drain comparison](plans/drain.json) exercises the longer delay with a fresh
+30-second DNS cache. The [overload plan](plans/overload.json) offers 4,000 RPC/s
+with 100 operations per RPC, followed by ordinary traffic at 2,000 RPC/s.
+The overload is deliberately excessive: inspect bounded rejection, memory,
+reconciliation and subsequent recovery instead of treating its offered rate
+as achieved capacity.
 
 The optional `cluster.py legacy-mongo` command creates a disposable MongoDB 7
 replica set at `mongodb-legacy:27017` in the same namespace. Run tagged storage
@@ -210,7 +256,8 @@ even when the records were committed.
 
 ```sh
 python3 benchmarks/kubernetes/export.py --input-dir "$SINK_BENCH_DIR" \
-  --output "$SINK_BENCH_DIR/anonymous-results.csv"
+  --output "$SINK_BENCH_DIR/anonymous-results.csv" \
+  --flush-output "$SINK_BENCH_DIR/anonymous-flush.csv"
 python3 -m unittest discover -s benchmarks/kubernetes
 python3 benchmarks/kubernetes/cluster.py --state "$SINK_BENCH_STATE" cleanup
 ```

@@ -80,6 +80,13 @@ def fault_observed(kind, command_succeeded, metrics):
     return command_succeeded and any(replaced)
 
 
+def sample_search_stats(namespace, pod, dataset):
+    endpoint = f"http://localhost:9200/{dataset}/_stats/flush,translog,indexing?filter_path=_all"
+    raw = cluster.kubectl(["-n", namespace, "exec", pod, "--", "curl", "--fail", "--silent", "--max-time", "5", endpoint])
+    value = {"unix_ns": time.time_ns(), "stats": json.loads(raw)}
+    return value
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", required=True)
@@ -87,6 +94,7 @@ def main():
     parser.add_argument("--label", required=True)
     parser.add_argument("--sample-seconds", type=float, default=5)
     parser.add_argument("--keep-data", action="store_true")
+    parser.add_argument("--search-stats", action="store_true", help="Sample index flush/translog statistics during a search workload")
     parser.add_argument("--max-seconds", type=int, default=1800)
     parser.add_argument("--fault", choices=["sink-crash", "sink-terminate", "sink-rollout", "mongo-stepdown", "search-terminate"])
     parser.add_argument("--fault-after-seconds", type=float, default=20)
@@ -137,6 +145,7 @@ def main():
     destination.with_suffix(".pending.json").write_text(json.dumps(pending, indent=2) + "\n")
     cluster.kubectl(["-n", namespace, "exec", load_pod, "-c", "load", "--", "sh", "-c", launch])
     samples, sampling_errors = [], 0
+    search_samples, search_sampling_errors = [], 0
     measuring_started, fault = None, None
     messages, returncode = [], None
     deadline = time.monotonic() + opts.max_seconds
@@ -170,11 +179,20 @@ def main():
                         fault["command_error"] = str(err)
                     fault["command_seconds"] = time.monotonic() - fault_started
                 futures = [pool.submit(sample, namespace, pod) for pod in pods]
+                search_future = None
+                if opts.search_stats:
+                    search_pod = next(pod["name"] for pod in pods if pod["role"] == "opensearch")
+                    search_future = pool.submit(sample_search_stats, namespace, search_pod, dataset)
                 for future in futures:
                     try:
                         samples.append(future.result())
                     except RuntimeError:
                         sampling_errors += 1
+                if search_future is not None:
+                    try:
+                        search_samples.append(search_future.result())
+                    except (RuntimeError, json.JSONDecodeError):
+                        search_sampling_errors += 1
             time.sleep(opts.sample_seconds)
     if returncode is None:
         raise RuntimeError("Remote run did not finish; inspect the local pending file before starting another run")
@@ -216,16 +234,22 @@ def main():
     if opts.fault and (fault is None or not fault["confirmed"]):
         result["healthy"] = False
         result["harness_error"] = "The requested fault was not confirmed"
+    if opts.search_stats and not search_samples:
+        result["healthy"] = False
+        result["harness_error"] = "The requested search statistics could not be collected"
     server_pods = [p for p in entries if (p["metadata"].get("labels") or {}).get("app") == "sink"]
     server_environment = [{"variables": {e["name"]: e.get("value") for e in p["spec"]["containers"][0].get("env", []) if e["name"] in ["GOMEMLIMIT", "GOMAXPROCS", "GOGC"]},
                            "prestop_seconds": p["spec"]["containers"][0].get("lifecycle", {}).get("preStop", {}).get("sleep", {}).get("seconds", 0),
                            "termination_grace_seconds": p["spec"].get("terminationGracePeriodSeconds"),
                            "binary_sha256": (p["metadata"].get("annotations") or {}).get("binary-hash")} for p in server_pods]
     result.update(label=opts.label, returncode=returncode, resource_metrics=metrics, samples=samples, sampling_errors=sampling_errors,
+                  search_stats_sampling_errors=search_sampling_errors, search_stats_samples=len(search_samples),
                   server_service_config=config["service"], server_environment=server_environment,
                   load_binary_sha256=state["binaries"]["sink-perf"], node_instance_type=state["node_type"],
                   sink_colocated_with_backend=any(p["node"] in sink_nodes for p in pods if p["role"] in ["mongodb", "opensearch"]))
     destination.write_text(json.dumps(result, indent=2) + "\n")
+    if opts.search_stats:
+        destination.with_suffix(".flush-stats.json").write_text(json.dumps(search_samples, indent=2) + "\n")
     destination.with_suffix(".stderr").write_text("\n".join(messages) + "\n")
     if result.get("verified") and not opts.keep_data:
         if result["settings"]["store"] == "mongo":
