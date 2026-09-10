@@ -1,0 +1,150 @@
+[
+  {
+    "label": "fair-returned-read8-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 64,
+      "execution-mib": 512,
+      "read-mib": 8,
+      "wait-ms": 2
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 128,
+      "return-document": true,
+      "duration": "120s"
+    }
+  },
+  {
+    "label": "fair-returned-read8-search",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 64,
+      "execution-mib": 512,
+      "read-mib": 8,
+      "wait-ms": 2
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 128,
+      "return-document": true,
+      "duration": "120s"
+    }
+  },
+  {
+    "label": "fair-small-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 128,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 512,
+      "duration": "45s"
+    }
+  },
+  {
+    "label": "fair-small-search",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 128,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 512,
+      "duration": "45s"
+    }
+  },
+  {
+    "label": "fair-large-delta-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 128,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2
+    },
+    "load": {
+      "store": "mongo",
+      "padding": 1048576,
+      "keys": 32,
+      "random-padding": true,
+      "concurrency": 16,
+      "duration": "90s"
+    }
+  },
+  {
+    "label": "fair-large-returned-c64-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 128,
+      "execution-mib": 512,
+      "read-mib": 8,
+      "wait-ms": 2
+    },
+    "load": {
+      "store": "mongo",
+      "padding": 1048576,
+      "keys": 128,
+      "random-padding": true,
+      "full-incoming": true,
+      "return-document": true,
+      "concurrency": 64,
+      "duration": "60s"
+    }
+  },
+  {
+    "label": "fair-large-returned-c16-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 128,
+      "execution-mib": 512,
+      "read-mib": 8,
+      "wait-ms": 2
+    },
+    "load": {
+      "store": "mongo",
+      "padding": 1048576,
+      "keys": 128,
+      "random-padding": true,
+      "full-incoming": true,
+      "return-document": true,
+      "concurrency": 16,
+      "duration": "60s"
+    }
+  }
+]

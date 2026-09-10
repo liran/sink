@@ -118,6 +118,10 @@ throttling and container restarts are recorded separately. The load Pod's main
 process RSS is its idle supervisor; use its cgroup memory to assess generator
 memory. Do not run correctness tests or another load against the same backends
 during a capacity sample.
+When available, cgroup I/O counters report backend block-device read/write
+rates during the same interval. These are container observations, not a storage
+service throughput guarantee. Use a multi-minute run spanning database
+checkpoints before drawing conclusions about sustained storage capacity.
 
 `matrix.py` accepts a JSON list of scenarios. Each object contains `label`,
 `server` flags for `cluster.py server`, and `load` flags for `sink-perf`. It
@@ -132,6 +136,10 @@ Run a plan with `matrix.py --state "$SINK_BENCH_STATE" --plan
 benchmarks/kubernetes/plans/capacity.json --output-dir "$SINK_BENCH_DIR"`.
 These are saturation sweeps; choose a lower fixed `--rate` for a long soak after
 examining P99 and correctness. Neither plan provisions the namespace for you.
+The [returned-document plan](plans/returned-documents.json) exercises smaller
+response limits, admission fairness and full 1 MiB inputs/outputs. Reconciliation
+shrinks read batches when the server's configured byte limit requires it;
+these reads happen after measurement and do not change the recorded workload.
 
 To add durable database copies:
 
@@ -169,6 +177,11 @@ For rolling-update tests, first deploy with `server --replicas 2 --rolling true
 `--dns-min-interval 5s` on the load generator when investigating recovery from
 changed Pod addresses. The latter changes a process-wide gRPC setting before
 any client is created; it does not change cluster DNS configuration.
+When increasing the pre-stop delay, set `--grace-seconds` to include that delay
+plus the server's 30 second graceful shutdown budget; for example, a 40 second
+pre-stop requires at least 70 seconds, with 90 seconds allowing extra margin.
+The helper rejects a shorter grace period. Evaluate the delay together with
+the client's DNS refresh behavior and the time available for rollout.
 
 The optional `cluster.py legacy-mongo` command creates a disposable MongoDB 7
 replica set at `mongodb-legacy:27017` in the same namespace. Run tagged storage

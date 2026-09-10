@@ -43,7 +43,7 @@ def inject_fault(namespace, kind, pods, dataset):
 
 
 def sample(namespace, pod):
-    script = "cat /sys/fs/cgroup/cpu.stat; echo memory_current; cat /sys/fs/cgroup/memory.current; echo memory_events; cat /sys/fs/cgroup/memory.events; echo uptime; cut -d ' ' -f 1 /proc/uptime; echo main_rss_kib; awk '/^VmRSS:/ {print $2}' /proc/1/status"
+    script = "cat /sys/fs/cgroup/cpu.stat; echo memory_current; cat /sys/fs/cgroup/memory.current; echo memory_events; cat /sys/fs/cgroup/memory.events; echo uptime; cut -d ' ' -f 1 /proc/uptime; echo main_rss_kib; awk '/^VmRSS:/ {print $2}' /proc/1/status; echo io_stat; cat /sys/fs/cgroup/io.stat"
     started = time.monotonic()
     raw = cluster.kubectl(["-n", namespace, "exec", pod["name"], "-c", pod["container"], "--", "sh", "-c", script])
     lines = raw.splitlines()
@@ -51,10 +51,16 @@ def sample(namespace, pod):
     cpu = dict(line.split() for line in lines[:marker])
     uptime_marker = lines.index("uptime")
     events = dict(line.split() for line in lines[marker + 3:uptime_marker])
+    io = {"rbytes": 0, "wbytes": 0, "rios": 0, "wios": 0}
+    for line in lines[lines.index("io_stat") + 1:]:
+        for item in line.split()[1:]:
+            key, value = item.split("=", 1)
+            if key in io:
+                io[key] += int(value)
     value = {"role": pod["role"], "ordinal": pod["ordinal"], "timestamp": float(lines[uptime_marker + 1]),
              "collection_seconds": time.monotonic() - started, "cpu": {k: int(v) for k, v in cpu.items()},
              "memory_bytes": int(lines[marker + 1]), "main_rss_bytes": int(lines[uptime_marker + 3]) * 1024,
-             "memory_events": {k: int(v) for k, v in events.items()}}
+             "memory_events": {k: int(v) for k, v in events.items()}, "io": io}
     return value
 
 
@@ -180,6 +186,7 @@ def main():
                          peak_sampled_memory_bytes=max(s["memory_bytes"] for s in matching),
                          peak_sampled_main_rss_bytes=max(s["main_rss_bytes"] for s in matching),
                          oom_kills=last["memory_events"].get("oom_kill", 0) - first["memory_events"].get("oom_kill", 0))
+            value["io_per_second"] = {key: (last["io"][key] - first["io"][key]) / elapsed for key in first["io"]}
         metrics.append(value)
     result["infrastructure_stable"] = all(
         not m["pod_replaced"] and m["initial_restarts"] == m["final_restarts"] and not m.get("oom_kills") for m in metrics)
@@ -197,6 +204,8 @@ def main():
         result["harness_error"] = "The requested fault was not confirmed"
     server_pods = [p for p in entries if (p["metadata"].get("labels") or {}).get("app") == "sink"]
     server_environment = [{"variables": {e["name"]: e.get("value") for e in p["spec"]["containers"][0].get("env", []) if e["name"] in ["GOMEMLIMIT", "GOMAXPROCS", "GOGC"]},
+                           "prestop_seconds": p["spec"]["containers"][0].get("lifecycle", {}).get("preStop", {}).get("sleep", {}).get("seconds", 0),
+                           "termination_grace_seconds": p["spec"].get("terminationGracePeriodSeconds"),
                            "binary_sha256": (p["metadata"].get("annotations") or {}).get("binary-hash")} for p in server_pods]
     result.update(label=opts.label, returncode=returncode, resource_metrics=metrics, samples=samples, sampling_errors=sampling_errors,
                   server_service_config=config["service"], server_environment=server_environment,

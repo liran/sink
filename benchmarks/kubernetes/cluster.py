@@ -227,6 +227,8 @@ def upload(opts):
 
 
 def deploy_server(opts):
+    if opts.prestop_seconds < 0 or opts.grace_seconds < opts.prestop_seconds + 30:
+        raise RuntimeError("Termination grace must include pre-stop and the 30 second server drain")
     state = owned_state(opts)
     namespace = state["namespace"]
     binaries = state.get("binaries") or {}
@@ -257,6 +259,7 @@ def deploy_server(opts):
     if opts.prestop_seconds:
         container["lifecycle"] = {"preStop": {"sleep": {"seconds": opts.prestop_seconds}}}
     spec = pod_spec([container], state["node_type"], state.get("arch", "arm64"), state.get("node_selector"))
+    spec["terminationGracePeriodSeconds"] = opts.grace_seconds
     spec["volumes"] = [{"name": "binary", "emptyDir": {}}, {"name": "config", "configMap": {"name": "sink-config"}}]
     spec["initContainers"] = [{"name": "binary", "image": "busybox:1.37.0", "command": ["sh", "-c", f"wget -qO /out/sink http://artifacts:8081/{opts.binary_name} && chmod 755 /out/sink"],
                                "resources": resources("100m", "128Mi"), "volumeMounts": [{"name": "binary", "mountPath": "/out"}]}]
@@ -381,10 +384,16 @@ def prepare_databases(opts):
             if time.monotonic() >= deadline:
                 raise
             time.sleep(5)
-    health = json.loads(kubectl(["-n", namespace, "exec", "opensearch-0", "--", "curl", "--fail", "--silent",
-                       f"http://localhost:9200/_cluster/health?wait_for_nodes={opts.replicas}&timeout=60s"]))
-    if health.get("timed_out") or health.get("number_of_nodes") != opts.replicas:
-        raise RuntimeError("OpenSearch did not form the requested cluster")
+    endpoint = (f"http://localhost:9200/_cluster/health?wait_for_nodes={opts.replicas}&wait_for_status=green"
+                "&wait_for_no_relocating_shards=true&wait_for_no_initializing_shards=true&timeout=60s")
+    while True:
+        health = json.loads(kubectl(["-n", namespace, "exec", "opensearch-0", "--", "curl", "--fail", "--silent", endpoint]))
+        if (not health.get("timed_out") and health.get("number_of_nodes") == opts.replicas and health.get("status") == "green"
+                and not health.get("relocating_shards") and not health.get("initializing_shards")):
+            break
+        if time.monotonic() >= deadline:
+            raise RuntimeError("OpenSearch did not settle into the requested healthy topology")
+        time.sleep(5)
     state["database_replicas"] = opts.replicas
     pathlib.Path(opts.state).write_text(json.dumps(state, indent=2) + "\n")
     print(f"Both databases ready with {opts.replicas} member(s)", flush=True)
@@ -453,6 +462,7 @@ def main():
     server.add_argument("--replicas", type=int, default=1)
     server.add_argument("--rolling", choices=["true", "false"], default="false")
     server.add_argument("--prestop-seconds", type=int, default=0)
+    server.add_argument("--grace-seconds", type=int, default=60)
     server.add_argument("--min-ready-seconds", type=int, default=0)
     server.set_defaults(execute=deploy_server)
     load = commands.add_parser("load")
