@@ -7,6 +7,10 @@ import (
 
 const DefaultMaxReadBytes = 32 << 20
 
+// ErrReadWorkingSetFull asks the synchronous executor to read this record in a
+// later chunk. It is never a failure of the original RPC's document budget.
+var ErrReadWorkingSetFull = errors.New("read working set is full")
+
 // ReadBudget is shared across every store and repeated key in one read. Reserve
 // before copying a result so small key batches cannot allocate unbounded output.
 type ReadBudget struct {
@@ -14,6 +18,8 @@ type ReadBudget struct {
 	remaining int
 	maximum   int
 	shared    []*ReadBudget
+	caller    *ReadBudget
+	working   *ReadBudget
 }
 
 func NewReadBudget(maxBytes int) *ReadBudget {
@@ -34,7 +40,30 @@ func NewSharedReadBudget(budgets []*ReadBudget) *ReadBudget {
 	return budget
 }
 
+// NewWorkingSetReadBudget limits retained snapshots across independent RPCs.
+// A deferred snapshot does not consume its caller's quota. The working budget
+// must be an ordinary NewReadBudget, not another composite budget.
+func NewWorkingSetReadBudget(caller, working *ReadBudget) *ReadBudget {
+	budget := &ReadBudget{caller: caller, working: working}
+	return budget
+}
+
 func (b *ReadBudget) Reserve(size int) error {
+	if b.working != nil {
+		if err := b.working.Reserve(size); err != nil {
+			if size >= 0 && size <= b.working.maximum-128 {
+				return ErrReadWorkingSetFull
+			}
+			return err
+		}
+		if err := b.caller.Reserve(size); err != nil {
+			b.working.mu.Lock()
+			b.working.remaining += size + 128
+			b.working.mu.Unlock()
+			return err
+		}
+		return nil
+	}
 	if len(b.shared) > 0 {
 		accepted := false
 		var failure error

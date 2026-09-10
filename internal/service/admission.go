@@ -179,7 +179,11 @@ func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int) int
 			}
 			retained = min(callers, max(1, len(records)))
 		}
-		bytes += 2 * s.maxReadBytes * retained
+		// A micro-batch streams independent records through one bounded read
+		// chunk and one output batch. One additional candidate can coexist with
+		// the output batch while it is committed. Caller quotas remain separate.
+		workingSets := min(2*retained, 3)
+		bytes += s.maxReadBytes * workingSets
 	}
 	return bytes
 }
