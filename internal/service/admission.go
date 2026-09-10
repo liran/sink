@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
@@ -20,27 +21,41 @@ type admissionRequest struct {
 }
 
 func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (context.Context, context.CancelFunc, error) {
+	var queued *admissionRequest
+	defer func() {
+		if queued != nil {
+			s.admissionMu.Lock()
+			s.removeAdmissionWaiter(queued)
+			s.admissionMu.Unlock()
+		}
+	}()
 	for {
 		if err := contextError(ctx); err != nil {
 			return ctx, nil, err
 		}
 		s.admissionMu.Lock()
-		full := s.inFlightRequests >= s.maxInFlightRequests || request.encodedBytes > s.maxInFlightBytes-s.inFlightBytes
-		if request.scan && (s.scanRequests >= s.maxScanRequests || request.encodedBytes > s.maxScanBytes-s.scanBytes) {
-			full = true
-		}
-		for _, name := range request.stores {
-			if request.scan && s.storeScanRequests[name] >= s.maxStoreScanRequests {
-				full = true
+		full := s.admissionSlotsFull(request) || request.encodedBytes > s.maxInFlightBytes-s.inFlightBytes
+		for _, earlier := range s.admissionWaiters {
+			if earlier == queued {
+				break
 			}
-			if count, configured := s.storeRequests[name]; configured && count >= s.maxStoreRequests {
+			// A runnable older batch reserves the next available byte capacity.
+			// Otherwise small arrivals can indefinitely starve returned-document
+			// batches. A busy store or scan pool must still let other stores run.
+			if !s.admissionSlotsFull(*earlier) {
 				full = true
+				break
 			}
 		}
 		if full {
+			canWait := request.wait && request.encodedBytes <= s.maxInFlightBytes
+			if canWait && queued == nil {
+				queued = &request
+				s.admissionWaiters = append(s.admissionWaiters, queued)
+			}
 			changed := s.admissionChanged
 			s.admissionMu.Unlock()
-			if request.wait && request.encodedBytes <= s.maxInFlightBytes {
+			if canWait {
 				select {
 				case <-changed:
 					continue
@@ -64,6 +79,10 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 			if _, configured := s.storeRequests[name]; configured {
 				s.storeRequests[name]++
 			}
+		}
+		if queued != nil {
+			s.removeAdmissionWaiter(queued)
+			queued = nil
 		}
 		s.admissionMu.Unlock()
 		break
@@ -100,6 +119,36 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		s.metrics.AdjustAdmission(-1, -request.encodedBytes)
 	}
 	return execution, release, nil
+}
+
+// The caller holds admissionMu. Global bytes are handled separately so a
+// waiting large request can accumulate space without reserving a store slot.
+func (s *Server) admissionSlotsFull(request admissionRequest) bool {
+	if s.inFlightRequests >= s.maxInFlightRequests {
+		return true
+	}
+	if request.scan && (s.scanRequests >= s.maxScanRequests || request.encodedBytes > s.maxScanBytes-s.scanBytes) {
+		return true
+	}
+	for _, name := range request.stores {
+		if request.scan && s.storeScanRequests[name] >= s.maxStoreScanRequests {
+			return true
+		}
+		if count, configured := s.storeRequests[name]; configured && count >= s.maxStoreRequests {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) removeAdmissionWaiter(request *admissionRequest) {
+	index := slices.Index(s.admissionWaiters, request)
+	if index < 0 {
+		return
+	}
+	s.admissionWaiters = slices.Delete(s.admissionWaiters, index, index+1)
+	close(s.admissionChanged)
+	s.admissionChanged = make(chan struct{})
 }
 
 func operationStores[T interface{ GetAddress() *sink.RecordAddress }](operations []T) []string {
