@@ -22,12 +22,16 @@ def row_for(result):
     timeline = result.get("timeline", [])
     failures = [second["second"] for second in timeline if second["failed_rpcs"]]
     final_window = max(0, result.get("elapsed_seconds", 0) - 30)
+    complete_seconds = int(result.get("elapsed_seconds", 0))
+    window_seconds = min(30, complete_seconds)
+    final_complete_window = [second for second in timeline if complete_seconds - window_seconds <= second["second"] < complete_seconds]
     stable = all(not m.get("pod_replaced") and m.get("initial_restarts") == m.get("final_restarts") and not m.get("oom_kills") for m in metrics)
     healthy = bool(result.get("verified") and result.get("healthy", True) and not errors and not result.get("scheduled_not_issued")
                    and not result.get("returncode") and not result.get("harness_error") and stable and not fault)
     row = {"case": result["label"], "backend": settings["store"], "workload": settings["workload"],
            "sink_replicas": len(servers), "cpu_limit_per_sink": servers[0]["resources"]["limits"]["cpu"] if servers else "",
            "memory_limit_per_sink": servers[0]["resources"]["limits"]["memory"] if servers else "",
+           "sink_shares_node_with_backend": result.get("sink_colocated_with_backend", ""),
            "node_family": result.get("node_instance_type", ""), "gomemlimit": variables.get("GOMEMLIMIT", ""),
            "gomaxprocs": variables.get("GOMAXPROCS", "auto"), "gogc": variables.get("GOGC", "100"),
            "prestop_seconds": environments[0].get("prestop_seconds", "") if environments else "",
@@ -48,6 +52,7 @@ def row_for(result):
            "offered_rpcs_per_second": settings["offered_rpcs_per_second"], "elapsed_seconds": result.get("elapsed_seconds"),
            "successful_rpcs_per_second": result.get("rpcs_per_second"), "successful_operations_per_second": result.get("operations_per_second"),
            "p50_ms": result.get("p50_ms"), "p95_ms": result.get("p95_ms"), "p99_ms": result.get("p99_ms"), "max_ms": result.get("max_ms"),
+           "execution_p99_ms": result.get("execution_p99_ms", ""),
            "errors": sum(errors.values()), "scheduled_not_issued": result.get("scheduled_not_issued", 0),
            "failed_rpcs": result["rpcs"] - result["successful_rpcs"] if "successful_rpcs" in result else "",
            "verified": result.get("verified", False), "cold_mapping": settings.get("cold_mapping", True),
@@ -56,6 +61,7 @@ def row_for(result):
            "fault_confirmed": fault.get("confirmed", ""), "fault_after_seconds": fault.get("started_after_seconds", ""),
            "first_error_second": min(failures) if failures else "", "last_error_second": max(failures) if failures else "",
            "last_30s_failed_rpcs": sum(second["failed_rpcs"] for second in timeline if second["second"] >= final_window),
+           "last_30s_successful_rpcs_per_second": sum(second["successful_rpcs"] for second in final_complete_window) / window_seconds if timeline and window_seconds else "",
            "reconciled_unacknowledged": result.get("reconciled_unacknowledged", 0),
            "warm_connections": settings.get("warm_connections", False),
            "sink_cpu_cores": sum(m.get("cpu_cores", 0) for m in servers),

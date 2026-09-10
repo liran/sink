@@ -72,6 +72,24 @@ class ExportTests(unittest.TestCase):
 
 
 class FaultTargetTests(unittest.TestCase):
+    def test_rollout_acceptance_does_not_prove_replacement(self):
+        metrics = [{"role": "sink", "pod_replaced": False}, {"role": "sink", "pod_replaced": True}]
+        self.assertFalse(run.fault_observed("sink-rollout", True, metrics))
+        metrics[0]["pod_replaced"] = True
+        self.assertTrue(run.fault_observed("sink-rollout", True, metrics))
+
+    def test_delete_acceptance_requires_replacement_of_the_correct_role(self):
+        metrics = [{"role": "sink", "pod_replaced": True}, {"role": "opensearch", "pod_replaced": False}]
+        self.assertFalse(run.fault_observed("search-terminate", True, metrics))
+        metrics[1]["pod_replaced"] = True
+        self.assertTrue(run.fault_observed("search-terminate", True, metrics))
+
+    def test_crash_can_be_confirmed_after_exec_disconnects(self):
+        metrics = [{"role": "sink", "pod_replaced": False, "initial_restarts": 0, "final_restarts": 1}]
+        self.assertTrue(run.fault_observed("sink-crash", False, metrics))
+        metrics[0]["final_restarts"] = 0
+        self.assertFalse(run.fault_observed("sink-crash", True, metrics))
+
     def test_search_failure_targets_an_owned_primary_holder(self):
         pods = [{"role": "opensearch", "name": "opensearch-0"}, {"role": "opensearch", "name": "opensearch-1"}]
         shards = [{"prirep": "p", "state": "STARTED", "node": "opensearch-1"}]

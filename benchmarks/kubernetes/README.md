@@ -135,6 +135,10 @@ labels.
 Recovery scenarios can additionally set `fault` and `fault_after_seconds`;
 the same runner confirms the fault and keeps its result separate from healthy
 capacity. An unconfirmed fault or another harness error is not reused on resume.
+Pod failures require an observed replacement or restart; accepting a delete or
+rollout command alone does not confirm the fault. A rollout must replace every
+original Sink Pod. Check the final 30-second throughput as well as errors before
+calling a recovery successful.
 
 The checked-in [capacity plan](plans/capacity.json) compares 1, 2 and 4 CPU
 profiles, and the [workload plan](plans/workloads.json) covers document size,

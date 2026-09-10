@@ -64,6 +64,22 @@ def sample(namespace, pod):
     return value
 
 
+def fault_observed(kind, command_succeeded, metrics):
+    if kind == "mongo-stepdown":
+        return command_succeeded
+    role = "opensearch" if kind == "search-terminate" else "sink"
+    affected = [metric for metric in metrics if metric["role"] == role]
+    if not affected:
+        return False
+    if kind == "sink-crash":
+        # A successful signal can close exec before the API reports success.
+        return any(metric["pod_replaced"] or (metric["final_restarts"] or 0) > metric["initial_restarts"] for metric in affected)
+    replaced = [metric["pod_replaced"] for metric in affected]
+    if kind == "sink-rollout":
+        return command_succeeded and all(replaced)
+    return command_succeeded and any(replaced)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state", required=True)
@@ -194,9 +210,7 @@ def main():
     result["fault"] = fault
     if fault:
         fault["started_after_seconds"] = (fault["started_unix_ns"] - result.get("started_unix_ns", fault["started_unix_ns"])) / 1e9
-        crashed = opts.fault == "sink-crash" and any(m["role"] == "sink" and (
-            m["pod_replaced"] or (m["final_restarts"] or 0) > m["initial_restarts"]) for m in metrics)
-        fault["confirmed"] = fault["command_succeeded"] or crashed
+        fault["confirmed"] = fault_observed(opts.fault, fault["command_succeeded"], metrics)
         # Recovery experiments are separate from undisturbed capacity samples.
         result["healthy"] = False
     if opts.fault and (fault is None or not fault["confirmed"]):
