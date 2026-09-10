@@ -23,6 +23,15 @@ in-process broker in the normal test suite.
 Use `make quickstart` for the end-to-end public API scenario and
 `make quickstart-down` when finished.
 
+## Synchronous capacity measurements
+
+The [synchronous performance guide](synchronous-performance.md) records the
+workload, resource limits, measurements, and commands for comparing revisions.
+`BenchmarkSynchronousMergeMicrobatch` isolates batching and adapter round trips
+without external services. The opt-in `BenchmarkSynchronousStorage` exercises
+the actual gRPC codec, dispatcher, Lua engine, and disposable MongoDB/OpenSearch
+backends, then verifies every writer's persisted counter.
+
 ## Repository layout
 
 - `proto/sink` defines the public gRPC contract.
