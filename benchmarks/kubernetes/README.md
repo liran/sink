@@ -106,6 +106,10 @@ to measure richer, indexed documents. OpenSearch writer fields are established d
 setup. Use `--cold-mapping` to measure a burst of dynamic mappings separately.
 The index keeps normal field indexing, one primary shard and a 1 second refresh
 interval; applied writes do not wait for refresh, while `--visible` does.
+Its total-field limit is raised when needed to fit the synthetic per-writer
+sequence fields (`max(1000, concurrency + extra fields + 32)`). This prevents
+the generator's bookkeeping from exceeding the mapping limit; it does not
+disable indexing of those fields or of the payload.
 The default Merge carries only a small counter delta. Add `--full-incoming`
 to transmit and merge the padding and fields on each mutation as well.
 
@@ -128,6 +132,9 @@ checkpoints before drawing conclusions about sustained storage capacity.
 reuses completed reconciled cases when resuming; examine errors and P99 before
 using any case as production capacity evidence. Give repeated trials unique
 labels.
+Recovery scenarios can additionally set `fault` and `fault_after_seconds`;
+the same runner confirms the fault and keeps its result separate from healthy
+capacity. An unconfirmed fault or another harness error is not reused on resume.
 
 The checked-in [capacity plan](plans/capacity.json) compares 1, 2 and 4 CPU
 profiles, and the [workload plan](plans/workloads.json) covers document size,
@@ -172,6 +179,8 @@ to the Go process, bypassing its normal drain; termination deletes one Pod
 normally. The per-second timeline and final reconciliation show whether traffic
 recovers and acknowledged data survives. Expected fault errors must never be
 reported as a healthy capacity sample. Do not run this against production Pods.
+The [recovery plan](plans/recovery.json) runs these five fault types sequentially
+against two Sink replicas and three-member database clusters.
 For rolling-update tests, first deploy with `server --replicas 2 --rolling true
 --prestop-seconds 5 --min-ready-seconds 5`. Compare `--dns-min-interval 30s` and
 `--dns-min-interval 5s` on the load generator when investigating recovery from

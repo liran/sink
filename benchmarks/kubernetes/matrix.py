@@ -38,7 +38,7 @@ def main():
         destination = cluster.private_artifact_path(opts.output_dir) / (label + ".json")
         if destination.exists():
             saved = json.loads(destination.read_text())
-            if saved.get("verified") and saved.get("returncode") == 0:
+            if saved.get("verified") and saved.get("returncode") == 0 and not saved.get("harness_error"):
                 print(f"Already measured: {label}", flush=True)
                 continue
         server = scenario.get("server") or {}
@@ -49,8 +49,10 @@ def main():
             subprocess.run(command, check=True)
             previous_server = server
         print(f"Measuring: {label}", flush=True)
-        command = [sys.executable, str(root / "run.py"), "--state", opts.state, "--output", str(destination), "--label", label,
-                   "--", *flags(scenario["load"])]
+        command = [sys.executable, str(root / "run.py"), "--state", opts.state, "--output", str(destination), "--label", label]
+        if scenario.get("fault"):
+            command.extend(["--fault", scenario["fault"], "--fault-after-seconds", str(scenario.get("fault_after_seconds", 20))])
+        command.extend(["--", *flags(scenario["load"])])
         subprocess.run(command, check=True)
 
 
