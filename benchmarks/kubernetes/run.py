@@ -11,7 +11,7 @@ import uuid
 import cluster
 
 
-def inject_fault(namespace, kind, pods):
+def inject_fault(namespace, kind, pods, dataset):
     role = "sink"
     if kind == "mongo-stepdown":
         role = "mongodb"
@@ -21,6 +21,14 @@ def inject_fault(namespace, kind, pods):
     if not candidates:
         raise RuntimeError("No owned Pod for the requested fault")
     pod = candidates[0]["name"]
+    if kind == "search-terminate":
+        endpoint = f"http://localhost:9200/_cat/shards/{dataset}?format=json&h=prirep,state,node"
+        shards = json.loads(cluster.kubectl(["-n", namespace, "exec", pod, "--", "curl", "--fail", "--silent", endpoint]))
+        primaries = {shard["node"] for shard in shards if shard["prirep"] == "p" and shard["state"] == "STARTED"}
+        selected = [entry["name"] for entry in candidates if entry["name"] in primaries]
+        if not selected:
+            raise RuntimeError("Could not locate the test index primary on an owned database Pod")
+        pod = selected[0]
     if kind == "sink-rollout":
         command = ["-n", namespace, "rollout", "restart", "deployment/sink"]
     elif kind == "sink-crash":
@@ -82,6 +90,9 @@ def main():
                "resources": item["spec"]["containers"][0]["resources"], "node": item["spec"]["nodeName"],
                "restarts": sum(c["restartCount"] for c in item["status"].get("containerStatuses", []))}
         pods.append(pod)
+    expected_members = state.get("database_replicas", 1)
+    if any(role_counts.get(role, 0) != expected_members for role in ["mongodb", "opensearch"]):
+        raise RuntimeError("Wait for the complete configured database topology before measuring")
     sink_nodes = {p["node"] for p in pods if p["role"] == "sink"}
     if any(p["node"] in sink_nodes for p in pods if p["role"] == "load"):
         raise RuntimeError("Load and Sink must run on separate nodes")
@@ -130,7 +141,7 @@ def main():
                     fault = {"kind": opts.fault, "observed_after_seconds": elapsed, "started_unix_ns": time.time_ns(), "command_succeeded": False}
                     fault_started = time.monotonic()
                     try:
-                        inject_fault(namespace, opts.fault, pods)
+                        inject_fault(namespace, opts.fault, pods, dataset)
                         fault["command_succeeded"] = True
                     except RuntimeError as err:
                         # A killed process can close exec before it replies.

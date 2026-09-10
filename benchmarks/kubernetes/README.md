@@ -150,6 +150,10 @@ Search indexes explicitly use request-level translog durability. Add
 `--active-shards all` to require all configured shard copies to be active before
 a write starts; this is an availability prerequisite, not a promise that every
 copy will acknowledge every write after a failure.
+The [replicated plan](plans/replicated.json) then compares one 2 CPU Sink,
+one 4 CPU Sink and two 2 CPU Sinks, including richer documents, search shard
+count, visible completion and shared keys. It assumes both database clusters
+already have three members; it does not scale the databases itself.
 
 For an explicit recovery test, `run.py` also accepts `--fault sink-crash`,
 `--fault sink-terminate`, `--fault sink-rollout`, `--fault mongo-stepdown`, or `--fault search-terminate`

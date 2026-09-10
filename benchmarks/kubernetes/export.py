@@ -19,6 +19,9 @@ def row_for(result):
     batching = service.get("batching") or {}
     errors = result.get("errors") or {}
     fault = result.get("fault") or {}
+    timeline = result.get("timeline", [])
+    failures = [second["second"] for second in timeline if second["failed_rpcs"]]
+    final_window = max(0, result.get("elapsed_seconds", 0) - 30)
     stable = all(not m.get("pod_replaced") and m.get("initial_restarts") == m.get("final_restarts") and not m.get("oom_kills") for m in metrics)
     healthy = bool(result.get("verified") and result.get("healthy", True) and not errors and not result.get("scheduled_not_issued")
                    and not result.get("returncode") and not result.get("harness_error") and stable and not fault)
@@ -29,7 +32,7 @@ def row_for(result):
            "gomaxprocs": variables.get("GOMAXPROCS", "auto"), "gogc": variables.get("GOGC", "100"),
            "execution_mib": service.get("max_in_flight_bytes", 0) // (1 << 20), "read_mib": service.get("max_read_bytes", 0) // (1 << 20),
            "batch_wait_ms": batching.get("max_wait_milliseconds"), "batch_operations": batching.get("max_operations", 1000),
-           "batch_mib": batching.get("max_bytes", 0) / (1 << 20),
+           "batch_mib": batching.get("max_bytes", 16 << 20) / (1 << 20),
            "batching_enabled": batching.get("enabled", True), "concurrency": settings["concurrency"],
            "keys": settings["keys"], "hot_keys": settings["hot_keys"], "padding_bytes": settings["padding_bytes"],
            "random_padding": settings.get("random_padding", False),
@@ -48,6 +51,9 @@ def row_for(result):
            "healthy": healthy, "excluded": bool(result.get("excluded_reason")),
            "fault": fault.get("kind", ""),
            "fault_confirmed": fault.get("confirmed", ""), "fault_after_seconds": fault.get("started_after_seconds", ""),
+           "first_error_second": min(failures) if failures else "", "last_error_second": max(failures) if failures else "",
+           "last_30s_failed_rpcs": sum(second["failed_rpcs"] for second in timeline if second["second"] >= final_window),
+           "reconciled_unacknowledged": result.get("reconciled_unacknowledged", 0),
            "warm_connections": settings.get("warm_connections", False),
            "sink_cpu_cores": sum(m.get("cpu_cores", 0) for m in servers),
            "load_cpu_cores": sum(m.get("cpu_cores", 0) for m in clients),

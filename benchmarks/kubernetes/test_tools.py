@@ -7,6 +7,7 @@ from unittest import mock
 
 import cluster
 import export
+import run
 
 
 class OwnershipTests(unittest.TestCase):
@@ -68,6 +69,23 @@ class ExportTests(unittest.TestCase):
         exported = export.row_for(result)
         self.assertNotIn("do-not-export", json.dumps(exported))
         self.assertEqual(exported["case"], "example")
+
+
+class FaultTargetTests(unittest.TestCase):
+    def test_search_failure_targets_an_owned_primary_holder(self):
+        pods = [{"role": "opensearch", "name": "opensearch-0"}, {"role": "opensearch", "name": "opensearch-1"}]
+        shards = [{"prirep": "p", "state": "STARTED", "node": "opensearch-1"}]
+        with mock.patch.object(cluster, "kubectl", side_effect=[json.dumps(shards), "deleted"]) as api:
+            run.inject_fault("sink-perf-owned", "search-terminate", pods, "perf-example")
+            self.assertEqual(api.call_args.args[0], ["-n", "sink-perf-owned", "delete", "pod", "opensearch-1", "--wait=false"])
+
+    def test_search_failure_cannot_delete_an_unowned_primary(self):
+        pods = [{"role": "opensearch", "name": "opensearch-0"}]
+        shards = [{"prirep": "p", "state": "STARTED", "node": "unowned"}]
+        with mock.patch.object(cluster, "kubectl", return_value=json.dumps(shards)) as api:
+            with self.assertRaisesRegex(RuntimeError, "owned database Pod"):
+                run.inject_fault("sink-perf-owned", "search-terminate", pods, "perf-example")
+            self.assertEqual(api.call_count, 1)
 
 
 if __name__ == "__main__":
