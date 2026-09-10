@@ -214,6 +214,22 @@ Verify both results and their measurement-window overlap using the local
 `started_unix_ns` and `elapsed_seconds`. The Sink and load cgroup measurements
 include both workloads; do not add their duplicated CPU or memory figures.
 
+For the small-document admission comparison, reconfigure the same single Sink
+and repeat those two commands with new output names and labels:
+
+```sh
+python3 benchmarks/kubernetes/cluster.py --state "$SINK_BENCH_STATE" server \
+  --cpu 2 --memory 2Gi --go-memory 1536MiB --gogc 400 \
+  --execution-mib 512 --read-mib 8 --batch-operations 32 --wait-ms 2 \
+  --replicas 1 --rolling true --prestop-seconds 40 --grace-seconds 90 \
+  --min-ready-seconds 5
+```
+
+Wait for the Sink rollout to finish before restarting the load. Keep both load
+commands at the same rates, duration and document shape. The
+8 MiB value reduces each original RPC's snapshot/result budget; it is suitable
+only when the largest client batch and returned result fit that contract.
+
 For an explicit recovery test, `run.py` also accepts `--fault sink-crash`,
 `--fault sink-terminate`, `--fault sink-rollout`, `--fault mongo-stepdown`, or `--fault search-terminate`
 before `--`, with `--fault-after-seconds 20`. Use a workload of at least 120 s
@@ -272,3 +288,7 @@ the namespace and dynamically provisioned PVs to disappear. A timeout is a
 pending cleanup, not success: keep the state file and rerun the command. The
 helper refuses a changed context or reused namespace UID. All test controllers,
 databases, data volumes and artifact storage are removed with the namespace.
+For cloud-backed storage, retain the owned PVs' CSI volume handles in the private
+run directory before cleanup, then verify those disks are absent through the
+cloud provider API. Confirm that no VolumeAttachment still references an owned
+PV. An API permission or transport error is not evidence that a disk was deleted.

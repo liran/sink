@@ -1,5 +1,10 @@
 # Synchronous write performance
 
+These are the original **local** measurements. See
+[production sizing](production-sizing.md) and the
+[Kubernetes harness](../benchmarks/kubernetes/README.md) for subsequent tests
+with separate client/server Pods, actual CPU quotas and production sizing advice.
+
 These measurements compare v0.11.0 (`026d1d1`) with the bounded synchronous
 working set and Lua environment changes on 2026-09-10. They cover
 `WAIT_UNTIL_APPLIED` and OpenSearch `WAIT_UNTIL_VISIBLE`. Kafka acceptance and
@@ -186,8 +191,10 @@ representative records and scripts. Keep the request, store, byte and queue
 limits enabled. Returning documents, large records, mixed stores and hot keys
 need separate measurements; their memory, ordering and CAS constraints remain.
 
-MongoDB's current conditional-write adapter obtains each record's matched count
-individually, with bounded parallelism. OpenSearch conditional writes use bulk
+The candidate used for these local measurements obtained MongoDB conditional
+matched counts individually, with bounded parallelism. Subsequent Kubernetes
+work adds MongoDB 8 client bulk writes with per-record results and retains the
+individual path for older servers. OpenSearch conditional writes use bulk
 requests. Lua execution, backend I/O, indexes, replication, network latency,
 connection pools and CPU eventually determine throughput after admission stops
 fragmenting batches. These short local measurements do not establish a

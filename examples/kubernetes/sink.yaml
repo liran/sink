@@ -1,0 +1,45 @@
+# This is a template. Supply real backend configuration through your Secret
+# management system. Sink reads this file directly; it does not expand ${ENV}.
+mode: server
+grpc:
+  address: :8080
+  max_receive_message_bytes: 67108864
+  max_send_message_bytes: 67108864
+prometheus:
+  address: :9090
+storages:
+  - name: mongo
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongo-0.example.invalid:27017,mongo-1.example.invalid:27017,mongo-2.example.invalid:27017/?replicaSet=rs0
+      max_concurrent_writes: 64
+      max_concurrent_groups: 16
+  - name: search
+    driver: opensearch
+    search:
+      endpoints:
+        - https://search.example.invalid:9200
+service:
+  request_timeout_seconds: 10
+  max_in_flight_requests: 128
+  max_store_requests: 32
+  max_in_flight_bytes: 536870912
+  # Small-document deployments can use 8388608 after validating aggregate
+  # per-RPC snapshot/result sizes; see docs/production-sizing.md.
+  max_read_bytes: 33554432
+  max_operations: 1000
+  max_merge_attempts: 3
+  batching:
+    enabled: true
+    max_wait_milliseconds: 2
+    max_operations: 32
+    max_bytes: 16777216
+    max_queued_operations: 10000
+    max_queued_bytes: 67108864
+  lua:
+    timeout_milliseconds: 100
+    max_source_bytes: 65536
+    max_result_bytes: 16777216
+    max_cached_programs: 256
+    max_instructions: 1000000
+shutdown_timeout_seconds: 30
