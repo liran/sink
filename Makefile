@@ -1,8 +1,13 @@
-.PHONY: proto build test test-unit test-integration test-search-integration lint quickstart quickstart-down clean
+.PHONY: proto build test test-unit test-integration test-search-integration fmt check-format lint lint-workflows lint-docs quickstart quickstart-down
 
 PROTO_DIR := proto
 GEN_DIR := gen
 STATICCHECK_VERSION := v0.8.1
+ACTIONLINT_VERSION := v1.7.12
+LYCHEE ?= lychee
+
+build:
+	go build -o bin/sink ./cmd/sink
 
 proto:
 	@mkdir -p $(GEN_DIR)
@@ -35,7 +40,23 @@ quickstart:
 quickstart-down:
 	docker compose --file examples/quickstart/compose.yaml down
 
-lint:
+fmt:
+	gofmt -s -w .
+
+check-format:
+	@set -e; files="$$(gofmt -l .)"; \
+	if [ -n "$$files" ]; then \
+		printf '%s\n' "$$files"; \
+		printf '%s\n' 'Run make fmt to format these files.'; \
+		exit 1; \
+	fi
+
+lint: check-format
 	go vet ./...
 	go run honnef.co/go/tools/cmd/staticcheck@$(STATICCHECK_VERSION) -checks=all ./...
-	gofmt -s -w .
+
+lint-workflows:
+	go run github.com/rhysd/actionlint/cmd/actionlint@$(ACTIONLINT_VERSION) -shellcheck=''
+
+lint-docs:
+	$(LYCHEE) --offline --include-fragments --no-progress '*.md' 'docs/**/*.md' 'examples/**/*.md' 'benchmarks/**/*.md' '.github/*.md'

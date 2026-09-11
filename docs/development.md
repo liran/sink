@@ -5,12 +5,23 @@ quickstart and external storage integration suites.
 
 ## Validation
 
-Generate protobuf code and run the normal checks from the repository root:
+Build and run the normal checks from the repository root:
 
 ```shell
-make proto
+make build
 make test
 make lint
+go test -race ./... -count=1
+```
+
+`make build` writes `bin/sink`. The default tests use local test doubles and an
+in-process Kafka broker; they do not require external services. Go may download
+module dependencies on the first run. `make lint` checks formatting, vet, and
+staticcheck without changing source files. Use `make fmt` to apply formatting.
+
+Run external backend tests explicitly:
+
+```shell
 make test-integration
 ```
 
@@ -22,6 +33,46 @@ in-process broker in the normal test suite.
 
 Use `make quickstart` for the end-to-end public API scenario and
 `make quickstart-down` when finished.
+
+### Repository checks
+
+`make lint-workflows` runs the pinned actionlint version against GitHub Actions
+workflows. ShellCheck is excluded from this target so the result does not depend
+on an optional local installation. CI also checks local Markdown links,
+images, and heading anchors with [lychee](https://github.com/lycheeverse/lychee).
+Install the version used by the pinned lychee action (currently `v0.24.2`) to
+reproduce the check:
+
+```shell
+make lint-workflows
+make lint-docs
+```
+
+Link checks run offline to avoid making repository CI depend on third-party
+website availability. External URLs should still be checked when editing them.
+All repository checks feed the required **Sink reliability gate** along with
+the existing behavior and packaging jobs.
+
+Dependabot proposes weekly Go module, GitHub Actions, and base-image updates
+with bounded open PR counts. Review them through the normal qualification gate.
+The production suite's reusable workflow references are excluded: update the
+workflow SHA and `suite_ref` together in CI and release configuration.
+
+### Protobuf changes
+
+Only regenerate protobuf files when changing the protocol or generator versions.
+Install `protoc` and the Go plugins used by the generated files:
+
+```shell
+go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.6
+go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+go install github.com/planetscale/vtprotobuf/cmd/protoc-gen-go-vtproto@v0.6.1-0.20240319094008-0393e58bdf10
+export PATH="$(go env GOPATH)/bin:$PATH"
+make proto
+```
+
+Include changes under `gen/sink` in the PR. CI compares the public protocol with
+the Go client, using a matching client branch when available and `main` otherwise.
 
 ## Synchronous capacity measurements
 
