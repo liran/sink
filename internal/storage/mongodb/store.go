@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/mongo"
@@ -25,13 +26,14 @@ type Options struct {
 }
 
 type Store struct {
-	client              *mongo.Client
-	store               string
-	metadataField       string
-	maxConcurrentWrites int
-	maxConcurrentGroups int
-	groups              chan struct{}
-	writes              chan struct{}
+	client               *mongo.Client
+	store                string
+	metadataField        string
+	maxConcurrentWrites  int
+	maxConcurrentGroups  int
+	groups               chan struct{}
+	writes               chan struct{}
+	clientBulkCapability atomic.Uint32
 }
 
 func New(client *mongo.Client, opts Options) (*Store, error) {

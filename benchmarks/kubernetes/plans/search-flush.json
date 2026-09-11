@@ -1,0 +1,96 @@
+[
+  {
+    "label": "flush-one-shard",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 1,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 128,
+      "duration": "180s",
+      "rate": 3000,
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "search-replicas": 1,
+      "active-shards": "all",
+      "search-shards": 1
+    },
+    "search_stats": true
+  },
+  {
+    "label": "flush-three-shards",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 1,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 128,
+      "duration": "600s",
+      "rate": 3000,
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "search-replicas": 1,
+      "active-shards": "all",
+      "search-shards": 3
+    },
+    "search_stats": true
+  },
+  {
+    "label": "flush-threshold-1024",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 1,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 128,
+      "duration": "600s",
+      "rate": 3000,
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "search-replicas": 1,
+      "active-shards": "all",
+      "search-shards": 1,
+      "search-flush-mib": 1024
+    },
+    "search_stats": true
+  }
+]

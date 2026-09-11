@@ -116,6 +116,9 @@ jobs:
       - name: Run race tests
         run: go test -race ./... -count=1
 
+      - name: Check disposable benchmark safeguards
+        run: python3 -m unittest discover -s benchmarks/kubernetes
+
       - name: Fuzz mutation envelopes
         run: go test ./internal/queue -run='^$' -fuzz=FuzzMutationEnvelope -fuzztime=20s -parallel=2
 

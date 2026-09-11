@@ -1,0 +1,156 @@
+[
+  {
+    "label": "recovery-sink-terminate-dns30",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 256,
+      "duration": "180s",
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "rate": 3500,
+      "error-backoff": "100ms",
+      "dns-min-interval": "30s"
+    },
+    "fault": "sink-terminate"
+  },
+  {
+    "label": "recovery-sink-rollout-fresh-dns30",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 256,
+      "duration": "180s",
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "rate": 3500,
+      "error-backoff": "100ms",
+      "dns-min-interval": "30s"
+    },
+    "fault": "sink-rollout",
+    "fault_after_seconds": 0
+  },
+  {
+    "label": "recovery-sink-crash-dns30",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 256,
+      "duration": "180s",
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "rate": 3500,
+      "error-backoff": "100ms",
+      "dns-min-interval": "30s"
+    },
+    "fault": "sink-crash"
+  },
+  {
+    "label": "recovery-mongo-stepdown",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 40,
+      "min-ready-seconds": 5,
+      "grace-seconds": 90
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 64,
+      "duration": "180s",
+      "random-padding": true,
+      "padding": 16384,
+      "full-incoming": true,
+      "rate": 400,
+      "error-backoff": "100ms"
+    },
+    "fault": "mongo-stepdown"
+  },
+  {
+    "label": "recovery-search-primary-all",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 2,
+      "rolling": true,
+      "prestop-seconds": 40,
+      "min-ready-seconds": 5,
+      "grace-seconds": 90
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 256,
+      "duration": "180s",
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "rate": 3000,
+      "search-replicas": 1,
+      "active-shards": "all",
+      "error-backoff": "100ms",
+      "search-shards": 3
+    },
+    "fault": "search-terminate"
+  }
+]

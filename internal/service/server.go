@@ -59,6 +59,7 @@ type Server struct {
 	maxReadBytes         int
 	admissionMu          sync.Mutex
 	admissionChanged     chan struct{}
+	admissionWaiters     []*admissionRequest
 	inFlightRequests     int
 	inFlightBytes        int
 	storeRequests        map[string]int

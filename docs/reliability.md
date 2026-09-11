@@ -195,8 +195,12 @@ Changing only a Sink config is refused to protect ordering.
 All core calls, including async, batching bypass, and cross-store calls, share
 process and per-store request limits plus byte reservations. Reads and synchronous
 merges and folded conditional Put chains reserve snapshot/output space before
-execution. Micro-batches reserve these budgets separately for each original RPC
-and split when combined reservations exceed the process limit. Dispatched
+execution. Coalesced conditional writes share a bounded snapshot/output working
+set and stream larger records through chunks. Each original RPC retains its
+own cumulative quotas across those chunks; successful records are not replayed
+when another chunk conflicts. Reads and returned-write response reservations
+remain per original RPC. Micro-batches split when their input, working-set, and
+response reservations exceed the process limit. Dispatched
 batches wait for admission within their deadlines; direct calls still fail fast.
 Write/Delete dispatchers have bounded concurrency and preserve record dependencies
 across batches, allowing independent calls to pass a refresh wait.

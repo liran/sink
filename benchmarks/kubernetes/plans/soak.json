@@ -1,0 +1,87 @@
+[
+  {
+    "label": "soak-single2-rich-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 1,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 128,
+      "duration": "600s",
+      "rate": 3500,
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true
+    }
+  },
+  {
+    "label": "soak-single2-rich-search-three-shards",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 1,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "search",
+      "concurrency": 128,
+      "duration": "600s",
+      "rate": 3000,
+      "random-padding": true,
+      "fields": 32,
+      "full-incoming": true,
+      "search-replicas": 1,
+      "active-shards": "all",
+      "search-shards": 3
+    },
+    "search_stats": true
+  },
+  {
+    "label": "soak-single2-large-delta-mongo",
+    "server": {
+      "binary-name": "sink-candidate",
+      "cpu": "2",
+      "memory": "2Gi",
+      "go-memory": "1536MiB",
+      "gogc": 400,
+      "batch-operations": 32,
+      "execution-mib": 512,
+      "read-mib": 32,
+      "wait-ms": 2,
+      "replicas": 1,
+      "rolling": true,
+      "prestop-seconds": 5,
+      "min-ready-seconds": 5
+    },
+    "load": {
+      "store": "mongo",
+      "concurrency": 64,
+      "duration": "300s",
+      "rate": 800,
+      "random-padding": true,
+      "padding": 16384,
+      "full-incoming": true
+    }
+  }
+]

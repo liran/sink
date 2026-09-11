@@ -211,12 +211,20 @@ copy is charged to its original RPC. Conditional chains evaluate each RPC's
 budget before incorporating its state into the next caller's operations.
 Batches are split at RPC boundaries when worst-case byte reservations would
 exceed `max_in_flight_bytes`. Reads reserve both snapshot and response space;
-conditional writes reserve snapshot and output space for each original RPC,
-sharing the physical reservation when those RPCs address the same record.
-With the default 256 MiB execution cap and 32 MiB read budget, one such execution
-can hold at most three independent Read/conditional-Write RPCs plus request
-bytes. Conditional writes sharing a hot record can still fold together. Tune `max_read_bytes` to the
-expected per-RPC output size when larger coalesced batches are needed.
+coalesced conditional writes stream through a shared bounded working set while
+retaining each original RPC's snapshot and output quotas across chunks. A full
+read chunk defers records without charging their caller quotas or consuming a
+conflict attempt. Output chunks commit independently, and only actual conflicts
+are retried. With the default 32 MiB read budget, the conditional working-set
+reservation is at most 96 MiB per execution: one read chunk, one output batch,
+and one candidate prepared before flushing that batch. A single retained record
+needs 64 MiB. Encoded inputs, expanded Lua sources, and requested response
+documents are reserved separately. VM and driver overhead are additional.
+
+The default 256 MiB execution cap therefore permits larger micro-batches of
+small conditional writes without reducing the maximum valid document size.
+Reads and returned-write response reservations still scale with original RPC
+count. Direct calls keep their existing snapshot/output reservation and quotas.
 Core admission limits also cover requests that bypass batching. Graceful shutdown first drains active gRPC calls,
 then stops every store's batch dispatchers.
 
@@ -539,9 +547,11 @@ Lua's standard `string.upper` is ASCII-only; `utf8.upper(value)` applies Go's
 deterministic Unicode uppercase mapping when application data requires it.
 Host I/O, operating-system, package loading, dynamic code loading, coroutines,
 debug APIs, output, random numbers, metatable mutation, and unbounded string
-repetition are unavailable. Each merge runs in a new VM. Only immutable
-compiled programs are shared through a bounded process-local LRU cache keyed by
-the computed SHA-256 digest; a supplied digest must match the source.
+repetition are unavailable. Each merge runs in a new VM with fresh global,
+library, and metatable state. Immutable standard-library native functions are
+initialized once per engine; JSON and `sink.v1` helpers are created for each
+execution. Immutable compiled programs use a bounded process-local LRU cache
+keyed by the computed SHA-256 digest; a supplied digest must match the source.
 
 `sink.v1` provides validated array, object, and time helpers implemented by the
 runtime. `sink.v1.time.now()` is fixed across revision-conflict retries of one

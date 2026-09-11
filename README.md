@@ -172,6 +172,9 @@ case format, direct flags, BSON examples, CI usage, and coverage guidance.
 
 ## Documentation
 
+- [Synchronous production sizing](docs/production-sizing.md) — measured CPU,
+  memory and workload limits, replicated deployment guidance, and a disposable
+  Kubernetes capacity harness
 - [Native queries and returned writes](docs/native-access.md) — raw BSON/HTTP
   responses, paged queries with sorting/projection, counts with automatic empty-filter estimates, managed cursors,
   index setup, and atomic counter results
