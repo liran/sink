@@ -63,3 +63,9 @@ fi
 SINK_SEARCH_TEST_DRIVER="${backend}" \
 	SINK_SEARCH_TEST_ENDPOINT="${endpoint}" \
 	go test -tags=integration ./internal/storage/search -count="${test_count}" -timeout=5m
+
+if [[ "${backend}" == "opensearch" ]]; then
+	SINK_SEARCH_TEST_ENDPOINT="${endpoint}" \
+		go test -race -tags=integration ./internal/service \
+		-run '^TestSynchronousStorageStreamsLargeRecords$/^opensearch$' -count="${test_count}" -timeout=3m -v
+fi

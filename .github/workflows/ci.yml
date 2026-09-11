@@ -71,7 +71,7 @@ jobs:
         with:
           repository: liran/sink-production-suite
           path: qualification
-          ref: 162df5727f4a1d249ca06b9b2daa360a44c4a3f3
+          ref: eae786e3ef27f4306b8758b1ad91d16a488bfd2c
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
