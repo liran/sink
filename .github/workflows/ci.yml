@@ -17,13 +17,39 @@ jobs:
   reliability-gate:
     name: Sink reliability gate
     if: always()
-    needs: [public-conformance, client-contract, test, mongodb, search, image, release-assets, quickstart]
+    needs: [repository, public-conformance, client-contract, test, mongodb, search, image, release-assets, quickstart]
     runs-on: ubuntu-latest
     steps:
       - name: Require every qualification job to pass
         env:
           RESULTS: ${{ toJSON(needs) }}
         run: jq -e 'to_entries | length > 0 and all(.[]; .value.result == "success")' <<< "$RESULTS"
+
+  repository:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Validate GitHub Actions workflows
+        run: make lint-workflows
+
+      - name: Check local documentation links and anchors
+        uses: lycheeverse/lychee-action@e7477775783ea5526144ba13e8db5eec57747ce8 # v2.9.0
+        with:
+          args: >-
+            --offline --include-fragments --no-progress
+            '*.md' 'docs/**/*.md' 'examples/**/*.md' 'benchmarks/**/*.md' '.github/*.md'
+          output: /tmp/sink-doc-links.md
+          fail: true
 
   public-conformance:
     name: Public API conformance (OpenSearch ${{ matrix.version }})
@@ -109,9 +135,7 @@ jobs:
           cache: true
 
       - name: Check formatting
-        run: |
-          gofmt -l . | tee /tmp/sink-gofmt.out
-          test ! -s /tmp/sink-gofmt.out
+        run: make check-format
 
       - name: Run race tests
         run: go test -race ./... -count=1
@@ -122,11 +146,8 @@ jobs:
       - name: Fuzz mutation envelopes
         run: go test ./internal/queue -run='^$' -fuzz=FuzzMutationEnvelope -fuzztime=20s -parallel=2
 
-      - name: Run vet
-        run: go vet ./...
-
-      - name: Run staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 -checks=all ./...
+      - name: Run lint
+        run: make lint
 
   mongodb:
     name: MongoDB ReplicaSet integration
