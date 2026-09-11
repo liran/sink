@@ -21,6 +21,8 @@ service:
   request_timeout_seconds: 30
   max_in_flight_requests: 128
   max_in_flight_bytes: 268435456
+  max_publish_requests: 32
+  max_publish_bytes: 268435456
   max_store_requests: 32
   max_read_bytes: 33554432
   max_operations: 1000

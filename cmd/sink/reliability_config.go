@@ -23,6 +23,14 @@ func (c *config) loadReliabilityConfig(file serviceConfigFile) error {
 	if err != nil {
 		return err
 	}
+	c.maxPublishRequests, err = boundedInt("service.max_publish_requests", file.MaxPublishRequests, 32, 10000)
+	if err != nil {
+		return err
+	}
+	c.maxPublishBytes, err = boundedInt("service.max_publish_bytes", file.MaxPublishBytes, 256<<20, 16<<30)
+	if err != nil {
+		return err
+	}
 	c.maxScanRequests, err = boundedInt("service.max_scan_requests", file.MaxScanRequests, max(1, c.maxInFlightRequests/2), c.maxInFlightRequests)
 	if err != nil {
 		return err
