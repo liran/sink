@@ -246,6 +246,8 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		RequestTimeout:       loaded.requestTimeout,
 		MaxInFlightRequests:  loaded.maxInFlightRequests,
 		MaxInFlightBytes:     loaded.maxInFlightBytes,
+		MaxPublishRequests:   loaded.maxPublishRequests,
+		MaxPublishBytes:      loaded.maxPublishBytes,
 		MaxStoreRequests:     loaded.maxStoreRequests,
 		MaxScanRequests:      loaded.maxScanRequests,
 		MaxScanBytes:         loaded.maxScanBytes,

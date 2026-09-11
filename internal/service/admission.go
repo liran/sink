@@ -3,14 +3,39 @@ package service
 import (
 	"context"
 	"slices"
+	"sync"
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
+	sinkmetrics "github.com/liran/sink/internal/metrics"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 const defaultRequestTimeout = 30 * time.Second
+
+// Publishing has its own bounded pool so storage latency and snapshot waiters
+// cannot consume the capacity needed to durably enqueue asynchronous work.
+type admissionPool struct {
+	name                 string
+	metrics              *sinkmetrics.Metrics
+	requestTimeout       time.Duration
+	maxInFlightRequests  int
+	maxInFlightBytes     int
+	maxStoreRequests     int
+	admissionMu          sync.Mutex
+	admissionChanged     chan struct{}
+	admissionWaiters     []*admissionRequest
+	inFlightRequests     int
+	inFlightBytes        int
+	storeRequests        map[string]int
+	maxScanRequests      int
+	maxScanBytes         int
+	maxStoreScanRequests int
+	scanRequests         int
+	scanBytes            int
+	storeScanRequests    map[string]int
+}
 
 type admissionRequest struct {
 	encodedBytes int
@@ -18,9 +43,17 @@ type admissionRequest struct {
 	wait         bool
 	timeout      time.Duration
 	scan         bool
+	publish      bool
 }
 
 func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (context.Context, context.CancelFunc, error) {
+	if request.publish {
+		return s.publishAdmission.admitRequest(ctx, request)
+	}
+	return s.admissionPool.admitRequest(ctx, request)
+}
+
+func (s *admissionPool) admitRequest(ctx context.Context, request admissionRequest) (context.Context, context.CancelFunc, error) {
 	var queued *admissionRequest
 	defer func() {
 		if queued != nil {
@@ -35,6 +68,10 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		}
 		s.admissionMu.Lock()
 		full := s.admissionSlotsFull(request) || request.encodedBytes > s.maxInFlightBytes-s.inFlightBytes
+		reason := "requests"
+		if request.encodedBytes > s.maxInFlightBytes-s.inFlightBytes {
+			reason = "bytes"
+		}
 		for _, earlier := range s.admissionWaiters {
 			if earlier == queued {
 				break
@@ -43,6 +80,9 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 			// Otherwise small arrivals can indefinitely starve returned-document
 			// batches. A busy store or scan pool must still let other stores run.
 			if !s.admissionSlotsFull(*earlier) {
+				if !full {
+					reason = "fairness"
+				}
 				full = true
 				break
 			}
@@ -63,8 +103,8 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 					return ctx, nil, contextError(ctx)
 				}
 			}
-			s.metrics.ObserveAdmissionRejected()
-			return ctx, nil, status.Error(codes.ResourceExhausted, "Sink execution capacity is full")
+			s.metrics.ObserveAdmissionPoolRejected(s.name, reason)
+			return ctx, nil, status.Errorf(codes.ResourceExhausted, "Sink %s capacity is full", s.name)
 		}
 		s.inFlightRequests++
 		s.inFlightBytes += request.encodedBytes
@@ -87,7 +127,7 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		s.admissionMu.Unlock()
 		break
 	}
-	s.metrics.AdjustAdmission(1, request.encodedBytes)
+	s.metrics.AdjustAdmissionPool(s.name, 1, request.encodedBytes)
 	timeout := request.timeout
 	if timeout == 0 {
 		timeout = s.requestTimeout
@@ -116,14 +156,14 @@ func (s *Server) admitRequest(ctx context.Context, request admissionRequest) (co
 		close(s.admissionChanged)
 		s.admissionChanged = make(chan struct{})
 		s.admissionMu.Unlock()
-		s.metrics.AdjustAdmission(-1, -request.encodedBytes)
+		s.metrics.AdjustAdmissionPool(s.name, -1, -request.encodedBytes)
 	}
 	return execution, release, nil
 }
 
 // The caller holds admissionMu. Global bytes are handled separately so a
 // waiting large request can accumulate space without reserving a store slot.
-func (s *Server) admissionSlotsFull(request admissionRequest) bool {
+func (s *admissionPool) admissionSlotsFull(request admissionRequest) bool {
 	if s.inFlightRequests >= s.maxInFlightRequests {
 		return true
 	}
@@ -141,7 +181,7 @@ func (s *Server) admissionSlotsFull(request admissionRequest) bool {
 	return false
 }
 
-func (s *Server) removeAdmissionWaiter(request *admissionRequest) {
+func (s *admissionPool) removeAdmissionWaiter(request *admissionRequest) {
 	index := slices.Index(s.admissionWaiters, request)
 	if index < 0 {
 		return
@@ -166,14 +206,12 @@ func operationStores[T interface{ GetAddress() *sink.RecordAddress }](operations
 // Include retained output and expanded source copies, before parsing or cloning.
 // This bounds admitted payload bytes; VM/driver overhead is sized separately.
 func (s *Server) writeExecutionBytes(req *sink.WriteRequest) int {
-	return s.writeExecutionBytesFor(req, 1)
+	return s.writeExecutionBytesFor(req, 1, returningCallerCount(req, nil))
 }
 
-func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int) int {
+func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int, returningCallers int) int {
 	bytes := req.SizeVT()
-	if hasWriteReturns(req) {
-		bytes += s.maxReadBytes * callers
-	}
+	bytes += s.maxReadBytes * returningCallers
 	largestSource := 0
 	for _, program := range req.GetLuaPrograms() {
 		largestSource = max(largestSource, len(program.GetSource()))
@@ -209,9 +247,6 @@ func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int) int
 				hasSnapshot = run.count > 1 && run.conditional
 			}
 		}
-		if bytes > s.maxInFlightBytes {
-			return bytes
-		}
 	}
 	if hasSnapshot && req.GetCompletionMode() != sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED {
 		// Shared records retain one snapshot and final document, even when
@@ -235,4 +270,14 @@ func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int) int
 		bytes += s.maxReadBytes * workingSets
 	}
 	return bytes
+}
+
+func returningCallerCount(req *sink.WriteRequest, budgets *requestBudgets) int {
+	owners := make(map[int]bool)
+	for index, operation := range req.GetOperations() {
+		if operation.GetReturnDocument() {
+			owners[budgets.owner(index)] = true
+		}
+	}
+	return len(owners)
 }

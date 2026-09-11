@@ -361,6 +361,15 @@ and returned-document reservations. Queue storage, decoded objects, Lua heaps,
 driver buffers and the Go runtime consume additional memory. Setting a 2 GiB
 execution budget in a 2 GiB container is unsafe sizing.
 
+Asynchronous Write/Delete publishing has a separate bounded reservation:
+`service.max_publish_requests` defaults to 32 and `service.max_publish_bytes`
+defaults to 256 MiB. Include this budget in container sizing alongside the
+synchronous execution budget and each Kafka producer buffer. This isolates
+durable enqueueing from slow synchronous `refresh=wait_for` writes and their
+fair byte waiters. Monitor `sink_admission_pool_bytes` and
+`sink_admission_pool_rejected_total` by pool and reason; the legacy in-flight
+gauges include both pools.
+
 Keep request-count, byte, queue and Lua limits enabled. Reducing the read limit
 can admit more small-document work, but it also narrows the public request size
 contract. Measure the largest batch clients actually send before changing it.

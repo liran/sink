@@ -47,6 +47,9 @@ type Metrics struct {
 	admissionRequests      prometheus.Gauge
 	admissionBytes         prometheus.Gauge
 	admissionRejected      prometheus.Counter
+	admissionPoolRequests  *prometheus.GaugeVec
+	admissionPoolBytes     *prometheus.GaugeVec
+	admissionPoolRejected  *prometheus.CounterVec
 	workerLastPoll         *prometheus.GaugeVec
 	workerLastCommit       *prometheus.GaugeVec
 	workerOldest           *prometheus.GaugeVec
@@ -255,6 +258,12 @@ func New(version string) (*Metrics, error) {
 	admissionBytes := prometheus.NewGauge(admissionBytesOptions)
 	admissionRejectedOptions := prometheus.CounterOpts{Namespace: namespace, Name: "admission_rejected_total", Help: "Requests rejected by global or configured-store execution limits."}
 	admissionRejected := prometheus.NewCounter(admissionRejectedOptions)
+	poolRequestsOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "admission_pool_requests", Help: "Executing requests in each independently bounded admission pool."}
+	admissionPoolRequests := prometheus.NewGaugeVec(poolRequestsOptions, []string{"pool"})
+	poolBytesOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "admission_pool_bytes", Help: "Bytes reserved in each independently bounded admission pool."}
+	admissionPoolBytes := prometheus.NewGaugeVec(poolBytesOptions, []string{"pool"})
+	poolRejectedOptions := prometheus.CounterOpts{Namespace: namespace, Name: "admission_pool_rejected_total", Help: "Admission rejections by pool and capacity reason."}
+	admissionPoolRejected := prometheus.NewCounterVec(poolRejectedOptions, []string{"pool", "reason"})
 	lastPollOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "kafka_worker_last_poll_timestamp_seconds", Help: "Last completed Kafka poll by configured store."}
 	workerLastPoll := prometheus.NewGaugeVec(lastPollOptions, []string{"store"})
 	lastCommitOptions := prometheus.GaugeOpts{Namespace: namespace, Name: "kafka_worker_last_commit_timestamp_seconds", Help: "Last successful source offset commit by configured store."}
@@ -298,6 +307,7 @@ func New(version string) (*Metrics, error) {
 		admissionRequests,
 		admissionBytes,
 		admissionRejected,
+		admissionPoolRequests, admissionPoolBytes, admissionPoolRejected,
 		workerLastPoll, workerLastCommit, workerOldest, workerPending, workerRecoveries, workerFetchErrors, workerDelivery,
 	}
 	for _, collector := range registeredCollectors {
@@ -306,6 +316,9 @@ func New(version string) (*Metrics, error) {
 		}
 	}
 	metrics := &Metrics{
+		admissionPoolRequests:  admissionPoolRequests,
+		admissionPoolBytes:     admissionPoolBytes,
+		admissionPoolRejected:  admissionPoolRejected,
 		workerOffsetGap:        workerOffsetGap,
 		workerQuarantined:      workerQuarantined,
 		registry:               registry,
@@ -356,6 +369,23 @@ func (m *Metrics) ObserveAdmissionRejected() {
 		return
 	}
 	m.admissionRejected.Inc()
+}
+
+func (m *Metrics) AdjustAdmissionPool(pool string, requests int, bytes int) {
+	if m == nil {
+		return
+	}
+	m.AdjustAdmission(requests, bytes)
+	m.admissionPoolRequests.WithLabelValues(pool).Add(float64(requests))
+	m.admissionPoolBytes.WithLabelValues(pool).Add(float64(bytes))
+}
+
+func (m *Metrics) ObserveAdmissionPoolRejected(pool string, reason string) {
+	if m == nil {
+		return
+	}
+	m.ObserveAdmissionRejected()
+	m.admissionPoolRejected.WithLabelValues(pool, reason).Inc()
 }
 
 func (m *Metrics) ObserveWorkerPoll(store string, errors int) {

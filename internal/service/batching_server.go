@@ -417,7 +417,9 @@ func (s *BatchingServer) executeWrites(
 		if parallel {
 			applied := combinedWriteRequest(wave.applied)
 			visible := combinedWriteRequest(wave.visible)
-			parallel = s.server.writeExecutionBytesFor(applied, len(wave.applied))+s.server.writeExecutionBytesFor(visible, len(wave.visible)) <= s.server.maxInFlightBytes
+			appliedBytes := s.server.writeExecutionBytesFor(applied, len(wave.applied), returningBatchCallers(wave.applied))
+			visibleBytes := s.server.writeExecutionBytesFor(visible, len(wave.visible), returningBatchCallers(wave.visible))
+			parallel = appliedBytes+visibleBytes <= s.server.maxInFlightBytes
 		}
 		var executions sync.WaitGroup
 		for _, group := range [][]*batchCall[*sink.WriteRequest, *sink.WriteResponse]{wave.applied, wave.visible} {
@@ -447,12 +449,12 @@ func (s *BatchingServer) executeWriteBatch(
 	for start := 0; start < len(calls); {
 		end := len(calls)
 		combined := combinedWriteRequest(calls[start:end])
-		if s.server.writeExecutionBytesFor(combined, end-start) > s.server.maxInFlightBytes {
+		if s.server.writeExecutionBytesFor(combined, end-start, returningBatchCallers(calls[start:end])) > s.server.maxInFlightBytes {
 			end = start + 1
 		}
 		for end < len(calls) {
 			next := combinedWriteRequest(calls[start : end+1])
-			if s.server.writeExecutionBytesFor(next, end+1-start) > s.server.maxInFlightBytes {
+			if s.server.writeExecutionBytesFor(next, end+1-start, returningBatchCallers(calls[start:end+1])) > s.server.maxInFlightBytes {
 				break
 			}
 			end++
@@ -474,6 +476,16 @@ func (s *BatchingServer) executeWriteBatch(
 		completion.finish(response, err)
 		start = end
 	}
+}
+
+func returningBatchCallers(calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse]) int {
+	count := 0
+	for _, call := range calls {
+		if hasWriteReturns(call.request) {
+			count++
+		}
+	}
+	return count
 }
 
 func combinedWriteRequest(calls []*batchCall[*sink.WriteRequest, *sink.WriteResponse]) *sink.WriteRequest {
