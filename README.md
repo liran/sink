@@ -1,14 +1,47 @@
 # Sink
 
-Sink is a database-independent gRPC service for reading, writing, merging, and
-deleting explicitly encoded documents. Applications use one record API while
-Sink handles routing, database connections, batching, concurrency, synchronous
-or durable asynchronous delivery, and storage-specific behavior for MongoDB,
-Elasticsearch, and OpenSearch.
+[![CI](https://github.com/liran/sink/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/liran/sink/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/liran/sink)](https://github.com/liran/sink/releases/latest)
+[![Go version](https://img.shields.io/github/go-mod/go-version/liran/sink)](go.mod)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
+**One gRPC data layer for MongoDB, Elasticsearch, and OpenSearch.**
+
+Read, write, and atomically merge documents through a shared API. Sink handles
+database connections, routing, bounded batching, and backpressure, with optional
+Kafka-backed asynchronous delivery. Native queries use the same connections.
+
+[Quickstart](#quickstart) · [Documentation](docs/README.md) ·
+[Go client](https://github.com/liran/sink-go) ·
+[Releases](https://github.com/liran/sink/releases) · [Contributing](CONTRIBUTING.md)
+
+## Quickstart
+
+With Docker Compose and Make installed:
+
+```shell
+git clone https://github.com/liran/sink.git
+cd sink
+make quickstart
+```
+
+This builds Sink, starts a local MongoDB ReplicaSet and Kafka, and verifies
+synchronous writes, asynchronous delivery, reads, deletes, and Prometheus
+metrics. The Go example runs in a container; a local Go installation is not
+required.
+
+After the checks pass, connect to **`127.0.0.1:8080`** or inspect
+[metrics](http://127.0.0.1:9090/metrics). Stop the stack with
+`make quickstart-down`. See the [quickstart guide](examples/quickstart/README.md)
+for ports, rerunning the example, and resetting local data.
+
+Need just the binary or container? Use the
+[latest release](https://github.com/liran/sink/releases/latest) for Linux/macOS
+binaries and checksums, or [run the container](#run-the-container).
+
+## Why Sink?
 
 ![Sink routes each record operation through a synchronous or Kafka-backed path to one matching store](docs/assets/sink-overview.svg)
-
-## Why use Sink?
 
 Applications that write to several databases often repeat the same
 non-business work: storage drivers, batching, backpressure, retry rules,
@@ -21,7 +54,7 @@ Sink centralizes those concerns:
 | Problem | What Sink provides |
 | --- | --- |
 | Each backend has a different API and data model | One batch-native `Read`, `Write`, and `Delete` gRPC API for JSON or BSON documents |
-| Native queries still need direct database clients | `Execute`, paged `Query`, `Count`, and streaming `Scan` share one command structure and Sink's connections |
+| Native queries still need direct database clients | `Execute`, `Query`, `Count`, and paged `Scan` share one command structure and Sink's connections |
 | Every crawler process opens its own database connections | Database connections move into the smaller Sink tier, so connection growth follows Sink replicas instead of crawler processes |
 | Many small calls overload storage | Automatic bounded batching, concurrency limits, and backpressure per store |
 | Some writes must be immediate while others can be buffered | Per-request completion modes, with optional Kafka-backed asynchronous delivery |
@@ -92,25 +125,6 @@ Mutations choose when success is returned:
 See [Architecture and behavior](docs/architecture.md) for the full request
 flow, ordering, batching, merge, and failure semantics.
 
-## Try it locally
-
-The quickstart requires Docker with Compose. From the repository root, run:
-
-```shell
-make quickstart
-```
-
-This builds Sink, starts MongoDB and Kafka, runs synchronous and asynchronous
-record operations, checks Prometheus metrics, and leaves the stack available
-at `127.0.0.1:8080`.
-
-```shell
-make quickstart-down
-```
-
-The [quickstart guide](examples/quickstart/README.md) lists the exposed ports,
-direct Compose commands, and reset instructions.
-
 ## Connect an application
 
 Go applications can use the typed, concurrency-safe
@@ -124,6 +138,8 @@ Its [quick-start example](https://github.com/liran/sink-go#quick-start) shows
 how to connect, create an address, and write a Go value. Other languages can
 generate a standard gRPC client from [`proto/sink/sink.proto`](proto/sink/sink.proto).
 
+## Run the container
+
 For a real deployment, copy [`config.example.yaml`](config.example.yaml), edit
 the backend connection, and start the container with the file mounted:
 
@@ -135,8 +151,13 @@ docker run --rm -p 8080:8080 -p 9090:9090 \
   ghcr.io/liran/sink:latest --config /etc/sink/config.yaml
 ```
 
-The server validates the complete configuration and connects to every required
-dependency before becoming ready.
+For repeatable deployments, replace `latest` with a version tag or image digest
+from the release. See the [configuration reference](docs/configuration.md) for
+store routing and server/worker modes, and [production sizing](docs/production-sizing.md)
+for measured capacity and deployment guidance.
+
+The server validates the complete configuration. Dependency readiness recovers
+independently; inspect the health of each required store before sending traffic.
 
 ## Test Lua merge programs
 
@@ -172,29 +193,25 @@ case format, direct flags, BSON examples, CI usage, and coverage guidance.
 
 ## Documentation
 
-- [Synchronous production sizing](docs/production-sizing.md) — measured CPU,
-  memory and workload limits, replicated deployment guidance, and a disposable
-  Kubernetes capacity harness
-- [Native queries and returned writes](docs/native-access.md) — raw BSON/HTTP
-  responses, paged queries with sorting/projection, counts with automatic empty-filter estimates, managed cursors,
-  index setup, and atomic counter results
-- [Document write flow](docs/document-write-flow.md) — follow one document
-  through synchronous writes, Kafka workers, Lua merges, batching, and completion
-- [Reliability and recovery](docs/reliability.md) — idempotence responsibility,
-  fault handling, capacity, durability baselines, alerting, and DLQ replay
+Start with the [documentation index](docs/README.md), organized by task:
 
-- [Architecture and behavior](docs/architecture.md) — request flow, adapters,
-  batching, Lua merges, asynchronous delivery, and reliability boundaries
-- [Lua merge developer guide](docs/lua-merge-guide.md) — script contract,
-  built-in `sink.v1` tools, examples, retry semantics, and testing guidance
-- [Testing Lua merge programs](docs/lua-testing.md) — local production-parity
-  runner, JSON/BSON fixtures, case suites, and CI integration
-- [Configuration reference](docs/configuration.md) — every field, default,
-  allowed value, validation rule, routing rule, and deployment mode
-- [Docker Compose quickstart](examples/quickstart/README.md) — local environment
-  and end-to-end example
-- [Development guide](docs/development.md) — repository layout, validation, and
-  release images
-- [Protocol definition](proto/sink/sink.proto) — authoritative gRPC contract
+| I want to… | Read |
+| --- | --- |
+| Understand routing, batching, and completion | [Architecture](docs/architecture.md) and [document write flow](docs/document-write-flow.md) |
+| Query a backend or return an atomic update result | [Native access](docs/native-access.md) |
+| Write and test a Lua merge | [Lua guide](docs/lua-merge-guide.md) and [local testing](docs/lua-testing.md) |
+| Deploy and operate Sink | [Configuration](docs/configuration.md), [sizing](docs/production-sizing.md), and [reliability](docs/reliability.md) |
+| Build or contribute | [Development](docs/development.md) and [contributing](CONTRIBUTING.md) |
+
+## Contributing and support
+
+Bug reports, documentation improvements, and focused pull requests are welcome.
+Use the [issue forms](https://github.com/liran/sink/issues/new/choose) for bugs
+and feature proposals, and read [CONTRIBUTING.md](CONTRIBUTING.md) for local
+checks and review guidance. Report vulnerabilities through the
+[security policy](SECURITY.md).
+
+Related projects: [Go SDK](https://github.com/liran/sink-go) ·
+[Public production qualification suite](https://github.com/liran/sink-production-suite).
 
 Sink is released under the [MIT License](LICENSE).

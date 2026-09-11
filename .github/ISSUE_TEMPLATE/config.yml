@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Documentation
+    url: https://github.com/liran/sink/blob/main/docs/README.md
+    about: Quickstart, application guides, deployment, and troubleshooting.
+  - name: Go client issues
+    url: https://github.com/liran/sink-go/issues
+    about: Report problems specific to the Go SDK.
+  - name: Security vulnerability
+    url: https://github.com/liran/sink/security/advisories/new
+    about: Report a vulnerability privately.

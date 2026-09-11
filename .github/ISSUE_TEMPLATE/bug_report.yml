@@ -1,0 +1,50 @@
+name: Bug report
+description: Report incorrect behavior with a reproducible example.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For security vulnerabilities, use [private reporting](https://github.com/liran/sink/security/advisories/new).
+        Remove credentials, private endpoints, and document data from logs and configuration.
+  - type: input
+    id: version
+    attributes:
+      label: Sink version
+      description: Output of `sink version`, image tag/digest, or commit SHA.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Storage engine/version, Kafka version if used, deployment mode, and client version.
+    validations:
+      required: true
+  - type: dropdown
+    id: completion
+    attributes:
+      label: Completion mode
+      options:
+        - Not applicable / unknown
+        - WAIT_UNTIL_APPLIED
+        - WAIT_UNTIL_VISIBLE
+        - RETURN_AFTER_ACCEPTED
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Include the smallest request, script, or test case that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected and actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Logs and configuration
+      description: Relevant, redacted diagnostics. For performance issues, include workload and resource limits.
+      render: text
