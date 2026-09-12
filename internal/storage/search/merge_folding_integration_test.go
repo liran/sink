@@ -61,7 +61,7 @@ func TestSearchMergeFoldingCommitsAndMakesFinalStateVisibleOnce(t *testing.T) {
 	request := &sink.WriteRequest{CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE}
 	for range operations {
 		program := &sink.LuaProgram{Source: []byte(source)}
-		mutation := &sink.MergeOperation{IncomingDocument: sinkDocument(`{"delta":1}`), LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE}
+		mutation := &sink.MergeOperation{IncomingDocument: sinkDocument(`{"delta":1}`), LuaProgram: program}
 		action := &sink.WriteOperation_Merge{Merge: mutation}
 		operation := &sink.WriteOperation{Address: fixture.sinkAddress("folded"), Action: action}
 		request.Operations = append(request.Operations, operation)

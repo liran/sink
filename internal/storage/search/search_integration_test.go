@@ -337,9 +337,8 @@ func TestSearchServiceConcurrentMergeIsAtomic(t *testing.T) {
 			defer workers.Done()
 			luaProgram := &sink.LuaProgram{Source: []byte(counterMergeLua)}
 			mergeOperation := &sink.MergeOperation{
-				IncomingDocument:    incoming,
-				LuaProgram:          luaProgram,
-				MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
+				IncomingDocument: incoming,
+				LuaProgram:       luaProgram,
 			}
 			mergeAction := &sink.WriteOperation_Merge{Merge: mergeOperation}
 			operation := &sink.WriteOperation{Address: address, Action: mergeAction}

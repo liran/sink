@@ -402,6 +402,30 @@ end`)
 	}
 }
 
+func TestLuaMergeGeneratedTimeDoesNotRetypeMatchingBSONString(t *testing.T) {
+	source := []byte(`
+return function(current, incoming)
+    return {copied = incoming.literal, generated = sink.v1.time.now()}
+end`)
+	merger := compileTestProgram(t, source, merge.LuaOptions{})
+	observedAt := time.Date(2026, time.August, 30, 9, 8, 7, 0, time.UTC)
+	request := merge.Request{
+		Incoming:   bsonDocument(t, bson.D{{Key: "literal", Value: observedAt.Format(time.RFC3339Nano)}}),
+		ObservedAt: observedAt,
+	}
+	result, err := merger.Merge(t.Context(), request)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	raw := bson.Raw(result.Document.Payload)
+	if raw.Lookup("copied").Type != bson.TypeString {
+		t.Fatalf("copied BSON type = %s, want string", raw.Lookup("copied").Type)
+	}
+	if raw.Lookup("generated").Type != bson.TypeDateTime {
+		t.Fatalf("generated BSON type = %s, want datetime", raw.Lookup("generated").Type)
+	}
+}
+
 func TestLuaMergeSinkV1UtilitiesRejectInvalidInputs(t *testing.T) {
 	tests := []struct {
 		name     string

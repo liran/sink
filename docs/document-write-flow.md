@@ -149,7 +149,7 @@ and **how far execution must progress before returning success**.
 | `Dataset.Create` | Must be absent | Write a complete document; fail the precondition if it already exists |
 | `Dataset.Replace` | Must exist | Replace it with the complete new document; fail the precondition if absent |
 | `Dataset.Upsert` | May exist or be absent | Replace the whole document if present, or create it if absent |
-| `Dataset.Merge` | Read the document at execution time | Run Lua to compute the final document, then write it with a revision condition |
+| `Dataset.Merge` | May exist or be absent | Run Lua with the current document or `nil`, then write the result with a revision condition |
 
 The first three methods are all `Put` operations in the protocol.
 **Upsert does not preserve old fields omitted from the incoming document.**
@@ -158,9 +158,9 @@ only supplies `price` does not automatically retain `name`. Use Merge and
 explicit Lua rules when fields must be preserved or combined according to
 business logic.
 
-Merge also requires a missing-document policy: fail with
-`MissingDocumentFail`, or allow Lua to create a document from an absent
-state with `MissingDocumentCreate`.
+Merge always passes `nil` as `current` when the record is absent and creates
+the object returned by Lua. Scripts that need a default object should use
+`current = current or json.object()`.
 
 ### Choice two: when to return success
 
@@ -197,8 +197,7 @@ the path to:
    the operation, and enters the publication path.
 2. The publisher uses `store` to select a Kafka topic and encodes the
    **original operation** as a message. A Put message carries the complete
-   document. A Merge message carries the incoming document, missing-document
-   policy, and full Lua source.
+   document. A Merge message carries the incoming document and full Lua source.
 3. The publisher waits for Kafka acknowledgement. The current implementation
    requires acknowledgement from all in-sync replicas (ISR). On success,
    the client receives `ACCEPTED`, and that RPC ends.

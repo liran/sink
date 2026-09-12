@@ -3,6 +3,7 @@ package merge
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/iceisfun/golua/vm"
@@ -57,9 +58,9 @@ func (l sinkV1Library) timeNow(state *vm.VM) int {
 	if l.observedAt == "" {
 		panic(fmt.Sprintf("%s is unavailable because the merge observation time is missing", sinkV1TimeNow))
 	}
-	l.bridge.dateTimeValues[l.observedAt] = struct{}{}
-	l.bridge.forcedDateTimes[l.observedAt] = struct{}{}
-	state.Set(0, vm.NewString(l.observedAt))
+	generated := strings.Clone(l.observedAt)
+	l.bridge.generatedDateTimes[identityOfLuaString(generated)] = struct{}{}
+	state.Set(0, vm.NewString(generated))
 	return 1
 }
 

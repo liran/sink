@@ -203,7 +203,7 @@ func (s *Server) read(ctx context.Context, req *sink.ReadRequest, budgets *reque
 			setReadFailure(result, sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, err, false)
 			continue
 		}
-		key := identityOf(address)
+		key := s.identityOf(address)
 		position, found := positions[key]
 		if !found {
 			position = len(storageOperations)
@@ -408,7 +408,7 @@ func (s *Server) delete(ctx context.Context, req *sink.DeleteRequest, wait bool)
 			queueMutations = append(queueMutations, mutation)
 			continue
 		}
-		key := identityOf(address)
+		key := s.identityOf(address)
 		position, found := positions[key]
 		if !found {
 			position = len(storageOperations)

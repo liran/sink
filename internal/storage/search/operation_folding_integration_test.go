@@ -38,7 +38,7 @@ func TestSearchFoldsPutsWithMergeAndRepeatedReadsDeletes(t *testing.T) {
 		request.Operations = append(request.Operations, operation)
 	}
 	program := &sink.LuaProgram{Source: []byte(`return function(current, incoming) current.counter=current.counter+incoming.delta return current end`)}
-	mutation := &sink.MergeOperation{IncomingDocument: sinkDocument(`{"delta":1}`), LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL}
+	mutation := &sink.MergeOperation{IncomingDocument: sinkDocument(`{"delta":1}`), LuaProgram: program}
 	action := &sink.WriteOperation_Merge{Merge: mutation}
 	operation := &sink.WriteOperation{Address: address, Action: action}
 	request.Operations = append(request.Operations, operation)

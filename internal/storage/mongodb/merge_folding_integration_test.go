@@ -45,7 +45,7 @@ func TestMongoDBFoldedMergesPreserveBSONAndFinalRevision(t *testing.T) {
 	for range count {
 		document := &sink.Document{Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_BSON, Payload: payload}
 		program := &sink.LuaProgram{Source: []byte(source)}
-		mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE}
+		mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program}
 		action := &sink.WriteOperation_Merge{Merge: mutation}
 		operation := &sink.WriteOperation{Address: address, Action: action}
 		request.Operations = append(request.Operations, operation)

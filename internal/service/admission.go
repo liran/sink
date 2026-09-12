@@ -239,7 +239,7 @@ func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int, ret
 		if hasConditionalPut && !hasSnapshot && operation.GetPut() != nil {
 			address, err := convertAddress(operation.GetAddress())
 			if err == nil {
-				key := identityOf(address)
+				key := s.identityOf(address)
 				run := puts[key]
 				run.count++
 				run.conditional = run.conditional || operation.GetPut().GetMode() != sink.WriteMode_WRITE_MODE_UPSERT
@@ -258,7 +258,7 @@ func (s *Server) writeExecutionBytesFor(req *sink.WriteRequest, callers int, ret
 			for _, operation := range req.GetOperations() {
 				address, err := convertAddress(operation.GetAddress())
 				if err == nil {
-					records[identityOf(address)] = true
+					records[s.identityOf(address)] = true
 				}
 			}
 			retained = min(callers, max(1, len(records)))
