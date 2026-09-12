@@ -165,7 +165,7 @@ func TestMutationPartitionsPreserveBlockedPredecessors(t *testing.T) {
 	other.request.Operations[0].Address.Dataset = "another-index"
 	calls := []*batchCall[*sink.WriteRequest, *sink.WriteResponse]{first, second, third, other}
 	for _, call := range calls {
-		call.records = mutationRequestRecords[*sink.WriteOperation](call.request)
+		call.records = mutationRequestRecords(call.request, identityOf)
 		call.partition = mutationRequestPartition[*sink.WriteOperation](call.request)
 		call.encodedBytes = 1
 	}

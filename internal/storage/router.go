@@ -56,6 +56,14 @@ func NewRouter(backends map[string]Storage) (*Router, error) {
 	return router, nil
 }
 
+func (r *Router) IdentityKey(address Address) string {
+	backend, exists := r.backends[address.Store]
+	if !exists {
+		return address.RoutingKey()
+	}
+	return IdentityKey(backend, address)
+}
+
 type routedRead struct {
 	backend    Storage
 	operations []ReadOperation
@@ -117,7 +125,7 @@ func (r *Router) setReadGroupError(response *ReadResponse, group *routedRead, er
 
 func missingReadResult(name string) ReadResult {
 	err := fmt.Errorf("storage %q is not configured", name)
-	result := ReadResult{Status: ReadStatusFailed, Err: err}
+	result := ReadResult{Status: ReadStatusFailed, Err: InvalidArgumentError(err)}
 	return result
 }
 
@@ -182,7 +190,7 @@ func (r *Router) setWriteGroupError(response *WriteResponse, group *routedWrite,
 
 func missingWriteResult(name string) WriteResult {
 	err := fmt.Errorf("storage %q is not configured", name)
-	result := WriteResult{Status: WriteStatusFailed, Err: err}
+	result := WriteResult{Status: WriteStatusFailed, Err: InvalidArgumentError(err)}
 	return result
 }
 
@@ -247,6 +255,6 @@ func (r *Router) setDeleteGroupError(response *DeleteResponse, group *routedDele
 
 func missingDeleteResult(name string) DeleteResult {
 	err := fmt.Errorf("storage %q is not configured", name)
-	result := DeleteResult{Status: DeleteStatusFailed, Err: err}
+	result := DeleteResult{Status: DeleteStatusFailed, Err: InvalidArgumentError(err)}
 	return result
 }

@@ -119,6 +119,9 @@ func TestRouterReturnsPerOperationFailuresForUnknownStorage(t *testing.T) {
 	if read.Results[0].Status != storage.ReadStatusFailed || read.Results[0].Err == nil {
 		t.Fatalf("Read() result = %#v", read.Results[0])
 	}
+	if code, retryable := storage.ErrorDetails(read.Results[0].Err); code != storage.ErrorCodeInvalidArgument || retryable {
+		t.Fatalf("Read() failure = %s retryable=%t", code, retryable)
+	}
 
 	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte("{}")}
 	writeOperation := storage.WriteOperation{Address: address, Document: document}
@@ -130,6 +133,9 @@ func TestRouterReturnsPerOperationFailuresForUnknownStorage(t *testing.T) {
 	if written.Results[0].Status != storage.WriteStatusFailed || written.Results[0].Err == nil {
 		t.Fatalf("Write() result = %#v", written.Results[0])
 	}
+	if code, retryable := storage.ErrorDetails(written.Results[0].Err); code != storage.ErrorCodeInvalidArgument || retryable {
+		t.Fatalf("Write() failure = %s retryable=%t", code, retryable)
+	}
 
 	deleteRequest := storage.DeleteRequest{Operations: []storage.DeleteOperation{{Address: address}}}
 	deleted, err := router.Delete(t.Context(), deleteRequest)
@@ -138,6 +144,9 @@ func TestRouterReturnsPerOperationFailuresForUnknownStorage(t *testing.T) {
 	}
 	if deleted.Results[0].Status != storage.DeleteStatusFailed || deleted.Results[0].Err == nil {
 		t.Fatalf("Delete() result = %#v", deleted.Results[0])
+	}
+	if code, retryable := storage.ErrorDetails(deleted.Results[0].Err); code != storage.ErrorCodeInvalidArgument || retryable {
+		t.Fatalf("Delete() failure = %s retryable=%t", code, retryable)
 	}
 }
 

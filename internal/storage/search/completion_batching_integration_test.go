@@ -155,7 +155,7 @@ func TestSearchBatchingKeepsArchiveAppliedWithoutRefresh(t *testing.T) {
 	archiveOp := &sink.WriteOperation{Address: archive.sinkAddress("archive"), Action: archiveAction}
 	archiveRequest := &sink.WriteRequest{CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED, Operations: []*sink.WriteOperation{archiveOp}}
 	program := &sink.LuaProgram{Source: []byte(`return function(current, incoming) return incoming end`)}
-	mutation := &sink.MergeOperation{IncomingDocument: sinkDocument(`{"value":2}`), LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE}
+	mutation := &sink.MergeOperation{IncomingDocument: sinkDocument(`{"value":2}`), LuaProgram: program}
 	productAction := &sink.WriteOperation_Merge{Merge: mutation}
 	productOp := &sink.WriteOperation{Address: product.sinkAddress("product"), Action: productAction}
 	productRequest := &sink.WriteRequest{CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE, Operations: []*sink.WriteOperation{productOp}}

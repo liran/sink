@@ -209,6 +209,9 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 				Topic:            configured.kafka.topic,
 				Metrics:          observed,
 			}
+			if configured.driver == driverElasticsearch || configured.driver == driverOpenSearch {
+				publisherOptions.MutationKey = queue.MutationKeyWithoutNamespace
+			}
 			publisher, publisherErr := queuekafka.NewPublisher(publisherOptions)
 			if publisherErr != nil {
 				app.close()

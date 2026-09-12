@@ -627,7 +627,7 @@ func (w *worker) write(ctx context.Context, opts settings, keys []int) bool {
 				w.errors["encode"]++
 				return false
 			}
-			merge := &sink.MergeOperation{IncomingDocument: encoded, LuaProgram: programReference, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL}
+			merge := &sink.MergeOperation{IncomingDocument: encoded, LuaProgram: programReference}
 			operation.Action = &sink.WriteOperation_Merge{Merge: merge}
 		}
 		request.Operations = append(request.Operations, operation)

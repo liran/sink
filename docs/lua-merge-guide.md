@@ -17,8 +17,8 @@ return function(current, incoming)
 end
 ```
 
-- `current` is the stored object. It is `nil` when the record does not
-  exist and the Merge uses `MISSING_DOCUMENT_MODE_CREATE`.
+- `current` is the stored object. It is `nil` when the record does not exist;
+  every Merge can create the record returned by the Lua function.
 - `incoming` is the object carried by this Merge and is always present.
 - `current` and `incoming` must have the same document encoding.
 - The function must return an object. It cannot return `nil`, an array, or
@@ -253,9 +253,8 @@ if err != nil {
     return err
 }
 options := sink.MergeOptions{
-    Incoming:            incomingDocument,
-    Program:             program,
-    MissingDocumentMode: sink.MissingDocumentCreate,
+    Incoming: incomingDocument,
+    Program:  program,
 }
 operation, err := sink.NewMerge(address, options)
 if err != nil {

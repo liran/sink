@@ -21,6 +21,8 @@ type marshalVTMessage interface {
 	SizeVT() int
 }
 
+type MutationKeyFunc func(Mutation) ([]byte, error)
+
 // MutationSize includes the queue envelope without allocating its payload.
 func MutationSize(mutation Mutation) int {
 	_, message, err := mutationMessage(mutation)
@@ -80,15 +82,53 @@ func UnmarshalMutation(envelope []byte) (Mutation, error) {
 }
 
 func MutationKey(mutation Mutation) ([]byte, error) {
+	return mutationKey(mutation, true)
+}
+
+// MutationKeyWithoutNamespace is used by search backends, where namespace is
+// logical metadata and dataset already contains the complete index or alias.
+func MutationKeyWithoutNamespace(mutation Mutation) ([]byte, error) {
+	return mutationKey(mutation, false)
+}
+
+func mutationKey(mutation Mutation, includeNamespace bool) ([]byte, error) {
 	address, err := mutationAddress(mutation)
 	if err != nil {
 		return nil, err
 	}
-	encoded, err := address.MarshalVT()
+	canonical := &sink.RecordAddress{
+		Store:   address.GetStore(),
+		Dataset: address.GetDataset(),
+		Key:     canonicalRecordKey(address.GetKey()),
+	}
+	if includeNamespace {
+		canonical.Namespace = address.GetNamespace()
+	}
+	encoded, err := canonical.MarshalVT()
 	if err != nil {
 		return nil, fmt.Errorf("marshal queue mutation address: %w", err)
 	}
 	return encoded, nil
+}
+
+func canonicalRecordKey(key *sink.RecordKey) *sink.RecordKey {
+	canonical := &sink.RecordKey{}
+	switch kind := key.GetKind().(type) {
+	case *sink.RecordKey_StringValue:
+		canonical.Kind = &sink.RecordKey_StringValue{StringValue: kind.StringValue}
+	case *sink.RecordKey_Int64Value:
+		canonical.Kind = &sink.RecordKey_Int64Value{Int64Value: kind.Int64Value}
+	case *sink.RecordKey_BytesValue:
+		canonical.Kind = &sink.RecordKey_BytesValue{BytesValue: bytes.Clone(kind.BytesValue)}
+	case *sink.RecordKey_OpaqueValue:
+		opaque := &sink.OpaqueValue{}
+		if kind.OpaqueValue != nil {
+			opaque.Type = kind.OpaqueValue.GetType()
+			opaque.Data = bytes.Clone(kind.OpaqueValue.GetData())
+		}
+		canonical.Kind = &sink.RecordKey_OpaqueValue{OpaqueValue: opaque}
+	}
+	return canonical
 }
 
 func MutationStore(mutation Mutation) (string, error) {

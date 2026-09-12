@@ -33,7 +33,7 @@ func BenchmarkRecordFolding(b *testing.B) {
 						}
 						operation := foldingPut(key, mode, index)
 						if method == "put_merge" && index%2 == 1 {
-							operation = foldingMerge(key, incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
+							operation = foldingMerge(key, incrementLua, `{"value":1}`)
 						}
 						write.Operations = append(write.Operations, operation)
 						readOperation := &sink.ReadOperation{Address: protoAddress(key)}

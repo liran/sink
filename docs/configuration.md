@@ -143,6 +143,11 @@ can route operations in one batch to different storage instances and returns
 results in the original operation order. An address whose `store` is not
 configured receives a per-operation failure.
 
+For search drivers, namespace is not part of the physical or ordering identity:
+two addresses with the same store, dataset and typed key reach the same document
+even when their namespaces differ. Do not configure multiple index aliases that
+can address the same document under different dataset names when ordering matters.
+
 ## Synchronous request batching
 
 In `server` and `all` modes, Sink coalesces concurrent one-operation RPCs into
@@ -541,7 +546,8 @@ return function(current, incoming)
 end
 ```
 
-`current` is `nil` when `MISSING_DOCUMENT_MODE_CREATE` creates a missing record.
+`current` is `nil` when the record does not exist; every Merge can create the
+document returned by the Lua function.
 `incoming` is the operation's incoming object. Current and incoming documents
 must use the same encoding. The returned value must be an object and is encoded
 as JSON or BSON to match the incoming document. The versioned `sink.v1`

@@ -59,6 +59,41 @@ func TestMutationKeyIsStablePerAddress(t *testing.T) {
 	}
 }
 
+func TestMutationKeyIgnoresUnknownAddressFields(t *testing.T) {
+	plain := testQueueAddress("record-1")
+	withUnknown := proto.Clone(plain).(*sink.RecordAddress)
+	withUnknown.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x01})
+	withUnknown.GetKey().ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x02})
+	plainKey, err := queue.MutationKey(queue.Mutation{Write: &sink.WriteOperation{Address: plain}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknownKey, err := queue.MutationKey(queue.Mutation{Write: &sink.WriteOperation{Address: withUnknown}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plainKey, unknownKey) {
+		t.Fatalf("semantic address key changed: %x != %x", plainKey, unknownKey)
+	}
+}
+
+func TestMutationKeyWithoutNamespaceMatchesSearchIdentity(t *testing.T) {
+	first := testQueueAddress("record-1")
+	second := proto.Clone(first).(*sink.RecordAddress)
+	second.Namespace = "another-logical-namespace"
+	firstKey, err := queue.MutationKeyWithoutNamespace(queue.Mutation{Write: &sink.WriteOperation{Address: first}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondKey, err := queue.MutationKeyWithoutNamespace(queue.Mutation{Write: &sink.WriteOperation{Address: second}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(firstKey, secondKey) {
+		t.Fatalf("search identity keys differ: %x != %x", firstKey, secondKey)
+	}
+}
+
 func BenchmarkMutationPayloadMarshal(b *testing.B) {
 	address := testQueueAddress("benchmark")
 	document := &sink.Document{

@@ -31,7 +31,7 @@ func (a *failingApplier) Delete(context.Context, *sink.DeleteRequest) (*sink.Del
 func TestUnknownFailuresRetainSameRecordBarrier(t *testing.T) {
 	for _, code := range []sink.FailureCode{sink.FailureCode_FAILURE_CODE_UNSPECIFIED, sink.FailureCode_FAILURE_CODE_INTERNAL,
 		sink.FailureCode_FAILURE_CODE_UNAVAILABLE, sink.FailureCode_FAILURE_CODE_DEADLINE_EXCEEDED,
-		sink.FailureCode_FAILURE_CODE_CONFLICT, sink.FailureCode_FAILURE_CODE_NOT_FOUND, 99, -1} {
+		sink.FailureCode_FAILURE_CODE_CONFLICT, 99, -1} {
 		t.Run(code.String(), func(t *testing.T) {
 			failure := &sink.Failure{Code: code, Message: "unknown/environment failure", Retryable: false}
 			assertFailureBarrier(t, failure, true)
@@ -42,7 +42,8 @@ func TestUnknownFailuresRetainSameRecordBarrier(t *testing.T) {
 
 func TestConfirmedPermanentFailureReleasesSameRecordBarrier(t *testing.T) {
 	for _, code := range []sink.FailureCode{sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT,
-		sink.FailureCode_FAILURE_CODE_PRECONDITION_FAILED, sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED} {
+		sink.FailureCode_FAILURE_CODE_PRECONDITION_FAILED, sink.FailureCode_FAILURE_CODE_NOT_FOUND,
+		sink.FailureCode_FAILURE_CODE_RESOURCE_EXHAUSTED} {
 		t.Run(code.String(), func(t *testing.T) {
 			failure := &sink.Failure{Code: code, Message: "confirmed invalid record", Retryable: false}
 			assertFailureBarrier(t, failure, false)

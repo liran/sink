@@ -771,11 +771,6 @@ func (m *MergeOperation) MarshalToSizedBufferVT(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x1a
 	}
-	if m.MissingDocumentMode != 0 {
-		i = protohelpers.EncodeVarint(dAtA, i, uint64(m.MissingDocumentMode))
-		i--
-		dAtA[i] = 0x10
-	}
 	if m.IncomingDocument != nil {
 		size, err := m.IncomingDocument.MarshalToSizedBufferVT(dAtA[:i])
 		if err != nil {
@@ -2188,9 +2183,6 @@ func (m *MergeOperation) SizeVT() (n int) {
 	if m.IncomingDocument != nil {
 		l = m.IncomingDocument.SizeVT()
 		n += 1 + l + protohelpers.SizeOfVarint(uint64(l))
-	}
-	if m.MissingDocumentMode != 0 {
-		n += 1 + protohelpers.SizeOfVarint(uint64(m.MissingDocumentMode))
 	}
 	if m.LuaProgram != nil {
 		l = m.LuaProgram.SizeVT()
@@ -4233,25 +4225,6 @@ func (m *MergeOperation) UnmarshalVT(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 2:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field MissingDocumentMode", wireType)
-			}
-			m.MissingDocumentMode = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return protohelpers.ErrIntOverflow
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.MissingDocumentMode |= MissingDocumentMode(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
 		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field LuaProgram", wireType)

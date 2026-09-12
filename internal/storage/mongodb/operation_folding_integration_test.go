@@ -51,7 +51,7 @@ func TestMongoDBFoldedPutAndMergePreserveConditionsAndBSON(t *testing.T) {
 	}
 	document := &sink.Document{Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_BSON, Payload: payload}
 	program := &sink.LuaProgram{Source: []byte(`return function(current, incoming) current.counter=current.counter+incoming.delta return current end`)}
-	mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL}
+	mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program}
 	action := &sink.WriteOperation_Merge{Merge: mutation}
 	operation := &sink.WriteOperation{Address: address, Action: action}
 	request.Operations = append(request.Operations, operation)

@@ -19,7 +19,6 @@ import (
 func returningIncrement(key string) *sink.WriteRequest {
 	request := mergeWriteRequest(key, "1")
 	request.Operations[0].ReturnDocument = true
-	request.Operations[0].GetMerge().MissingDocumentMode = sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE
 	return request
 }
 

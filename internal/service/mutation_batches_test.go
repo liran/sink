@@ -98,7 +98,7 @@ func completionPut(key string, value int) *sink.WriteOperation {
 func completionMerge(key string, value int) *sink.WriteOperation {
 	doc := &sink.Document{Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON, Payload: fmt.Appendf(nil, `{"value":%d}`, value)}
 	program := &sink.LuaProgram{Source: []byte(`return function(current, incoming) return {value=(current and current.value or 0)+incoming.value} end`)}
-	mutation := &sink.MergeOperation{IncomingDocument: doc, LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE}
+	mutation := &sink.MergeOperation{IncomingDocument: doc, LuaProgram: program}
 	action := &sink.WriteOperation_Merge{Merge: mutation}
 	op := &sink.WriteOperation{Address: completionAddress(key), Action: action}
 	return op
@@ -253,7 +253,7 @@ func TestCompletionWavesTrackEveryRecordInMultiOperationRPC(t *testing.T) {
 		completionWriteCall(t.Context(), applied, completionPut("b", 3)),
 		completionWriteCall(t.Context(), visible, completionPut("a", 4)),
 	}
-	waves := planMutationWaves[*sink.WriteOperation](calls)
+	waves := planMutationWaves[*sink.WriteOperation](calls, identityOf)
 	if len(waves) != 3 || !reflect.DeepEqual(waves[0].applied, calls[:1]) || !reflect.DeepEqual(waves[1].visible, []*batchCall[*sink.WriteRequest, *sink.WriteResponse]{calls[1], calls[3]}) || !reflect.DeepEqual(waves[2].applied, calls[2:3]) {
 		t.Fatalf("wrong dependency waves: %+v", waves)
 	}
@@ -325,7 +325,7 @@ func TestCompletionWavesKeepFullRecordAddressesSeparate(t *testing.T) {
 			if difference == "same" {
 				want = 2
 			}
-			if waves := planMutationWaves[*sink.WriteOperation](calls); len(waves) != want {
+			if waves := planMutationWaves[*sink.WriteOperation](calls, identityOf); len(waves) != want {
 				t.Fatalf("%s: %d waves, want %d", difference, len(waves), want)
 			}
 		})

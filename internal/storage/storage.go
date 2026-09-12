@@ -16,6 +16,21 @@ type Storage interface {
 	Delete(ctx context.Context, req DeleteRequest) (DeleteResponse, error)
 }
 
+// IdentityKeyer exposes the physical identity used by a backend when it differs
+// from the complete logical address. Schedulers use it to serialize operations
+// that can reach the same stored record.
+type IdentityKeyer interface {
+	IdentityKey(Address) string
+}
+
+// IdentityKey returns the backend's physical record identity when available.
+func IdentityKey(backend Storage, address Address) string {
+	if keyer, ok := backend.(IdentityKeyer); ok {
+		return keyer.IdentityKey(address)
+	}
+	return address.RoutingKey()
+}
+
 type ErrorCode uint8
 
 const (

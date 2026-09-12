@@ -232,55 +232,6 @@ func (WriteMode) EnumDescriptor() ([]byte, []int) {
 	return file_sink_sink_proto_rawDescGZIP(), []int{3}
 }
 
-type MissingDocumentMode int32
-
-const (
-	MissingDocumentMode_MISSING_DOCUMENT_MODE_UNSPECIFIED MissingDocumentMode = 0
-	MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL        MissingDocumentMode = 1
-	MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE      MissingDocumentMode = 2
-)
-
-// Enum value maps for MissingDocumentMode.
-var (
-	MissingDocumentMode_name = map[int32]string{
-		0: "MISSING_DOCUMENT_MODE_UNSPECIFIED",
-		1: "MISSING_DOCUMENT_MODE_FAIL",
-		2: "MISSING_DOCUMENT_MODE_CREATE",
-	}
-	MissingDocumentMode_value = map[string]int32{
-		"MISSING_DOCUMENT_MODE_UNSPECIFIED": 0,
-		"MISSING_DOCUMENT_MODE_FAIL":        1,
-		"MISSING_DOCUMENT_MODE_CREATE":      2,
-	}
-)
-
-func (x MissingDocumentMode) Enum() *MissingDocumentMode {
-	p := new(MissingDocumentMode)
-	*p = x
-	return p
-}
-
-func (x MissingDocumentMode) String() string {
-	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
-}
-
-func (MissingDocumentMode) Descriptor() protoreflect.EnumDescriptor {
-	return file_sink_sink_proto_enumTypes[4].Descriptor()
-}
-
-func (MissingDocumentMode) Type() protoreflect.EnumType {
-	return &file_sink_sink_proto_enumTypes[4]
-}
-
-func (x MissingDocumentMode) Number() protoreflect.EnumNumber {
-	return protoreflect.EnumNumber(x)
-}
-
-// Deprecated: Use MissingDocumentMode.Descriptor instead.
-func (MissingDocumentMode) EnumDescriptor() ([]byte, []int) {
-	return file_sink_sink_proto_rawDescGZIP(), []int{4}
-}
-
 type WriteStatus int32
 
 const (
@@ -323,11 +274,11 @@ func (x WriteStatus) String() string {
 }
 
 func (WriteStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_sink_sink_proto_enumTypes[5].Descriptor()
+	return file_sink_sink_proto_enumTypes[4].Descriptor()
 }
 
 func (WriteStatus) Type() protoreflect.EnumType {
-	return &file_sink_sink_proto_enumTypes[5]
+	return &file_sink_sink_proto_enumTypes[4]
 }
 
 func (x WriteStatus) Number() protoreflect.EnumNumber {
@@ -336,7 +287,7 @@ func (x WriteStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use WriteStatus.Descriptor instead.
 func (WriteStatus) EnumDescriptor() ([]byte, []int) {
-	return file_sink_sink_proto_rawDescGZIP(), []int{5}
+	return file_sink_sink_proto_rawDescGZIP(), []int{4}
 }
 
 type DeleteStatus int32
@@ -375,11 +326,11 @@ func (x DeleteStatus) String() string {
 }
 
 func (DeleteStatus) Descriptor() protoreflect.EnumDescriptor {
-	return file_sink_sink_proto_enumTypes[6].Descriptor()
+	return file_sink_sink_proto_enumTypes[5].Descriptor()
 }
 
 func (DeleteStatus) Type() protoreflect.EnumType {
-	return &file_sink_sink_proto_enumTypes[6]
+	return &file_sink_sink_proto_enumTypes[5]
 }
 
 func (x DeleteStatus) Number() protoreflect.EnumNumber {
@@ -388,7 +339,7 @@ func (x DeleteStatus) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DeleteStatus.Descriptor instead.
 func (DeleteStatus) EnumDescriptor() ([]byte, []int) {
-	return file_sink_sink_proto_rawDescGZIP(), []int{6}
+	return file_sink_sink_proto_rawDescGZIP(), []int{5}
 }
 
 type FailureCode int32
@@ -442,11 +393,11 @@ func (x FailureCode) String() string {
 }
 
 func (FailureCode) Descriptor() protoreflect.EnumDescriptor {
-	return file_sink_sink_proto_enumTypes[7].Descriptor()
+	return file_sink_sink_proto_enumTypes[6].Descriptor()
 }
 
 func (FailureCode) Type() protoreflect.EnumType {
-	return &file_sink_sink_proto_enumTypes[7]
+	return &file_sink_sink_proto_enumTypes[6]
 }
 
 func (x FailureCode) Number() protoreflect.EnumNumber {
@@ -455,7 +406,7 @@ func (x FailureCode) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use FailureCode.Descriptor instead.
 func (FailureCode) EnumDescriptor() ([]byte, []int) {
-	return file_sink_sink_proto_rawDescGZIP(), []int{7}
+	return file_sink_sink_proto_rawDescGZIP(), []int{6}
 }
 
 // RecordAddress identifies a record without exposing a physical database,
@@ -1228,12 +1179,11 @@ func (x *PutOperation) GetMode() WriteMode {
 // expands any program reference before queueing the operation so the worker can
 // merge against the document version it reads at execution time.
 type MergeOperation struct {
-	state               protoimpl.MessageState `protogen:"open.v1"`
-	IncomingDocument    *Document              `protobuf:"bytes,1,opt,name=incoming_document,json=incomingDocument,proto3" json:"incoming_document,omitempty"`
-	MissingDocumentMode MissingDocumentMode    `protobuf:"varint,2,opt,name=missing_document_mode,json=missingDocumentMode,proto3,enum=sink.v1.MissingDocumentMode" json:"missing_document_mode,omitempty"`
-	LuaProgram          *LuaProgram            `protobuf:"bytes,3,opt,name=lua_program,json=luaProgram,proto3" json:"lua_program,omitempty"`
-	unknownFields       protoimpl.UnknownFields
-	sizeCache           protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	IncomingDocument *Document              `protobuf:"bytes,1,opt,name=incoming_document,json=incomingDocument,proto3" json:"incoming_document,omitempty"`
+	LuaProgram       *LuaProgram            `protobuf:"bytes,3,opt,name=lua_program,json=luaProgram,proto3" json:"lua_program,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *MergeOperation) Reset() {
@@ -1271,13 +1221,6 @@ func (x *MergeOperation) GetIncomingDocument() *Document {
 		return x.IncomingDocument
 	}
 	return nil
-}
-
-func (x *MergeOperation) GetMissingDocumentMode() MissingDocumentMode {
-	if x != nil {
-		return x.MissingDocumentMode
-	}
-	return MissingDocumentMode_MISSING_DOCUMENT_MODE_UNSPECIFIED
 }
 
 func (x *MergeOperation) GetLuaProgram() *LuaProgram {
@@ -2583,12 +2526,11 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x06action\"e\n" +
 	"\fPutOperation\x12-\n" +
 	"\bdocument\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\bdocument\x12&\n" +
-	"\x04mode\x18\x02 \x01(\x0e2\x12.sink.v1.WriteModeR\x04mode\"\xd8\x01\n" +
+	"\x04mode\x18\x02 \x01(\x0e2\x12.sink.v1.WriteModeR\x04mode\"\xa3\x01\n" +
 	"\x0eMergeOperation\x12>\n" +
-	"\x11incoming_document\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\x10incomingDocument\x12P\n" +
-	"\x15missing_document_mode\x18\x02 \x01(\x0e2\x1c.sink.v1.MissingDocumentModeR\x13missingDocumentMode\x124\n" +
+	"\x11incoming_document\x18\x01 \x01(\v2\x11.sink.v1.DocumentR\x10incomingDocument\x124\n" +
 	"\vlua_program\x18\x03 \x01(\v2\x13.sink.v1.LuaProgramR\n" +
-	"luaProgram\"<\n" +
+	"luaProgramJ\x04\b\x02\x10\x03R\x15missing_document_mode\"<\n" +
 	"\n" +
 	"LuaProgram\x12\x16\n" +
 	"\x06source\x18\x01 \x01(\fR\x06source\x12\x16\n" +
@@ -2692,11 +2634,7 @@ const file_sink_sink_proto_rawDesc = "" +
 	"\x16WRITE_MODE_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11WRITE_MODE_CREATE\x10\x01\x12\x16\n" +
 	"\x12WRITE_MODE_REPLACE\x10\x02\x12\x15\n" +
-	"\x11WRITE_MODE_UPSERT\x10\x03*~\n" +
-	"\x13MissingDocumentMode\x12%\n" +
-	"!MISSING_DOCUMENT_MODE_UNSPECIFIED\x10\x00\x12\x1e\n" +
-	"\x1aMISSING_DOCUMENT_MODE_FAIL\x10\x01\x12 \n" +
-	"\x1cMISSING_DOCUMENT_MODE_CREATE\x10\x02*\x9f\x01\n" +
+	"\x11WRITE_MODE_UPSERT\x10\x03*\x9f\x01\n" +
 	"\vWriteStatus\x12\x1c\n" +
 	"\x18WRITE_STATUS_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15WRITE_STATUS_ACCEPTED\x10\x01\x12\x18\n" +
@@ -2739,114 +2677,112 @@ func file_sink_sink_proto_rawDescGZIP() []byte {
 	return file_sink_sink_proto_rawDescData
 }
 
-var file_sink_sink_proto_enumTypes = make([]protoimpl.EnumInfo, 8)
+var file_sink_sink_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
 var file_sink_sink_proto_msgTypes = make([]protoimpl.MessageInfo, 33)
 var file_sink_sink_proto_goTypes = []any{
-	(DocumentEncoding)(0),    // 0: sink.v1.DocumentEncoding
-	(CompletionMode)(0),      // 1: sink.v1.CompletionMode
-	(ReadStatus)(0),          // 2: sink.v1.ReadStatus
-	(WriteMode)(0),           // 3: sink.v1.WriteMode
-	(MissingDocumentMode)(0), // 4: sink.v1.MissingDocumentMode
-	(WriteStatus)(0),         // 5: sink.v1.WriteStatus
-	(DeleteStatus)(0),        // 6: sink.v1.DeleteStatus
-	(FailureCode)(0),         // 7: sink.v1.FailureCode
-	(*RecordAddress)(nil),    // 8: sink.v1.RecordAddress
-	(*RecordKey)(nil),        // 9: sink.v1.RecordKey
-	(*OpaqueValue)(nil),      // 10: sink.v1.OpaqueValue
-	(*Document)(nil),         // 11: sink.v1.Document
-	(*RevisionToken)(nil),    // 12: sink.v1.RevisionToken
-	(*ReadRequest)(nil),      // 13: sink.v1.ReadRequest
-	(*ReadOperation)(nil),    // 14: sink.v1.ReadOperation
-	(*ReadResponse)(nil),     // 15: sink.v1.ReadResponse
-	(*ReadResult)(nil),       // 16: sink.v1.ReadResult
-	(*WriteRequest)(nil),     // 17: sink.v1.WriteRequest
-	(*WriteOperation)(nil),   // 18: sink.v1.WriteOperation
-	(*PutOperation)(nil),     // 19: sink.v1.PutOperation
-	(*MergeOperation)(nil),   // 20: sink.v1.MergeOperation
-	(*LuaProgram)(nil),       // 21: sink.v1.LuaProgram
-	(*WriteResponse)(nil),    // 22: sink.v1.WriteResponse
-	(*WriteResult)(nil),      // 23: sink.v1.WriteResult
-	(*DeleteRequest)(nil),    // 24: sink.v1.DeleteRequest
-	(*DeleteOperation)(nil),  // 25: sink.v1.DeleteOperation
-	(*DeleteResponse)(nil),   // 26: sink.v1.DeleteResponse
-	(*DeleteResult)(nil),     // 27: sink.v1.DeleteResult
-	(*Failure)(nil),          // 28: sink.v1.Failure
-	(*Command)(nil),          // 29: sink.v1.Command
-	(*Header)(nil),           // 30: sink.v1.Header
-	(*ExecuteRequest)(nil),   // 31: sink.v1.ExecuteRequest
-	(*ExecuteResponse)(nil),  // 32: sink.v1.ExecuteResponse
-	(*QueryRequest)(nil),     // 33: sink.v1.QueryRequest
-	(*SortField)(nil),        // 34: sink.v1.SortField
-	(*Projection)(nil),       // 35: sink.v1.Projection
-	(*QueryResponse)(nil),    // 36: sink.v1.QueryResponse
-	(*CountRequest)(nil),     // 37: sink.v1.CountRequest
-	(*CountResponse)(nil),    // 38: sink.v1.CountResponse
-	(*ScanRequest)(nil),      // 39: sink.v1.ScanRequest
-	(*ScanResponse)(nil),     // 40: sink.v1.ScanResponse
+	(DocumentEncoding)(0),   // 0: sink.v1.DocumentEncoding
+	(CompletionMode)(0),     // 1: sink.v1.CompletionMode
+	(ReadStatus)(0),         // 2: sink.v1.ReadStatus
+	(WriteMode)(0),          // 3: sink.v1.WriteMode
+	(WriteStatus)(0),        // 4: sink.v1.WriteStatus
+	(DeleteStatus)(0),       // 5: sink.v1.DeleteStatus
+	(FailureCode)(0),        // 6: sink.v1.FailureCode
+	(*RecordAddress)(nil),   // 7: sink.v1.RecordAddress
+	(*RecordKey)(nil),       // 8: sink.v1.RecordKey
+	(*OpaqueValue)(nil),     // 9: sink.v1.OpaqueValue
+	(*Document)(nil),        // 10: sink.v1.Document
+	(*RevisionToken)(nil),   // 11: sink.v1.RevisionToken
+	(*ReadRequest)(nil),     // 12: sink.v1.ReadRequest
+	(*ReadOperation)(nil),   // 13: sink.v1.ReadOperation
+	(*ReadResponse)(nil),    // 14: sink.v1.ReadResponse
+	(*ReadResult)(nil),      // 15: sink.v1.ReadResult
+	(*WriteRequest)(nil),    // 16: sink.v1.WriteRequest
+	(*WriteOperation)(nil),  // 17: sink.v1.WriteOperation
+	(*PutOperation)(nil),    // 18: sink.v1.PutOperation
+	(*MergeOperation)(nil),  // 19: sink.v1.MergeOperation
+	(*LuaProgram)(nil),      // 20: sink.v1.LuaProgram
+	(*WriteResponse)(nil),   // 21: sink.v1.WriteResponse
+	(*WriteResult)(nil),     // 22: sink.v1.WriteResult
+	(*DeleteRequest)(nil),   // 23: sink.v1.DeleteRequest
+	(*DeleteOperation)(nil), // 24: sink.v1.DeleteOperation
+	(*DeleteResponse)(nil),  // 25: sink.v1.DeleteResponse
+	(*DeleteResult)(nil),    // 26: sink.v1.DeleteResult
+	(*Failure)(nil),         // 27: sink.v1.Failure
+	(*Command)(nil),         // 28: sink.v1.Command
+	(*Header)(nil),          // 29: sink.v1.Header
+	(*ExecuteRequest)(nil),  // 30: sink.v1.ExecuteRequest
+	(*ExecuteResponse)(nil), // 31: sink.v1.ExecuteResponse
+	(*QueryRequest)(nil),    // 32: sink.v1.QueryRequest
+	(*SortField)(nil),       // 33: sink.v1.SortField
+	(*Projection)(nil),      // 34: sink.v1.Projection
+	(*QueryResponse)(nil),   // 35: sink.v1.QueryResponse
+	(*CountRequest)(nil),    // 36: sink.v1.CountRequest
+	(*CountResponse)(nil),   // 37: sink.v1.CountResponse
+	(*ScanRequest)(nil),     // 38: sink.v1.ScanRequest
+	(*ScanResponse)(nil),    // 39: sink.v1.ScanResponse
 }
 var file_sink_sink_proto_depIdxs = []int32{
-	9,  // 0: sink.v1.RecordAddress.key:type_name -> sink.v1.RecordKey
-	10, // 1: sink.v1.RecordKey.opaque_value:type_name -> sink.v1.OpaqueValue
+	8,  // 0: sink.v1.RecordAddress.key:type_name -> sink.v1.RecordKey
+	9,  // 1: sink.v1.RecordKey.opaque_value:type_name -> sink.v1.OpaqueValue
 	0,  // 2: sink.v1.Document.encoding:type_name -> sink.v1.DocumentEncoding
-	14, // 3: sink.v1.ReadRequest.operations:type_name -> sink.v1.ReadOperation
-	8,  // 4: sink.v1.ReadOperation.address:type_name -> sink.v1.RecordAddress
-	16, // 5: sink.v1.ReadResponse.results:type_name -> sink.v1.ReadResult
+	13, // 3: sink.v1.ReadRequest.operations:type_name -> sink.v1.ReadOperation
+	7,  // 4: sink.v1.ReadOperation.address:type_name -> sink.v1.RecordAddress
+	15, // 5: sink.v1.ReadResponse.results:type_name -> sink.v1.ReadResult
 	2,  // 6: sink.v1.ReadResult.status:type_name -> sink.v1.ReadStatus
-	11, // 7: sink.v1.ReadResult.document:type_name -> sink.v1.Document
-	12, // 8: sink.v1.ReadResult.revision:type_name -> sink.v1.RevisionToken
-	28, // 9: sink.v1.ReadResult.failure:type_name -> sink.v1.Failure
+	10, // 7: sink.v1.ReadResult.document:type_name -> sink.v1.Document
+	11, // 8: sink.v1.ReadResult.revision:type_name -> sink.v1.RevisionToken
+	27, // 9: sink.v1.ReadResult.failure:type_name -> sink.v1.Failure
 	1,  // 10: sink.v1.WriteRequest.completion_mode:type_name -> sink.v1.CompletionMode
-	18, // 11: sink.v1.WriteRequest.operations:type_name -> sink.v1.WriteOperation
-	21, // 12: sink.v1.WriteRequest.lua_programs:type_name -> sink.v1.LuaProgram
-	8,  // 13: sink.v1.WriteOperation.address:type_name -> sink.v1.RecordAddress
-	19, // 14: sink.v1.WriteOperation.put:type_name -> sink.v1.PutOperation
-	20, // 15: sink.v1.WriteOperation.merge:type_name -> sink.v1.MergeOperation
-	11, // 16: sink.v1.PutOperation.document:type_name -> sink.v1.Document
+	17, // 11: sink.v1.WriteRequest.operations:type_name -> sink.v1.WriteOperation
+	20, // 12: sink.v1.WriteRequest.lua_programs:type_name -> sink.v1.LuaProgram
+	7,  // 13: sink.v1.WriteOperation.address:type_name -> sink.v1.RecordAddress
+	18, // 14: sink.v1.WriteOperation.put:type_name -> sink.v1.PutOperation
+	19, // 15: sink.v1.WriteOperation.merge:type_name -> sink.v1.MergeOperation
+	10, // 16: sink.v1.PutOperation.document:type_name -> sink.v1.Document
 	3,  // 17: sink.v1.PutOperation.mode:type_name -> sink.v1.WriteMode
-	11, // 18: sink.v1.MergeOperation.incoming_document:type_name -> sink.v1.Document
-	4,  // 19: sink.v1.MergeOperation.missing_document_mode:type_name -> sink.v1.MissingDocumentMode
-	21, // 20: sink.v1.MergeOperation.lua_program:type_name -> sink.v1.LuaProgram
-	23, // 21: sink.v1.WriteResponse.results:type_name -> sink.v1.WriteResult
-	5,  // 22: sink.v1.WriteResult.status:type_name -> sink.v1.WriteStatus
-	12, // 23: sink.v1.WriteResult.revision:type_name -> sink.v1.RevisionToken
-	28, // 24: sink.v1.WriteResult.failure:type_name -> sink.v1.Failure
-	11, // 25: sink.v1.WriteResult.document:type_name -> sink.v1.Document
-	1,  // 26: sink.v1.DeleteRequest.completion_mode:type_name -> sink.v1.CompletionMode
-	25, // 27: sink.v1.DeleteRequest.operations:type_name -> sink.v1.DeleteOperation
-	8,  // 28: sink.v1.DeleteOperation.address:type_name -> sink.v1.RecordAddress
-	27, // 29: sink.v1.DeleteResponse.results:type_name -> sink.v1.DeleteResult
-	6,  // 30: sink.v1.DeleteResult.status:type_name -> sink.v1.DeleteStatus
-	28, // 31: sink.v1.DeleteResult.failure:type_name -> sink.v1.Failure
-	7,  // 32: sink.v1.Failure.code:type_name -> sink.v1.FailureCode
-	30, // 33: sink.v1.Command.headers:type_name -> sink.v1.Header
-	29, // 34: sink.v1.ExecuteRequest.command:type_name -> sink.v1.Command
-	30, // 35: sink.v1.ExecuteResponse.headers:type_name -> sink.v1.Header
-	29, // 36: sink.v1.QueryRequest.command:type_name -> sink.v1.Command
-	34, // 37: sink.v1.QueryRequest.sort:type_name -> sink.v1.SortField
-	35, // 38: sink.v1.QueryRequest.projection:type_name -> sink.v1.Projection
-	11, // 39: sink.v1.QueryResponse.documents:type_name -> sink.v1.Document
-	29, // 40: sink.v1.CountRequest.command:type_name -> sink.v1.Command
-	29, // 41: sink.v1.ScanRequest.command:type_name -> sink.v1.Command
-	11, // 42: sink.v1.ScanResponse.documents:type_name -> sink.v1.Document
-	13, // 43: sink.v1.Sink.Read:input_type -> sink.v1.ReadRequest
-	17, // 44: sink.v1.Sink.Write:input_type -> sink.v1.WriteRequest
-	24, // 45: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
-	31, // 46: sink.v1.Sink.Execute:input_type -> sink.v1.ExecuteRequest
-	33, // 47: sink.v1.Sink.Query:input_type -> sink.v1.QueryRequest
-	37, // 48: sink.v1.Sink.Count:input_type -> sink.v1.CountRequest
-	39, // 49: sink.v1.Sink.Scan:input_type -> sink.v1.ScanRequest
-	15, // 50: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
-	22, // 51: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
-	26, // 52: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
-	32, // 53: sink.v1.Sink.Execute:output_type -> sink.v1.ExecuteResponse
-	36, // 54: sink.v1.Sink.Query:output_type -> sink.v1.QueryResponse
-	38, // 55: sink.v1.Sink.Count:output_type -> sink.v1.CountResponse
-	40, // 56: sink.v1.Sink.Scan:output_type -> sink.v1.ScanResponse
-	50, // [50:57] is the sub-list for method output_type
-	43, // [43:50] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	10, // 18: sink.v1.MergeOperation.incoming_document:type_name -> sink.v1.Document
+	20, // 19: sink.v1.MergeOperation.lua_program:type_name -> sink.v1.LuaProgram
+	22, // 20: sink.v1.WriteResponse.results:type_name -> sink.v1.WriteResult
+	4,  // 21: sink.v1.WriteResult.status:type_name -> sink.v1.WriteStatus
+	11, // 22: sink.v1.WriteResult.revision:type_name -> sink.v1.RevisionToken
+	27, // 23: sink.v1.WriteResult.failure:type_name -> sink.v1.Failure
+	10, // 24: sink.v1.WriteResult.document:type_name -> sink.v1.Document
+	1,  // 25: sink.v1.DeleteRequest.completion_mode:type_name -> sink.v1.CompletionMode
+	24, // 26: sink.v1.DeleteRequest.operations:type_name -> sink.v1.DeleteOperation
+	7,  // 27: sink.v1.DeleteOperation.address:type_name -> sink.v1.RecordAddress
+	26, // 28: sink.v1.DeleteResponse.results:type_name -> sink.v1.DeleteResult
+	5,  // 29: sink.v1.DeleteResult.status:type_name -> sink.v1.DeleteStatus
+	27, // 30: sink.v1.DeleteResult.failure:type_name -> sink.v1.Failure
+	6,  // 31: sink.v1.Failure.code:type_name -> sink.v1.FailureCode
+	29, // 32: sink.v1.Command.headers:type_name -> sink.v1.Header
+	28, // 33: sink.v1.ExecuteRequest.command:type_name -> sink.v1.Command
+	29, // 34: sink.v1.ExecuteResponse.headers:type_name -> sink.v1.Header
+	28, // 35: sink.v1.QueryRequest.command:type_name -> sink.v1.Command
+	33, // 36: sink.v1.QueryRequest.sort:type_name -> sink.v1.SortField
+	34, // 37: sink.v1.QueryRequest.projection:type_name -> sink.v1.Projection
+	10, // 38: sink.v1.QueryResponse.documents:type_name -> sink.v1.Document
+	28, // 39: sink.v1.CountRequest.command:type_name -> sink.v1.Command
+	28, // 40: sink.v1.ScanRequest.command:type_name -> sink.v1.Command
+	10, // 41: sink.v1.ScanResponse.documents:type_name -> sink.v1.Document
+	12, // 42: sink.v1.Sink.Read:input_type -> sink.v1.ReadRequest
+	16, // 43: sink.v1.Sink.Write:input_type -> sink.v1.WriteRequest
+	23, // 44: sink.v1.Sink.Delete:input_type -> sink.v1.DeleteRequest
+	30, // 45: sink.v1.Sink.Execute:input_type -> sink.v1.ExecuteRequest
+	32, // 46: sink.v1.Sink.Query:input_type -> sink.v1.QueryRequest
+	36, // 47: sink.v1.Sink.Count:input_type -> sink.v1.CountRequest
+	38, // 48: sink.v1.Sink.Scan:input_type -> sink.v1.ScanRequest
+	14, // 49: sink.v1.Sink.Read:output_type -> sink.v1.ReadResponse
+	21, // 50: sink.v1.Sink.Write:output_type -> sink.v1.WriteResponse
+	25, // 51: sink.v1.Sink.Delete:output_type -> sink.v1.DeleteResponse
+	31, // 52: sink.v1.Sink.Execute:output_type -> sink.v1.ExecuteResponse
+	35, // 53: sink.v1.Sink.Query:output_type -> sink.v1.QueryResponse
+	37, // 54: sink.v1.Sink.Count:output_type -> sink.v1.CountResponse
+	39, // 55: sink.v1.Sink.Scan:output_type -> sink.v1.ScanResponse
+	49, // [49:56] is the sub-list for method output_type
+	42, // [42:49] is the sub-list for method input_type
+	42, // [42:42] is the sub-list for extension type_name
+	42, // [42:42] is the sub-list for extension extendee
+	0,  // [0:42] is the sub-list for field type_name
 }
 
 func init() { file_sink_sink_proto_init() }
@@ -2869,7 +2805,7 @@ func file_sink_sink_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sink_sink_proto_rawDesc), len(file_sink_sink_proto_rawDesc)),
-			NumEnums:      8,
+			NumEnums:      7,
 			NumMessages:   33,
 			NumExtensions: 0,
 			NumServices:   1,
