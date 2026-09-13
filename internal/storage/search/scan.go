@@ -96,18 +96,14 @@ func (s *Store) Scan(ctx context.Context, req storage.ScanRequest) (storage.Scan
 		}
 		body["search_after"] = position
 	}
-	body["size"] = json.RawMessage(fmt.Sprint(req.BatchSize + 1))
 	body["track_total_hits"] = json.RawMessage("false")
 	opts.query.Del("track_total_hits")
-	opts.payload, err = json.Marshal(body)
-	if err != nil {
-		return empty, storage.InvalidArgumentError(err)
-	}
-	page, err := s.performQuery(ctx, opts)
+	opts.maxBytes = int64(storage.ScanBackendBytes(req.Request.MaxBytes))
+	page, pageSize, err := s.scanQuery(ctx, opts, body, req.BatchSize)
 	if err != nil {
 		return empty, err
 	}
-	if len(page.Hits.Hits) > req.BatchSize+1 {
+	if len(page.Hits.Hits) > pageSize+1 {
 		return empty, errors.New("search Scan exceeded its requested result count")
 	}
 	documents := make([]storage.Document, 0, req.BatchSize)
@@ -130,7 +126,7 @@ func (s *Store) Scan(ctx context.Context, req storage.ScanRequest) (storage.Scan
 			return empty, errors.New("Scan sort is not unique; add a unique immutable tie-breaker field")
 		}
 		previous = next
-		if len(documents) == req.BatchSize {
+		if len(documents) == pageSize {
 			more = true
 			break
 		}
@@ -152,4 +148,23 @@ func (s *Store) Scan(ctx context.Context, req storage.ScanRequest) (storage.Scan
 		position = nil
 	}
 	return seek.Page(documents, position)
+}
+
+func (s *Store) scanQuery(ctx context.Context, opts requestOptions, body map[string]json.RawMessage, pageSize int) (scanPage, int, error) {
+	for {
+		body["size"] = json.RawMessage(fmt.Sprint(pageSize + 1))
+		payload, err := json.Marshal(body)
+		if err != nil {
+			var empty scanPage
+			return empty, pageSize, storage.InvalidArgumentError(err)
+		}
+		opts.payload = payload
+		page, err := s.performQuery(ctx, opts)
+		if !errors.Is(err, errResponseTooLarge) || pageSize == 1 || ctx.Err() != nil {
+			return page, pageSize, err
+		}
+		// Retry only a read whose body exceeded the buffer. Keep the same seek
+		// position and a lookahead hit so shrinking cannot skip tied sort keys.
+		pageSize = max(1, pageSize/2)
+	}
 }

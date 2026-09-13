@@ -123,6 +123,10 @@ func (s *Server) Scan(ctx context.Context, req *sink.ScanRequest) (*sink.ScanRes
 		return nil, nativeStatus(storage.ErrNativeUnsupported)
 	}
 	encodedBytes := nativeExecutionBytes(req.GetCommand(), request) + req.SizeVT() - req.GetCommand().SizeVT()
+	mediaType, _, _ := mime.ParseMediaType(request.ContentType)
+	if mediaType != "application/bson" {
+		encodedBytes += 2 * (storage.ScanBackendBytes(maximum) - maximum)
+	}
 	admission := admissionRequest{encodedBytes: encodedBytes, stores: []string{request.Store}, scan: true}
 	ctx, release, err := s.admitRequest(ctx, admission)
 	if err != nil {
