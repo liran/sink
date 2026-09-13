@@ -230,7 +230,8 @@ func (s *Store) writeUpsert(ctx context.Context, operation writeWork, result *st
 		setWriteApplied(result, operation.revision)
 		return
 	}
-	setWriteError(result, errors.New("MongoDB upsert repeatedly conflicted on _id"))
+	cause := errors.New("MongoDB upsert repeatedly conflicted on _id")
+	setWriteError(result, storage.NewOperationError(storage.ErrorCodeConflict, true, cause))
 }
 
 func (s *Store) writeConditional(

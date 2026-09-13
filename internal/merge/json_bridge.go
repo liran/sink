@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"time"
+	"unsafe"
 
 	"github.com/iceisfun/golua/vm"
 	"github.com/liran/sink/internal/storage"
@@ -18,14 +19,29 @@ import (
 )
 
 type luaJSONBridge struct {
-	objectMeta      *vm.Table
-	arrayMeta       *vm.Table
-	nullMeta        *vm.Table
-	nullTable       *vm.Table
-	dateTimeValues  map[string]struct{}
-	forcedDateTimes map[string]struct{}
-	typedPathValues map[string]map[string]struct{}
-	untypedValues   map[string]struct{}
+	objectMeta         *vm.Table
+	arrayMeta          *vm.Table
+	nullMeta           *vm.Table
+	nullTable          *vm.Table
+	dateTimeValues     map[string]struct{}
+	generatedDateTimes map[luaStringIdentity]struct{}
+	typedPathValues    map[string]map[string]struct{}
+	untypedValues      map[string]struct{}
+}
+
+type generatedDateTime string
+
+// Lua strings are values, so content alone cannot retain the origin of a
+// sink.v1.time.now() result. The backing pointer distinguishes a directly
+// propagated generated value from an equal user string without changing Lua's
+// observable string behavior.
+type luaStringIdentity struct {
+	value string
+	data  *byte
+}
+
+func identityOfLuaString(value string) luaStringIdentity {
+	return luaStringIdentity{value: value, data: unsafe.StringData(value)}
 }
 
 type decodedJSONObject struct {
@@ -38,14 +54,14 @@ type decodedJSONObject struct {
 
 func newLuaJSONBridge(luaVM *vm.VM) *luaJSONBridge {
 	bridge := &luaJSONBridge{
-		objectMeta:      protectedMetatable("JSON object"),
-		arrayMeta:       protectedMetatable("JSON array"),
-		nullMeta:        protectedMetatable("JSON null"),
-		nullTable:       vm.NewEmptyTable(),
-		dateTimeValues:  make(map[string]struct{}),
-		forcedDateTimes: make(map[string]struct{}),
-		typedPathValues: make(map[string]map[string]struct{}),
-		untypedValues:   make(map[string]struct{}),
+		objectMeta:         protectedMetatable("JSON object"),
+		arrayMeta:          protectedMetatable("JSON array"),
+		nullMeta:           protectedMetatable("JSON null"),
+		nullTable:          vm.NewEmptyTable(),
+		dateTimeValues:     make(map[string]struct{}),
+		generatedDateTimes: make(map[luaStringIdentity]struct{}),
+		typedPathValues:    make(map[string]map[string]struct{}),
+		untypedValues:      make(map[string]struct{}),
 	}
 	bridge.nullTable.SetMetatable(bridge.nullMeta)
 
@@ -314,7 +330,7 @@ func setExtendedJSONDateTimeAt(value any, tokens []string) error {
 		if len(tokens) > 1 {
 			return setExtendedJSONDateTimeAt(current, tokens[1:])
 		}
-		text, ok := current.(string)
+		text, ok := dateTimeText(current)
 		if !ok {
 			return fmt.Errorf("BSON date-time value has type %T", current)
 		}
@@ -328,7 +344,7 @@ func setExtendedJSONDateTimeAt(value any, tokens []string) error {
 		if len(tokens) > 1 {
 			return setExtendedJSONDateTimeAt(typed[index], tokens[1:])
 		}
-		text, ok := typed[index].(string)
+		text, ok := dateTimeText(typed[index])
 		if !ok {
 			return fmt.Errorf("BSON date-time value has type %T", typed[index])
 		}
@@ -336,6 +352,17 @@ func setExtendedJSONDateTimeAt(value any, tokens []string) error {
 		return nil
 	default:
 		return fmt.Errorf("cannot traverse %T with token %q", value, token)
+	}
+}
+
+func dateTimeText(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case generatedDateTime:
+		return string(typed), true
+	default:
+		return "", false
 	}
 }
 
@@ -465,15 +492,13 @@ func (b *luaJSONBridge) dateTimePaths(value any) []string {
 
 func (b *luaJSONBridge) collectResultDateTimePaths(value any, pointer jsontext.Pointer, paths *[]string) {
 	switch typed := value.(type) {
+	case generatedDateTime:
+		*paths = append(*paths, string(pointer))
 	case string:
 		if _, isDateTime := b.dateTimeValues[typed]; !isDateTime {
 			return
 		}
 		path := string(pointer)
-		if _, forced := b.forcedDateTimes[typed]; forced {
-			*paths = append(*paths, path)
-			return
-		}
 		valuesAtPath := b.typedPathValues[path]
 		_, preservedAtPath := valuesAtPath[typed]
 		_, alsoUntyped := b.untypedValues[typed]
@@ -533,7 +558,11 @@ func (b *luaJSONBridge) luaToGo(value vm.Value, active map[*vm.Table]bool) (any,
 	case value.IsBool():
 		return value.AsBool(), nil
 	case value.IsString():
-		return value.AsString(), nil
+		text := value.AsString()
+		if _, generated := b.generatedDateTimes[identityOfLuaString(text)]; generated {
+			return generatedDateTime(text), nil
+		}
+		return text, nil
 	case value.IsInt():
 		return json.Number(strconv.FormatInt(value.AsInt(), 10)), nil
 	case value.IsFloat():

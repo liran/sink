@@ -209,6 +209,9 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 				Topic:            configured.kafka.topic,
 				Metrics:          observed,
 			}
+			if configured.driver == driverElasticsearch || configured.driver == driverOpenSearch {
+				publisherOptions.MutationKey = queue.MutationKeyWithoutNamespace
+			}
 			publisher, publisherErr := queuekafka.NewPublisher(publisherOptions)
 			if publisherErr != nil {
 				app.close()
@@ -246,6 +249,8 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		RequestTimeout:       loaded.requestTimeout,
 		MaxInFlightRequests:  loaded.maxInFlightRequests,
 		MaxInFlightBytes:     loaded.maxInFlightBytes,
+		MaxPublishRequests:   loaded.maxPublishRequests,
+		MaxPublishBytes:      loaded.maxPublishBytes,
 		MaxStoreRequests:     loaded.maxStoreRequests,
 		MaxScanRequests:      loaded.maxScanRequests,
 		MaxScanBytes:         loaded.maxScanBytes,

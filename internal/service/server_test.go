@@ -669,9 +669,8 @@ func mergeWriteRequestWithSource(key string, increment string, source string) *s
 	programReference := &sink.LuaProgram{Sha256: digest[:]}
 	program := &sink.LuaProgram{Source: []byte(source), Sha256: digest[:]}
 	mergeOperation := &sink.MergeOperation{
-		IncomingDocument:    incoming,
-		LuaProgram:          programReference,
-		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
+		IncomingDocument: incoming,
+		LuaProgram:       programReference,
 	}
 	operation := &sink.WriteOperation{
 		Address: protoAddress(key),

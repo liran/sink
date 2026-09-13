@@ -146,7 +146,7 @@ func TestMongoReturningMergeCommitsIndependentCounterValues(t *testing.T) {
 	}
 	document := &sink.Document{Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_BSON, Payload: encoded}
 	program := &sink.LuaProgram{Source: []byte(`return function(current, incoming) current = current or {count = 0}; current.count = current.count + incoming.count; return current end`)}
-	action := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE}
+	action := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program}
 	wrapper := &sink.WriteOperation_Merge{Merge: action}
 	keyKind := &sink.RecordKey_StringValue{StringValue: "quota"}
 	key := &sink.RecordKey{Kind: keyKind}

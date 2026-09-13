@@ -19,10 +19,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func foldingMerge(key, source, payload string, missing sink.MissingDocumentMode) *sink.WriteOperation {
+func foldingMerge(key, source, payload string) *sink.WriteOperation {
 	document := &sink.Document{Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_JSON, Payload: []byte(payload)}
 	program := &sink.LuaProgram{Source: []byte(source)}
-	mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program, MissingDocumentMode: missing}
+	mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program}
 	action := &sink.WriteOperation_Merge{Merge: mutation}
 	operation := &sink.WriteOperation{Address: protoAddress(key), Action: action}
 	return operation
@@ -45,8 +45,8 @@ func TestMergeFoldingAcrossRPCsPreservesResponseBoundaries(t *testing.T) {
 	errs := make(chan error, callers)
 	for caller := range callers {
 		go func() {
-			hot := foldingMerge("hot", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
-			cold := foldingMerge(fmt.Sprintf("cold-%d", caller), incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+			hot := foldingMerge("hot", incrementLua, `{"value":1}`)
+			cold := foldingMerge(fmt.Sprintf("cold-%d", caller), incrementLua, `{"value":1}`)
 			request := foldingRequest(hot, cold)
 			response, err := server.Write(ctx, request)
 			responses <- response
@@ -88,7 +88,7 @@ func TestMergeFoldingFullAddressIsolation(t *testing.T) {
 	var operations []*sink.WriteOperation
 	for _, dataset := range []string{"products", "offers"} {
 		for range 2 {
-			operation := foldingMerge("same-key", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+			operation := foldingMerge("same-key", incrementLua, `{"value":1}`)
 			operation.Address.Dataset = dataset
 			operations = append(operations, operation)
 		}
@@ -129,8 +129,8 @@ func TestMergeFoldingBoundsConflictAttemptsAndOutput(t *testing.T) {
 			if scenario == "output" {
 				source = `return function() return {value="abcdefghijklmnopqrstuvwxyz0123456789"} end`
 			}
-			first := foldingMerge("counter", source, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
-			second := foldingMerge("counter", source, `{"value":2}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+			first := foldingMerge("counter", source, `{"value":1}`)
+			second := foldingMerge("counter", source, `{"value":2}`)
 			response, err := server.Write(t.Context(), foldingRequest(first, second))
 			if err != nil {
 				t.Fatal(err)
@@ -156,6 +156,26 @@ func TestMergeFoldingBoundsConflictAttemptsAndOutput(t *testing.T) {
 func foldingRequest(operations ...*sink.WriteOperation) *sink.WriteRequest {
 	request := &sink.WriteRequest{CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_VISIBLE, Operations: operations}
 	return request
+}
+
+func TestMergeIgnoresLegacyMissingModeFieldAndCreatesRecord(t *testing.T) {
+	backend := memory.New()
+	server := newTestServer(t, backend, nil)
+	operation := foldingMerge("legacy", incrementLua, `{"value":7}`)
+	// Field 2 used to request failure for a missing document. It is reserved now,
+	// and old clients or queued messages must receive the single create-or-merge
+	// behavior.
+	operation.GetMerge().ProtoReflect().SetUnknown([]byte{0x10, 0x01})
+	response, err := server.Write(t.Context(), foldingRequest(operation))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := response.GetResults()[0]; result.GetStatus() != sink.WriteStatus_WRITE_STATUS_APPLIED {
+		t.Fatalf("legacy merge result = %v", result)
+	}
+	if got := foldingValue(t, backend, "legacy"); got != 7 {
+		t.Fatalf("legacy merge value = %d, want 7", got)
+	}
 }
 
 func foldingValue(t testing.TB, backend storage.Storage, key string) int {
@@ -184,7 +204,7 @@ func TestMergeFoldingPreservesOrderAndSharesCommitRevision(t *testing.T) {
     end`
 	var operations []*sink.WriteOperation
 	for _, digit := range []int{1, 2, 3} {
-		operation := foldingMerge("ordered", appendDigit, fmt.Sprintf(`{"value":%d}`, digit), sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+		operation := foldingMerge("ordered", appendDigit, fmt.Sprintf(`{"value":%d}`, digit))
 		operations = append(operations, operation)
 	}
 	response, err := server.Write(t.Context(), foldingRequest(operations...))
@@ -214,12 +234,12 @@ func TestWriteFoldingPreservesPutBetweenMerges(t *testing.T) {
 	backend := memory.New()
 	observed := &countingStorage{backend: backend}
 	server := newTestServer(t, observed, nil)
-	first := foldingMerge("counter", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
-	second := foldingMerge("counter", incrementLua, `{"value":2}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
+	first := foldingMerge("counter", incrementLua, `{"value":1}`)
+	second := foldingMerge("counter", incrementLua, `{"value":2}`)
 	put := putWriteOperation("counter", "unused")
 	put.GetPut().Document.Payload = []byte(`{"value":20}`)
-	third := foldingMerge("counter", incrementLua, `{"value":3}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
-	fourth := foldingMerge("counter", incrementLua, `{"value":4}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
+	third := foldingMerge("counter", incrementLua, `{"value":3}`)
+	fourth := foldingMerge("counter", incrementLua, `{"value":4}`)
 	response, err := server.Write(t.Context(), foldingRequest(first, second, put, third, fourth))
 	if err != nil {
 		t.Fatal(err)
@@ -240,28 +260,28 @@ func TestWriteFoldingPreservesPutBetweenMerges(t *testing.T) {
 	}
 }
 
-func TestMergeFoldingRetainsIndividualLuaAndMissingFailures(t *testing.T) {
+func TestMergeFoldingCreatesMissingRecordAndRetainsLuaFailures(t *testing.T) {
 	backend := memory.New()
 	observed := &countingStorage{backend: backend}
 	server := newTestServer(t, observed, nil)
-	missing := foldingMerge("counter", incrementLua, `{"value":100}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
-	create := foldingMerge("counter", incrementLua, `{"value":2}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
-	bad := foldingMerge("counter", `return function(current) current.value=999; error("rejected") end`, `{}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
-	last := foldingMerge("counter", incrementLua, `{"value":4}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
-	response, err := server.Write(t.Context(), foldingRequest(missing, create, bad, last))
+	first := foldingMerge("counter", incrementLua, `{"value":100}`)
+	second := foldingMerge("counter", incrementLua, `{"value":2}`)
+	bad := foldingMerge("counter", `return function(current) current.value=999; error("rejected") end`, `{}`)
+	last := foldingMerge("counter", incrementLua, `{"value":4}`)
+	response, err := server.Write(t.Context(), foldingRequest(first, second, bad, last))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []sink.WriteStatus{sink.WriteStatus_WRITE_STATUS_FAILED, sink.WriteStatus_WRITE_STATUS_APPLIED, sink.WriteStatus_WRITE_STATUS_FAILED, sink.WriteStatus_WRITE_STATUS_APPLIED}
+	want := []sink.WriteStatus{sink.WriteStatus_WRITE_STATUS_APPLIED, sink.WriteStatus_WRITE_STATUS_APPLIED, sink.WriteStatus_WRITE_STATUS_FAILED, sink.WriteStatus_WRITE_STATUS_APPLIED}
 	for index, result := range response.Results {
 		if result.Status != want[index] {
 			t.Fatalf("result %d = %v", index, result)
 		}
 	}
-	if response.Results[0].GetFailure().GetCode() != sink.FailureCode_FAILURE_CODE_NOT_FOUND || response.Results[2].GetFailure().GetCode() != sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT {
+	if response.Results[2].GetFailure().GetCode() != sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT {
 		t.Fatalf("individual failures = %v", response.Results)
 	}
-	if observed.writeCalls.Load() != 1 || foldingValue(t, backend, "counter") != 6 {
+	if observed.writeCalls.Load() != 1 || foldingValue(t, backend, "counter") != 106 {
 		t.Fatal("failed Lua changed the working document or split the commit")
 	}
 }
@@ -303,12 +323,12 @@ func TestMergeFoldingRecomputesWholeChainAfterConflict(t *testing.T) {
 	backend := memory.New()
 	observed := &foldingFaultStorage{Storage: backend, backend: backend, fault: "conflict"}
 	server := newTestServer(t, observed, nil)
-	first := foldingMerge("counter", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+	first := foldingMerge("counter", incrementLua, `{"value":1}`)
 	conditional := foldingMerge("counter", `return function(current)
         if current.value < 10 then error("base too small") end
         current.value = current.value + 10
         return current
-    end`, `{}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
+    end`, `{}`)
 	response, err := server.Write(t.Context(), foldingRequest(first, conditional))
 	if err != nil {
 		t.Fatal(err)
@@ -332,9 +352,9 @@ func TestMergeFoldingDoesNotAcknowledgeOrReplayFailedCommit(t *testing.T) {
 			backend := memory.New()
 			observed := &foldingFaultStorage{Storage: backend, backend: backend, fault: fault}
 			server := newTestServer(t, observed, nil)
-			first := foldingMerge("counter", incrementLua, `{"value":2}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
-			bad := foldingMerge("counter", `return function() error("dependent failure") end`, `{}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
-			last := foldingMerge("counter", incrementLua, `{"value":3}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
+			first := foldingMerge("counter", incrementLua, `{"value":2}`)
+			bad := foldingMerge("counter", `return function() error("dependent failure") end`, `{}`)
+			last := foldingMerge("counter", incrementLua, `{"value":3}`)
 			response, err := server.Write(t.Context(), foldingRequest(first, bad, last))
 			if fault == "reject" {
 				if err != nil {
@@ -370,7 +390,7 @@ func TestMergeFoldingConcurrentServersDoNotLoseUpdates(t *testing.T) {
 		wg.Go(func() {
 			var operations []*sink.WriteOperation
 			for range perRequest {
-				operation := foldingMerge("counter", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+				operation := foldingMerge("counter", incrementLua, `{"value":1}`)
 				operations = append(operations, operation)
 			}
 			response, err := server.Write(t.Context(), foldingRequest(operations...))
@@ -438,7 +458,7 @@ func TestMergeFoldingWaitsForVisibilityWhileOneCallerCancels(t *testing.T) {
 		result chan error
 	}{{ctx: cancelledCtx, result: callerResults}, {ctx: ctx, result: liveResults}} {
 		go func() {
-			operation := foldingMerge("counter", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+			operation := foldingMerge("counter", incrementLua, `{"value":1}`)
 			response, err := server.Write(caller.ctx, foldingRequest(operation))
 			if err == nil && response.Results[0].Status != sink.WriteStatus_WRITE_STATUS_APPLIED {
 				err = fmt.Errorf("unexpected write result: %v", response)

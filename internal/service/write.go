@@ -30,12 +30,11 @@ type parsedPut struct {
 }
 
 type parsedMerge struct {
-	observation         *writeObservation
-	incoming            storage.Document
-	merger              merge.Merger
-	program             merge.Program
-	missingDocumentMode sink.MissingDocumentMode
-	observedAt          time.Time
+	observation *writeObservation
+	incoming    storage.Document
+	merger      merge.Merger
+	program     merge.Program
+	observedAt  time.Time
 }
 
 // A group contains the ordered writes for one complete record address.
@@ -69,7 +68,7 @@ func (s *Server) parseWrite(index int, operation *sink.WriteOperation, programs 
 	parsed.index = index
 	parsed.address = address
 	parsed.original = operation
-	parsed.identity = identityOf(address)
+	parsed.identity = s.identityOf(address)
 
 	switch action := operation.GetAction().(type) {
 	case *sink.WriteOperation_Put:
@@ -127,11 +126,6 @@ func (s *Server) parseMerge(operation *sink.MergeOperation, programs luaPrograms
 	if program == nil {
 		return parsed, errors.New("lua merge program is required")
 	}
-	if operation.GetMissingDocumentMode() != sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL &&
-		operation.GetMissingDocumentMode() != sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE {
-		return parsed, errors.New("merge operation has an invalid missing document mode")
-	}
-
 	mergeProgram, err := resolveLuaProgram(program, programs)
 	if err != nil {
 		return parsed, err
@@ -143,7 +137,6 @@ func (s *Server) parseMerge(operation *sink.MergeOperation, programs luaPrograms
 	parsed.incoming = incoming
 	parsed.merger = merger
 	parsed.program = mergeProgram
-	parsed.missingDocumentMode = operation.GetMissingDocumentMode()
 	parsed.observedAt = time.Now().UTC()
 	return parsed, nil
 }
@@ -564,11 +557,6 @@ func (s *Server) prepareMergeOperation(
 			condition.Revision = stored.Revision
 		}
 	case storage.ReadStatusNotFound:
-		if operation.merge.missingDocumentMode == sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL {
-			notFoundErr := errors.New("record does not exist")
-			setWriteFailure(result, sink.FailureCode_FAILURE_CODE_NOT_FOUND, notFoundErr, false)
-			return candidate, false
-		}
 		condition.Kind = storage.PreconditionRecordNotExists
 	case storage.ReadStatusFailed:
 		code, retryable := storageFailureDetails(stored.Err)

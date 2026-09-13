@@ -47,3 +47,7 @@ fi
 
 SINK_MONGODB_TEST_URI="mongodb://127.0.0.1:${published_port}/?directConnection=true" \
 	go test -tags=integration ./internal/storage/mongodb -count="${test_count}" -timeout=3m
+
+SINK_MONGODB_TEST_URI="mongodb://127.0.0.1:${published_port}/?directConnection=true" \
+	go test -race -tags=integration ./internal/service \
+	-run '^TestSynchronousStorageStreamsLargeRecords$/^mongodb$' -count="${test_count}" -timeout=3m -v

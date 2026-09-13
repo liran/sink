@@ -62,7 +62,7 @@ func (s *Store) prepareWrite(index int, operation storage.WriteOperation) (write
 	}
 	work := writeWork{
 		resultIndex:  index,
-		routingKey:   operation.Address.RoutingKey(),
+		routingKey:   s.IdentityKey(operation.Address),
 		document:     document,
 		source:       bytes.Clone(operation.Document.Payload),
 		precondition: operation.Precondition,

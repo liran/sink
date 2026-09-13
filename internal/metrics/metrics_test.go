@@ -94,9 +94,21 @@ func TestMetricsExposeBuildRequestAndOperationResults(t *testing.T) {
 	observed.ObserveMergeFold(1)
 	observed.ObserveMergeFold(16)
 	observed.ObserveMergeFold(4)
+	observed.AdjustAdmissionPool("execution", 1, 100)
+	observed.AdjustAdmissionPool("publish", 1, 20)
+	observed.AdjustAdmissionPool("publish", -1, -20)
+	observed.ObserveAdmissionPoolRejected("execution", "fairness")
+	observed.ObserveAdmissionPoolRejected("publish", "bytes")
 
 	body := scrape(t, observed)
 	wanted := []string{
+		`sink_in_flight_requests 1`,
+		`sink_in_flight_bytes 100`,
+		`sink_admission_rejected_total 2`,
+		`sink_admission_pool_requests{pool="execution"} 1`,
+		`sink_admission_pool_bytes{pool="publish"} 0`,
+		`sink_admission_pool_rejected_total{pool="execution",reason="fairness"} 1`,
+		`sink_admission_pool_rejected_total{pool="publish",reason="bytes"} 1`,
 		`sink_build_info{version="test-version"} 1`,
 		`sink_grpc_server_requests_total{code="OK",method="Read"} 1`,
 		`sink_grpc_server_operation_results_total{method="Read",status="found"} 1`,
