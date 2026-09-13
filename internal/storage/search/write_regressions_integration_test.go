@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -212,6 +213,50 @@ func TestSearchAppliedCallsPassAnEarlierBatchWaitingForRefresh(t *testing.T) {
 			}
 		case <-ctx.Done():
 			t.Fatal("visible request did not finish after refresh")
+		}
+	}
+}
+
+func TestSearchReplaceLargeOldDocumentsUsesMetadataOnly(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	old := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(`{"text":"` + strings.Repeat("x", 4096) + `"}`)}
+	first := storage.WriteOperation{Address: fixture.address("replace-large-a"), Document: old}
+	second := storage.WriteOperation{Address: fixture.address("replace-large-b"), Document: old}
+	seed := storage.WriteRequest{Operations: []storage.WriteOperation{first, second}}
+	response, err := fixture.store.Write(t.Context(), seed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range response.Results {
+		if result.Status != storage.WriteStatusApplied {
+			t.Fatal(result)
+		}
+	}
+	opts := search.Options{Driver: fixture.driver, Store: "primary", Endpoints: []string{fixture.endpoint}, MaxResponseSize: 2048}
+	limited, err := search.New(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := storage.Document{Encoding: storage.DocumentEncodingJSON, Payload: []byte(`{"text":"replaced"}`)}
+	first.Document, second.Document = document, document
+	first.Precondition.Kind = storage.PreconditionRecordExists
+	second.Precondition.Kind = storage.PreconditionRecordExists
+	replace := storage.WriteRequest{Operations: []storage.WriteOperation{first, second}, WaitUntilVisible: true}
+	response, err = limited.Write(t.Context(), replace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, result := range response.Results {
+		if result.Status != storage.WriteStatusApplied {
+			t.Fatal(result)
+		}
+	}
+	for _, address := range []storage.Address{first.Address, second.Address} {
+		op := storage.ReadOperation{Address: address}
+		req := storage.ReadRequest{Operations: []storage.ReadOperation{op}}
+		read, err := fixture.store.Read(t.Context(), req)
+		if err != nil || string(read.Results[0].Document.Payload) != string(document.Payload) {
+			t.Fatalf("replace did not persist: %v %v", read, err)
 		}
 	}
 }

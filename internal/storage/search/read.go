@@ -17,8 +17,9 @@ type readWork struct {
 }
 
 type multiGetDocumentReference struct {
-	Index string `json:"_index"`
-	ID    string `json:"_id"`
+	Index  string `json:"_index"`
+	ID     string `json:"_id"`
+	Source *bool  `json:"_source,omitempty"`
 }
 
 type multiGetRequest struct {
@@ -62,7 +63,7 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 	for len(pending) > 0 {
 		batch := pending[len(pending)-1]
 		pending = pending[:len(pending)-1]
-		documents, err := s.multiGet(ctx, batch)
+		documents, err := s.multiGet(ctx, batch, true)
 		if errors.Is(err, errResponseTooLarge) && len(batch) > 1 && ctx.Err() == nil {
 			middle := len(batch) / 2
 			pending = append(pending, batch[middle:], batch[:middle])
@@ -95,10 +96,13 @@ func (s *Store) Read(ctx context.Context, req storage.ReadRequest) (storage.Read
 	return response, nil
 }
 
-func (s *Store) multiGet(ctx context.Context, works []readWork) ([]multiGetDocument, error) {
+func (s *Store) multiGet(ctx context.Context, works []readWork, source bool) ([]multiGetDocument, error) {
 	references := make([]multiGetDocumentReference, 0, len(works))
 	for _, work := range works {
 		reference := multiGetDocumentReference{Index: work.document.index, ID: work.document.id}
+		if !source {
+			reference.Source = &source
+		}
 		references = append(references, reference)
 	}
 	requestBody := multiGetRequest{Documents: references}

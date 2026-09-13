@@ -125,7 +125,6 @@ func (s *Store) writeWaveAttempt(
 ) []writeWork {
 	eligible := make([]bool, len(wave))
 	existsWorks := make([]readWork, 0)
-	existsIndexes := make([]int, 0)
 	for index, work := range wave {
 		switch work.precondition.Kind {
 		case storage.PreconditionRevisionAbsent:
@@ -133,24 +132,13 @@ func (s *Store) writeWaveAttempt(
 		case storage.PreconditionRecordExists:
 			read := readWork{resultIndex: index, document: work.document}
 			existsWorks = append(existsWorks, read)
-			existsIndexes = append(existsIndexes, index)
 		default:
 			eligible[index] = true
 		}
 	}
 	if len(existsWorks) > 0 {
-		documents, err := s.multiGet(ctx, existsWorks)
-		if err != nil {
-			for _, waveIndex := range existsIndexes {
-				setWriteError(&results[wave[waveIndex].resultIndex], err)
-			}
-		} else {
-			for resultIndex, document := range documents {
-				waveIndex := existsIndexes[resultIndex]
-				work := &wave[waveIndex]
-				s.prepareExistingWrite(work, document, &results[work.resultIndex], &eligible[waveIndex])
-			}
-		}
+		check := existingWriteCheck{wave: wave, results: results, eligible: eligible}
+		s.checkExistingWrites(ctx, existsWorks, check)
 	}
 
 	ready := make([]writeWork, 0, len(wave))
@@ -188,6 +176,33 @@ func (s *Store) writeWaveAttempt(
 		applyWriteItem(&results[work.resultIndex], item)
 	}
 	return pending
+}
+
+type existingWriteCheck struct {
+	wave     []writeWork
+	results  []storage.WriteResult
+	eligible []bool
+}
+
+func (s *Store) checkExistingWrites(ctx context.Context, works []readWork, check existingWriteCheck) {
+	// Replace needs only existence and revision. Even metadata can exceed the
+	// response cap for many long IDs, so split this read before any bulk write.
+	documents, err := s.multiGet(ctx, works, false)
+	if errors.Is(err, errResponseTooLarge) && len(works) > 1 && ctx.Err() == nil {
+		middle := len(works) / 2
+		s.checkExistingWrites(ctx, works[:middle], check)
+		s.checkExistingWrites(ctx, works[middle:], check)
+		return
+	}
+	for index, read := range works {
+		work := &check.wave[read.resultIndex]
+		result := &check.results[work.resultIndex]
+		if err != nil {
+			setWriteError(result, err)
+			continue
+		}
+		s.prepareExistingWrite(work, documents[index], result, &check.eligible[read.resultIndex])
+	}
 }
 
 func (s *Store) prepareExistingWrite(
