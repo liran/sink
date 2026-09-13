@@ -269,25 +269,21 @@ func newApplication(ctx context.Context, loaded config) (*application, error) {
 		return nil, err
 	}
 	if loaded.mode == modeServer || loaded.mode == modeAll {
-		var grpcService sink.SinkServer = sinkServer
-		if loaded.batchingEnabled {
-			batchingOptions := service.BatchingOptions{
-				StoreNames:          storeNames,
-				MaxWait:             loaded.batchingMaxWait,
-				MaxOperations:       loaded.batchingMaxOperations,
-				MaxBytes:            loaded.batchingMaxBytes,
-				MaxQueuedOperations: loaded.batchingMaxQueuedOps,
-				MaxQueuedBytes:      loaded.batchingMaxQueuedBytes,
-				Metrics:             observed,
-			}
-			app.batchingServer, err = service.NewBatchingServer(sinkServer, batchingOptions)
-			if err != nil {
-				app.close()
-				return nil, err
-			}
-			grpcService = app.batchingServer
+		batchingOptions := service.BatchingOptions{
+			StoreNames:          storeNames,
+			MaxWait:             loaded.batchingMaxWait,
+			MaxOperations:       loaded.batchingMaxOperations,
+			MaxBytes:            loaded.batchingMaxBytes,
+			MaxQueuedOperations: loaded.batchingMaxQueuedOps,
+			MaxQueuedBytes:      loaded.batchingMaxQueuedBytes,
+			Metrics:             observed,
 		}
-		if err := app.configureGRPC(grpcService, observed); err != nil {
+		app.batchingServer, err = service.NewBatchingServer(sinkServer, batchingOptions)
+		if err != nil {
+			app.close()
+			return nil, err
+		}
+		if err := app.configureGRPC(app.batchingServer, observed); err != nil {
 			app.close()
 			return nil, err
 		}

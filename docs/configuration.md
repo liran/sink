@@ -85,7 +85,6 @@ service:
   max_operations: 1000
   max_merge_attempts: 3
   batching:
-    enabled: true
     max_wait_milliseconds: 2
     max_operations: 1000
     max_bytes: 16777216
@@ -151,12 +150,16 @@ can address the same document under different dataset names when ordering matter
 ## Synchronous request batching
 
 In `server` and `all` modes, Sink coalesces concurrent one-operation RPCs into
-bounded, process-local batches for each configured store by default. When
-batching is enabled, every single-store `Read` uses this path. `Write` and
+bounded, process-local batches for each configured store. This batching layer
+is always active; every single-store `Read` uses this path. `Write` and
 `Delete` use it for `WAIT_UNTIL_APPLIED` and `WAIT_UNTIL_VISIBLE`;
 `RETURN_AFTER_ACCEPTED` bypasses it because Kafka already batches asynchronous
 mutations. Read, write, and delete have independent queues within each store.
 A slow batch therefore does not block another method or another store.
+
+`service.batching` configures batch and queue limits; batching cannot be disabled.
+Remove the former `service.batching.enabled` field from existing configurations.
+The strict configuration parser rejects it as an unknown field for either value.
 
 The first queued request starts `service.batching.max_wait_milliseconds`.
 Collection stops when that timer expires or adding another request would cross
@@ -417,7 +420,6 @@ use the lowercase spelling shown below. Storage names are also case-sensitive.
 | `storages[].search.api_key` | string | No | empty | Any API key accepted by the search service | API key used instead of basic authentication. |
 | `service.max_operations` | positive integer | No | `1000` | Integer greater than `0` | Maximum operation count accepted in one Read, Write, or Delete batch request. |
 | `service.max_merge_attempts` | positive integer | No | `3` | Integer greater than `0` | Maximum revision-conflict attempts for Merge and folded conditional Put chains. |
-| `service.batching.enabled` | boolean | No | `true` | `true`, `false` | Enables process-local batching for reads and synchronous mutations in `server` and `all` modes. |
 | `service.batching.max_wait_milliseconds` | positive integer | No | `2` | Integer greater than `0` | Maximum collection delay measured from the first request in a batch. |
 | `service.batching.max_operations` | positive integer | No | `service.max_operations` | Integer from `1` through `service.max_operations` | Operation target for one automatically formed batch. |
 | `service.batching.max_bytes` | positive integer | No | `16777216` | Integer greater than `0` | Encoded-byte target for one automatically formed batch; one larger valid RPC still runs alone. |

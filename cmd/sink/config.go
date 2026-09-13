@@ -49,7 +49,6 @@ type config struct {
 	storages               []backendConfig
 	maxOperations          int
 	maxMergeAttempts       int
-	batchingEnabled        bool
 	batchingMaxWait        time.Duration
 	batchingMaxOperations  int
 	batchingMaxBytes       int
@@ -163,12 +162,11 @@ type serviceConfigFile struct {
 }
 
 type batchingConfigFile struct {
-	Enabled             *bool `yaml:"enabled"`
-	MaxWaitMilliseconds *int  `yaml:"max_wait_milliseconds"`
-	MaxOperations       *int  `yaml:"max_operations"`
-	MaxBytes            *int  `yaml:"max_bytes"`
-	MaxQueuedOperations *int  `yaml:"max_queued_operations"`
-	MaxQueuedBytes      *int  `yaml:"max_queued_bytes"`
+	MaxWaitMilliseconds *int `yaml:"max_wait_milliseconds"`
+	MaxOperations       *int `yaml:"max_operations"`
+	MaxBytes            *int `yaml:"max_bytes"`
+	MaxQueuedOperations *int `yaml:"max_queued_operations"`
+	MaxQueuedBytes      *int `yaml:"max_queued_bytes"`
 }
 
 type luaConfigFile struct {
@@ -250,7 +248,6 @@ func loadConfig(path string) (config, error) {
 	if err := loaded.loadReliabilityConfig(file.Service); err != nil {
 		return loaded, err
 	}
-	loaded.batchingEnabled = boolOrDefault(file.Service.Batching.Enabled, true)
 	batchWaitMilliseconds, err := positiveIntOrDefault("service.batching.max_wait_milliseconds", file.Service.Batching.MaxWaitMilliseconds, 2)
 	if err != nil {
 		return loaded, err
