@@ -241,7 +241,7 @@ def deploy_server(opts):
               "service": {"request_timeout_seconds": 10, "max_in_flight_requests": 128, "max_store_requests": 32,
                           "max_in_flight_bytes": opts.execution_mib << 20, "max_read_bytes": opts.read_mib << 20,
                           "max_operations": 1000, "max_merge_attempts": 3,
-                          "batching": {"enabled": opts.batching == "true", "max_wait_milliseconds": opts.wait_ms,
+                          "batching": {"max_wait_milliseconds": opts.wait_ms,
                                        "max_operations": opts.batch_operations, "max_bytes": opts.batch_mib << 20, "max_queued_bytes": 64 << 20},
                           "lua": {"timeout_milliseconds": 100, "max_result_bytes": 16 << 20}}, "shutdown_timeout_seconds": 30}
     config_text = json.dumps(config)
@@ -455,7 +455,6 @@ def main():
     server.add_argument("--execution-mib", type=int, default=512)
     server.add_argument("--read-mib", type=int, default=32)
     server.add_argument("--wait-ms", type=int, default=2)
-    server.add_argument("--batching", choices=["true", "false"], default="true")
     server.add_argument("--batch-operations", type=int, default=1000)
     server.add_argument("--batch-mib", type=int, default=16)
     server.add_argument("--mongo-concurrency", type=int, default=64)

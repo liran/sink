@@ -17,6 +17,8 @@ def row_for(result):
     variables = environments[0]["variables"] if environments else {}
     service = result.get("server_service_config") or {}
     batching = service.get("batching") or {}
+    # Historical measurements retain their switch value; current servers always batch.
+    batching_enabled = batching.get("enabled", True)
     errors = result.get("errors") or {}
     fault = result.get("fault") or {}
     timeline = result.get("timeline", [])
@@ -39,7 +41,7 @@ def row_for(result):
            "execution_mib": service.get("max_in_flight_bytes", 0) // (1 << 20), "read_mib": service.get("max_read_bytes", 0) // (1 << 20),
            "batch_wait_ms": batching.get("max_wait_milliseconds"), "batch_operations": batching.get("max_operations", 1000),
            "batch_mib": batching.get("max_bytes", 16 << 20) / (1 << 20),
-           "batching_enabled": batching.get("enabled", True), "concurrency": settings["concurrency"],
+           "batching_enabled": batching_enabled, "concurrency": settings["concurrency"],
            "keys": settings["keys"], "hot_keys": settings["hot_keys"], "padding_bytes": settings["padding_bytes"],
            "random_padding": settings.get("random_padding", False),
            "full_incoming_document": settings.get("full_incoming_document", False),

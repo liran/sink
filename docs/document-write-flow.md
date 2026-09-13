@@ -16,7 +16,7 @@ is an execution optimization along the way.
 flowchart TD
     A[Application: address, document, write action, completion mode] --> B[sink-go encodes and sends a Write RPC]
     B --> C{Requested completion_mode}
-    C -->|WAIT_UNTIL_APPLIED / WAIT_UNTIL_VISIBLE| D[Optional: server in-memory batching]
+    C -->|WAIT_UNTIL_APPLIED / WAIT_UNTIL_VISIBLE| D[Server in-memory batching for single-store RPCs]
     D --> E[Write core: validation, admission control, execution]
     E --> F[Route by store to the storage adapter]
     F --> G[MongoDB or Elasticsearch / OpenSearch]
@@ -77,17 +77,15 @@ back to the original input order.
 **Step 2: The request reaches the Sink server.**
 
 The service checks that the request is nonempty and that its operation count
-and completion mode are valid. If `service.batching.enabled` is enabled
-(the default) and the request targets one configured store, this synchronous
-request enters that store's in-memory Write queue. It may execute together
-with other RPCs sharing namespace, dataset, and completion mode. Explicit
-multi-dataset RPCs execute alone. The default collection window is 2 ms; operation-count and
-byte limits can trigger earlier dispatch. **The 2 ms window is a collection
+and completion mode are valid. When the request targets one configured store,
+this synchronous request always enters that store's in-memory Write queue. It
+may execute together with other RPCs sharing namespace, dataset, and completion
+mode. Explicit multi-dataset RPCs execute alone. The default collection window
+is 2 ms; operation-count and byte limits can trigger earlier dispatch. **The 2 ms window is a collection
 window, not an end-to-end latency limit.** Queueing and backend execution
 also take time.
 
-With batching disabled, the request enters the write core directly. RPCs
-that span multiple stores also enter the core directly, where the storage
+RPCs that span multiple stores enter the core directly, where the storage
 router dispatches their operations to the appropriate backends.
 
 **Step 3: The write core parses operations and checks execution capacity.**
@@ -342,10 +340,9 @@ execution still contains other unfinished documents. Conditional/Lua failures
 from speculative state are not final until the chain commits or definitively
 fails. A shared backend bulk still has to return before its results are known.
 
-Disabling `service.batching.enabled` only disables the server's automatic
-batching across RPCs. Explicit batches, operation folding in the core, adapter
-bulk operations, Kafka consumption batches, core admission checks, and
-backend concurrency limits still apply.
+The server's automatic batching across RPCs is always active. Explicit batches,
+operation folding in the core, adapter bulk operations, Kafka consumption
+batches, core admission checks, and backend concurrency limits also apply.
 
 Ordering guarantees have a scope. Within one request, operations for the
 same full address follow input order. With stable partition routing, Kafka

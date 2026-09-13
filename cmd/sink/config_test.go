@@ -33,7 +33,7 @@ storages:
 	if loaded.maxOperations != 1000 || loaded.maxMergeAttempts != 3 || loaded.shutdownTimeout != 15*time.Second {
 		t.Fatalf("loadConfig() service defaults = %#v", loaded)
 	}
-	if !loaded.batchingEnabled || loaded.batchingMaxWait != 2*time.Millisecond ||
+	if loaded.batchingMaxWait != 2*time.Millisecond ||
 		loaded.batchingMaxOperations != 1000 || loaded.batchingMaxBytes != 16<<20 ||
 		loaded.batchingMaxQueuedOps != 10_000 || loaded.batchingMaxQueuedBytes != 128<<20 {
 		t.Fatalf("loadConfig() batching defaults = %#v", loaded)
@@ -84,7 +84,6 @@ storages:
 service:
   max_operations: 2000
   batching:
-    enabled: false
     max_wait_milliseconds: 5
     max_operations: 500
     max_bytes: 524288
@@ -95,10 +94,31 @@ service:
 	if err != nil {
 		t.Fatalf("loadConfig() error = %v", err)
 	}
-	if loaded.batchingEnabled || loaded.batchingMaxWait != 5*time.Millisecond ||
+	if loaded.batchingMaxWait != 5*time.Millisecond ||
 		loaded.batchingMaxOperations != 500 || loaded.batchingMaxBytes != 524288 ||
 		loaded.batchingMaxQueuedOps != 2500 || loaded.batchingMaxQueuedBytes != 2097152 {
 		t.Fatalf("loadConfig() batching settings = %#v", loaded)
+	}
+}
+
+func TestLoadConfigRejectsBatchingSwitch(t *testing.T) {
+	for _, enabled := range []string{"true", "false"} {
+		t.Run(enabled, func(t *testing.T) {
+			contents := `
+storages:
+  - name: primary
+    driver: mongodb
+    mongodb:
+      uri: mongodb://mongodb:27017
+service:
+  batching:
+    enabled: ` + enabled + "\n"
+			path := writeConfig(t, contents)
+			_, err := loadConfig(path)
+			if err == nil || !strings.Contains(err.Error(), "field enabled not found in type main.batchingConfigFile") {
+				t.Fatalf("loadConfig() accepted removed batching switch: %v", err)
+			}
+		})
 	}
 }
 
