@@ -200,8 +200,6 @@ func (m *luaMerger) Merge(ctx context.Context, req Request) (Result, error) {
 	defer cancel()
 	luaVM, bridge := m.engine.newVM(executionContext, req.ObservedAt)
 	defer luaVM.Close(context.Background())
-	bridge.addDateTimeDocument(incoming)
-	bridge.addDateTimeDocument(current)
 
 	results, err := luaVM.Run(m.program)
 	if err != nil {

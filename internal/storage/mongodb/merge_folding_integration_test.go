@@ -74,3 +74,50 @@ func TestMongoDBFoldedMergesPreserveBSONAndFinalRevision(t *testing.T) {
 		t.Fatalf("folded BSON document = %+v", stored)
 	}
 }
+
+func TestMongoDBMergePreservesNumericTypesAndReplacesDateWithString(t *testing.T) {
+	fixture := newIntegrationFixture(t)
+	luaOptions := merge.LuaOptions{}
+	engine, err := merge.NewLuaEngine(luaOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := service.Options{Storage: fixture.store, Lua: engine}
+	server, err := service.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := fixture.address("typed-merge")
+	keyValue := &sink.RecordKey_StringValue{StringValue: "typed-merge"}
+	key := &sink.RecordKey{Kind: keyValue}
+	address := &sink.RecordAddress{Store: base.Store, Namespace: base.Namespace, Dataset: base.Dataset, Key: key}
+	timestamp := time.Date(2026, time.September, 13, 1, 2, 3, 0, time.UTC)
+	filter := bson.D{{Key: "_id", Value: "typed-merge"}}
+	for _, dateValue := range []any{timestamp, timestamp.Format(time.RFC3339Nano)} {
+		fields := bson.D{{Key: "small", Value: int32(1)}, {Key: "long", Value: int64(1)}, {Key: "double", Value: float64(1)}, {Key: "date", Value: dateValue}}
+		payload, err := bson.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		document := &sink.Document{Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_BSON, Payload: payload}
+		program := &sink.LuaProgram{Source: []byte(`return function(current, incoming) return incoming end`)}
+		mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program}
+		action := &sink.WriteOperation_Merge{Merge: mutation}
+		operation := &sink.WriteOperation{Address: address, Action: action}
+		req := &sink.WriteRequest{CompletionMode: sink.CompletionMode_COMPLETION_MODE_WAIT_UNTIL_APPLIED, Operations: []*sink.WriteOperation{operation}}
+		response, err := server.Write(t.Context(), req)
+		if err != nil || response.Results[0].Status != sink.WriteStatus_WRITE_STATUS_APPLIED {
+			t.Fatalf("merge: %v %v", response, err)
+		}
+		var stored bson.Raw
+		if err := fixture.collection.FindOne(t.Context(), filter).Decode(&stored); err != nil {
+			t.Fatal(err)
+		}
+		expected := bson.Raw(payload)
+		for _, field := range fields {
+			if !stored.Lookup(field.Key).Equal(expected.Lookup(field.Key)) {
+				t.Errorf("stored %s changed: %v -> %v", field.Key, expected.Lookup(field.Key), stored.Lookup(field.Key))
+			}
+		}
+	}
+}

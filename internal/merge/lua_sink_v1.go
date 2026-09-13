@@ -59,7 +59,7 @@ func (l sinkV1Library) timeNow(state *vm.VM) int {
 		panic(fmt.Sprintf("%s is unavailable because the merge observation time is missing", sinkV1TimeNow))
 	}
 	generated := strings.Clone(l.observedAt)
-	l.bridge.generatedDateTimes[identityOfLuaString(generated)] = struct{}{}
+	l.bridge.dateTimes[identityOfLuaString(generated)] = struct{}{}
 	state.Set(0, vm.NewString(generated))
 	return 1
 }

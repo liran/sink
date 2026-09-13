@@ -3,13 +3,13 @@ package merge
 import (
 	"bytes"
 	"encoding/json"
-	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -19,49 +19,49 @@ import (
 )
 
 type luaJSONBridge struct {
-	objectMeta         *vm.Table
-	arrayMeta          *vm.Table
-	nullMeta           *vm.Table
-	nullTable          *vm.Table
-	dateTimeValues     map[string]struct{}
-	generatedDateTimes map[luaStringIdentity]struct{}
-	typedPathValues    map[string]map[string]struct{}
-	untypedValues      map[string]struct{}
+	objectMeta    *vm.Table
+	arrayMeta     *vm.Table
+	nullMeta      *vm.Table
+	nullTable     *vm.Table
+	dateTimes     map[luaStringIdentity]struct{}
+	integerKinds  map[int64]uint8
+	integerFields map[*vm.Table]map[vm.Value]bsonInteger
+	outputBSON    bool
 }
 
-type generatedDateTime string
+type bsonInteger struct {
+	value int64
+	wide  bool
+}
 
-// Lua strings are values, so content alone cannot retain the origin of a
-// sink.v1.time.now() result. The backing pointer distinguishes a directly
-// propagated generated value from an equal user string without changing Lua's
-// observable string behavior.
+type bsonDateTime string
+
+// The string backing pointer preserves a directly propagated datetime's origin
+// without confusing it with an equal ordinary string from another field.
 type luaStringIdentity struct {
 	value string
 	data  *byte
 }
 
 func identityOfLuaString(value string) luaStringIdentity {
-	return luaStringIdentity{value: value, data: unsafe.StringData(value)}
+	identity := luaStringIdentity{value: value, data: unsafe.StringData(value)}
+	return identity
 }
 
 type decodedJSONObject struct {
-	encoding        storage.DocumentEncoding
-	value           map[string]any
-	dateTimeValues  map[string]struct{}
-	typedPathValues map[string]map[string]struct{}
-	untypedValues   map[string]struct{}
+	encoding storage.DocumentEncoding
+	value    map[string]any
 }
 
 func newLuaJSONBridge(luaVM *vm.VM) *luaJSONBridge {
 	bridge := &luaJSONBridge{
-		objectMeta:         protectedMetatable("JSON object"),
-		arrayMeta:          protectedMetatable("JSON array"),
-		nullMeta:           protectedMetatable("JSON null"),
-		nullTable:          vm.NewEmptyTable(),
-		dateTimeValues:     make(map[string]struct{}),
-		generatedDateTimes: make(map[luaStringIdentity]struct{}),
-		typedPathValues:    make(map[string]map[string]struct{}),
-		untypedValues:      make(map[string]struct{}),
+		objectMeta:    protectedMetatable("JSON object"),
+		arrayMeta:     protectedMetatable("JSON array"),
+		nullMeta:      protectedMetatable("JSON null"),
+		nullTable:     vm.NewEmptyTable(),
+		dateTimes:     make(map[luaStringIdentity]struct{}),
+		integerKinds:  make(map[int64]uint8),
+		integerFields: make(map[*vm.Table]map[vm.Value]bsonInteger),
 	}
 	bridge.nullTable.SetMetatable(bridge.nullMeta)
 
@@ -114,53 +114,30 @@ func decodeJSONObject(document storage.Document) (decodedJSONObject, error) {
 		return result, err
 	}
 	encoded := document.Payload
-	dateTimePaths := make([]string, 0)
 	if document.Encoding == storage.DocumentEncodingBSON {
-		extendedJSON, err := bson.MarshalExtJSON(bson.Raw(document.Payload), false, false)
+		// Canonical Extended JSON retains BSON numeric types before Lua conversion.
+		extended, err := bson.MarshalExtJSON(bson.Raw(document.Payload), true, false)
 		if err != nil {
 			return result, fmt.Errorf("encode BSON as Extended JSON: %w", err)
 		}
-		decoded, err := decodeJSONValue(extendedJSON)
-		if err != nil {
-			return result, err
-		}
-		normalized, err := normalizeExtendedJSON(decoded, "", &dateTimePaths)
-		if err != nil {
-			return result, err
-		}
-		encoded, err = json.Marshal(normalized)
-		if err != nil {
-			return result, fmt.Errorf("encode normalized BSON document: %w", err)
-		}
+		encoded = extended
 	}
 	decoded, err := decodeJSONValue(encoded)
 	if err != nil {
 		return result, err
 	}
+	if document.Encoding == storage.DocumentEncodingBSON {
+		decoded, err = normalizeExtendedJSON(decoded)
+		if err != nil {
+			return result, err
+		}
+	}
 	object, ok := decoded.(map[string]any)
 	if !ok {
 		return result, errors.New("document must be an object")
 	}
-	dateTimeValues := make(map[string]struct{}, len(dateTimePaths))
-	typedPaths := make(map[string]struct{}, len(dateTimePaths))
-	for _, path := range dateTimePaths {
-		typedPaths[path] = struct{}{}
-		value, valueErr := valueAtJSONPointer(decoded, jsontext.Pointer(path))
-		if valueErr != nil {
-			return result, fmt.Errorf("decode BSON date-time path %q: %w", path, valueErr)
-		}
-		text, textOK := value.(string)
-		if !textOK {
-			return result, fmt.Errorf("decode BSON date-time path %q: value has type %T", path, value)
-		}
-		dateTimeValues[text] = struct{}{}
-	}
 	result.encoding = document.Encoding
 	result.value = object
-	result.dateTimeValues = dateTimeValues
-	result.typedPathValues = make(map[string]map[string]struct{}, len(dateTimePaths))
-	result.untypedValues = make(map[string]struct{})
-	classifyDateTimeStrings(decoded, "", typedPaths, result.typedPathValues, result.untypedValues)
 	return result, nil
 }
 
@@ -178,41 +155,59 @@ func decodeJSONValue(encoded []byte) (any, error) {
 	return decoded, nil
 }
 
-func normalizeExtendedJSON(value any, pointer jsontext.Pointer, dateTimePaths *[]string) (any, error) {
+func normalizeExtendedJSON(value any) (any, error) {
 	switch typed := value.(type) {
 	case []any:
-		normalized := make([]any, len(typed))
 		for index, item := range typed {
-			child := pointer.AppendToken(strconv.Itoa(index))
-			converted, err := normalizeExtendedJSON(item, child, dateTimePaths)
+			converted, err := normalizeExtendedJSON(item)
 			if err != nil {
 				return nil, err
 			}
-			normalized[index] = converted
+			typed[index] = converted
 		}
-		return normalized, nil
 	case map[string]any:
 		dateTime, isDateTime, err := extendedJSONDateTime(typed)
 		if err != nil {
 			return nil, err
 		}
 		if isDateTime {
-			*dateTimePaths = append(*dateTimePaths, string(pointer))
-			return dateTime, nil
+			return bsonDateTime(dateTime), nil
 		}
-		normalized := make(map[string]any, len(typed))
+		if len(typed) == 1 {
+			for key, item := range typed {
+				text, ok := item.(string)
+				if !ok {
+					break
+				}
+				switch key {
+				case "$numberInt", "$numberLong":
+					integer, err := strconv.ParseInt(text, 10, 64)
+					if err != nil {
+						return nil, err
+					}
+					number := bsonInteger{value: integer, wide: key == "$numberLong"}
+					return number, nil
+				case "$numberDouble":
+					number, err := strconv.ParseFloat(text, 64)
+					if err != nil {
+						return nil, err
+					}
+					// Keep non-finite BSON doubles in their existing Extended JSON form.
+					if !math.IsNaN(number) && !math.IsInf(number, 0) {
+						return number, nil
+					}
+				}
+			}
+		}
 		for key, item := range typed {
-			child := pointer.AppendToken(key)
-			converted, err := normalizeExtendedJSON(item, child, dateTimePaths)
+			converted, err := normalizeExtendedJSON(item)
 			if err != nil {
 				return nil, err
 			}
-			normalized[key] = converted
+			typed[key] = converted
 		}
-		return normalized, nil
-	default:
-		return value, nil
 	}
+	return value, nil
 }
 
 func extendedJSONDateTime(value map[string]any) (string, bool, error) {
@@ -252,139 +247,6 @@ func extendedJSONDateTime(value map[string]any) (string, bool, error) {
 	return text, true, nil
 }
 
-func valueAtJSONPointer(value any, pointer jsontext.Pointer) (any, error) {
-	current := value
-	for token := range pointer.Tokens() {
-		switch typed := current.(type) {
-		case map[string]any:
-			next, exists := typed[token]
-			if !exists {
-				return nil, fmt.Errorf("object member %q does not exist", token)
-			}
-			current = next
-		case []any:
-			index, err := jsonArrayIndex(token, len(typed))
-			if err != nil {
-				return nil, err
-			}
-			current = typed[index]
-		default:
-			return nil, fmt.Errorf("cannot traverse %T with token %q", current, token)
-		}
-	}
-	return current, nil
-}
-
-func jsonArrayIndex(token string, length int) (int, error) {
-	if token == "" || (len(token) > 1 && token[0] == '0') {
-		return 0, fmt.Errorf("array index %q is invalid", token)
-	}
-	index, err := strconv.Atoi(token)
-	if err != nil || index < 0 {
-		return 0, fmt.Errorf("array index %q is invalid", token)
-	}
-	if index >= length {
-		return 0, fmt.Errorf("array index %d is out of bounds", index)
-	}
-	return index, nil
-}
-
-func cloneJSONValue(value any) any {
-	switch typed := value.(type) {
-	case []any:
-		cloned := make([]any, len(typed))
-		for index, item := range typed {
-			cloned[index] = cloneJSONValue(item)
-		}
-		return cloned
-	case map[string]any:
-		cloned := make(map[string]any, len(typed))
-		for key, item := range typed {
-			cloned[key] = cloneJSONValue(item)
-		}
-		return cloned
-	default:
-		return value
-	}
-}
-
-func setExtendedJSONDateTime(value any, pointer jsontext.Pointer) error {
-	tokens := make([]string, 0)
-	for token := range pointer.Tokens() {
-		tokens = append(tokens, token)
-	}
-	if len(tokens) == 0 {
-		return errors.New("BSON date-time cannot identify the document root")
-	}
-	return setExtendedJSONDateTimeAt(value, tokens)
-}
-
-func setExtendedJSONDateTimeAt(value any, tokens []string) error {
-	token := tokens[0]
-	switch typed := value.(type) {
-	case map[string]any:
-		current, exists := typed[token]
-		if !exists {
-			return fmt.Errorf("object member %q does not exist", token)
-		}
-		if len(tokens) > 1 {
-			return setExtendedJSONDateTimeAt(current, tokens[1:])
-		}
-		text, ok := dateTimeText(current)
-		if !ok {
-			return fmt.Errorf("BSON date-time value has type %T", current)
-		}
-		typed[token] = map[string]any{"$date": text}
-		return nil
-	case []any:
-		index, err := jsonArrayIndex(token, len(typed))
-		if err != nil {
-			return err
-		}
-		if len(tokens) > 1 {
-			return setExtendedJSONDateTimeAt(typed[index], tokens[1:])
-		}
-		text, ok := dateTimeText(typed[index])
-		if !ok {
-			return fmt.Errorf("BSON date-time value has type %T", typed[index])
-		}
-		typed[index] = map[string]any{"$date": text}
-		return nil
-	default:
-		return fmt.Errorf("cannot traverse %T with token %q", value, token)
-	}
-}
-
-func dateTimeText(value any) (string, bool) {
-	switch typed := value.(type) {
-	case string:
-		return typed, true
-	case generatedDateTime:
-		return string(typed), true
-	default:
-		return "", false
-	}
-}
-
-func (b *luaJSONBridge) addDateTimeDocument(document decodedJSONObject) {
-	for value := range document.dateTimeValues {
-		b.dateTimeValues[value] = struct{}{}
-	}
-	for value := range document.untypedValues {
-		b.untypedValues[value] = struct{}{}
-	}
-	for path, values := range document.typedPathValues {
-		known := b.typedPathValues[path]
-		if known == nil {
-			known = make(map[string]struct{}, len(values))
-			b.typedPathValues[path] = known
-		}
-		for value := range values {
-			known[value] = struct{}{}
-		}
-	}
-}
-
 func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
 	switch typed := value.(type) {
 	case nil:
@@ -393,16 +255,21 @@ func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
 		return vm.NewBool(typed), nil
 	case string:
 		return vm.NewString(typed), nil
+	case bsonDateTime:
+		text := strings.Clone(string(typed))
+		b.dateTimes[identityOfLuaString(text)] = struct{}{}
+		return vm.NewString(text), nil
+	case bsonInteger:
+		kind := uint8(1)
+		if typed.wide {
+			kind = 2
+		}
+		b.integerKinds[typed.value] |= kind
+		return vm.NewInt(typed.value), nil
+	case float64:
+		return vm.NewFloat(typed), nil
 	case json.Number:
-		integer, err := typed.Int64()
-		if err == nil {
-			return vm.NewInt(integer), nil
-		}
-		number, err := typed.Float64()
-		if err != nil || math.IsInf(number, 0) || math.IsNaN(number) {
-			return vm.Nil, fmt.Errorf("invalid JSON number %q", typed)
-		}
-		return vm.NewFloat(number), nil
+		return jsonNumberToLua(typed)
 	case []any:
 		table := vm.NewTableWithSize(len(typed), 0)
 		table.SetMetatable(b.arrayMeta)
@@ -412,6 +279,7 @@ func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
 				return vm.Nil, err
 			}
 			table.SetInt(index+1, converted)
+			b.rememberInteger(table, vm.NewInt(int64(index+1)), item)
 		}
 		return vm.NewTable(table), nil
 	case map[string]any:
@@ -429,6 +297,7 @@ func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
 				return vm.Nil, err
 			}
 			table.SetString(key, converted)
+			b.rememberInteger(table, vm.NewString(key), item)
 		}
 		return vm.NewTable(table), nil
 	default:
@@ -436,11 +305,89 @@ func (b *luaJSONBridge) goToLua(value any) (vm.Value, error) {
 	}
 }
 
-func (b *luaJSONBridge) encodeJSONObject(
-	value vm.Value,
-	encoding storage.DocumentEncoding,
-) (storage.Document, error) {
+func jsonNumberToLua(number json.Number) (vm.Value, error) {
+	integer, err := number.Int64()
+	if err == nil {
+		return vm.NewInt(integer), nil
+	}
+	value, err := number.Float64()
+	if err != nil || math.IsInf(value, 0) || math.IsNaN(value) {
+		return vm.Nil, fmt.Errorf("invalid JSON number %q", number)
+	}
+	integer, integral, err := exactJSONInteger(string(number))
+	if err != nil {
+		return vm.Nil, err
+	}
+	if integral {
+		// Decimal/exponent notation must not bypass the integer precision check.
+		if float64(integer) != value || value < -0x1p63 || value >= 0x1p63 || int64(value) != integer {
+			return vm.NewInt(integer), nil
+		}
+	} else if value == 0 {
+		return vm.Nil, fmt.Errorf("JSON number %q underflows a Lua number", number)
+	}
+	return vm.NewFloat(value), nil
+}
+
+// Examine decimal digits without constructing powers of ten. A very large
+// exponent must not turn a short input into an unbounded big-number allocation.
+func exactJSONInteger(text string) (int64, bool, error) {
+	mantissa := text
+	exponent := int64(0)
+	if index := strings.IndexAny(text, "eE"); index >= 0 {
+		mantissa = text[:index]
+		parsed, err := strconv.ParseInt(text[index+1:], 10, 32)
+		if err != nil {
+			return 0, false, fmt.Errorf("JSON number %q has an unsupported exponent", text)
+		}
+		exponent = parsed
+	}
+	sign := ""
+	if strings.HasPrefix(mantissa, "-") {
+		sign, mantissa = "-", mantissa[1:]
+	}
+	if index := strings.IndexByte(mantissa, '.'); index >= 0 {
+		exponent -= int64(len(mantissa) - index - 1)
+		mantissa = mantissa[:index] + mantissa[index+1:]
+	}
+	digits := strings.TrimLeft(mantissa, "0")
+	if digits == "" {
+		return 0, true, nil
+	}
+	if exponent < 0 {
+		end := int64(len(digits)) + exponent
+		if end <= 0 || strings.Trim(digits[end:], "0") != "" {
+			return 0, false, nil
+		}
+		digits, exponent = digits[:end], 0
+	}
+	if int64(len(digits))+exponent > 19 {
+		return 0, true, fmt.Errorf("JSON integer %q is outside the signed 64-bit range", text)
+	}
+	digits += strings.Repeat("0", int(exponent))
+	integer, err := strconv.ParseInt(sign+digits, 10, 64)
+	if err != nil {
+		return 0, true, fmt.Errorf("JSON integer %q is outside the signed 64-bit range", text)
+	}
+	return integer, true, nil
+}
+
+func (b *luaJSONBridge) rememberInteger(table *vm.Table, key vm.Value, item any) {
+	integer, ok := item.(bsonInteger)
+	if !ok {
+		return
+	}
+	fields := b.integerFields[table]
+	if fields == nil {
+		fields = make(map[vm.Value]bsonInteger)
+		b.integerFields[table] = fields
+	}
+	fields[key] = integer
+}
+
+func (b *luaJSONBridge) encodeJSONObject(value vm.Value, encoding storage.DocumentEncoding) (storage.Document, error) {
 	var document storage.Document
+	b.outputBSON = encoding == storage.DocumentEncodingBSON
 	decoded, err := b.luaToGo(value, make(map[*vm.Table]bool))
 	if err != nil {
 		return document, err
@@ -448,30 +395,18 @@ func (b *luaJSONBridge) encodeJSONObject(
 	if _, ok := decoded.(map[string]any); !ok {
 		return document, errors.New("merge result must be a JSON object")
 	}
-	dateTimePaths := b.dateTimePaths(decoded)
-	var encoded []byte
+	encoded, err := json.Marshal(decoded)
+	if err != nil {
+		return document, fmt.Errorf("encode JSON: %w", err)
+	}
 	switch encoding {
 	case storage.DocumentEncodingJSON:
-		encoded, err = json.Marshal(decoded)
-		if err != nil {
-			return document, fmt.Errorf("encode JSON: %w", err)
-		}
 	case storage.DocumentEncodingBSON:
-		extended := cloneJSONValue(decoded)
-		for _, path := range dateTimePaths {
-			if err := setExtendedJSONDateTime(extended, jsontext.Pointer(path)); err != nil {
-				return document, err
-			}
+		var fields bson.D
+		if err := bson.UnmarshalExtJSON(encoded, false, &fields); err != nil {
+			return document, fmt.Errorf("decode BSON Extended JSON: %w", err)
 		}
-		extendedJSON, marshalErr := json.Marshal(extended)
-		if marshalErr != nil {
-			return document, fmt.Errorf("encode BSON Extended JSON: %w", marshalErr)
-		}
-		var bsonDocument bson.D
-		if unmarshalErr := bson.UnmarshalExtJSON(extendedJSON, false, &bsonDocument); unmarshalErr != nil {
-			return document, fmt.Errorf("decode BSON Extended JSON: %w", unmarshalErr)
-		}
-		encoded, err = bson.Marshal(bsonDocument)
+		encoded, err = bson.Marshal(fields)
 		if err != nil {
 			return document, fmt.Errorf("encode BSON: %w", err)
 		}
@@ -483,72 +418,22 @@ func (b *luaJSONBridge) encodeJSONObject(
 	return document, nil
 }
 
-func (b *luaJSONBridge) dateTimePaths(value any) []string {
-	paths := make([]string, 0)
-	b.collectResultDateTimePaths(value, "", &paths)
-	sort.Strings(paths)
-	return paths
+func bsonIntegerJSON(value int64, wide bool) map[string]string {
+	name := "$numberInt"
+	if wide || value < math.MinInt32 || value > math.MaxInt32 {
+		name = "$numberLong"
+	}
+	result := map[string]string{name: strconv.FormatInt(value, 10)}
+	return result
 }
 
-func (b *luaJSONBridge) collectResultDateTimePaths(value any, pointer jsontext.Pointer, paths *[]string) {
-	switch typed := value.(type) {
-	case generatedDateTime:
-		*paths = append(*paths, string(pointer))
-	case string:
-		if _, isDateTime := b.dateTimeValues[typed]; !isDateTime {
-			return
-		}
-		path := string(pointer)
-		valuesAtPath := b.typedPathValues[path]
-		_, preservedAtPath := valuesAtPath[typed]
-		_, alsoUntyped := b.untypedValues[typed]
-		if preservedAtPath || !alsoUntyped {
-			*paths = append(*paths, path)
-		}
-	case []any:
-		for index, item := range typed {
-			child := pointer.AppendToken(strconv.Itoa(index))
-			b.collectResultDateTimePaths(item, child, paths)
-		}
-	case map[string]any:
-		for key, item := range typed {
-			child := pointer.AppendToken(key)
-			b.collectResultDateTimePaths(item, child, paths)
+func (b *luaJSONBridge) luaFieldToGo(table *vm.Table, key vm.Value, value vm.Value, active map[*vm.Table]bool) (any, error) {
+	if b.outputBSON && value.IsInt() {
+		if integer, exists := b.integerFields[table][key]; exists {
+			return bsonIntegerJSON(value.AsInt(), integer.wide), nil
 		}
 	}
-}
-
-func classifyDateTimeStrings(
-	value any,
-	pointer jsontext.Pointer,
-	typedPaths map[string]struct{},
-	typedPathValues map[string]map[string]struct{},
-	untypedValues map[string]struct{},
-) {
-	switch typed := value.(type) {
-	case string:
-		path := string(pointer)
-		if _, isTyped := typedPaths[path]; !isTyped {
-			untypedValues[typed] = struct{}{}
-			return
-		}
-		values := typedPathValues[path]
-		if values == nil {
-			values = make(map[string]struct{})
-			typedPathValues[path] = values
-		}
-		values[typed] = struct{}{}
-	case []any:
-		for index, item := range typed {
-			child := pointer.AppendToken(strconv.Itoa(index))
-			classifyDateTimeStrings(item, child, typedPaths, typedPathValues, untypedValues)
-		}
-	case map[string]any:
-		for key, item := range typed {
-			child := pointer.AppendToken(key)
-			classifyDateTimeStrings(item, child, typedPaths, typedPathValues, untypedValues)
-		}
-	}
+	return b.luaToGo(value, active)
 }
 
 func (b *luaJSONBridge) luaToGo(value vm.Value, active map[*vm.Table]bool) (any, error) {
@@ -559,16 +444,29 @@ func (b *luaJSONBridge) luaToGo(value vm.Value, active map[*vm.Table]bool) (any,
 		return value.AsBool(), nil
 	case value.IsString():
 		text := value.AsString()
-		if _, generated := b.generatedDateTimes[identityOfLuaString(text)]; generated {
-			return generatedDateTime(text), nil
+		if _, typed := b.dateTimes[identityOfLuaString(text)]; typed && b.outputBSON {
+			result := map[string]string{"$date": text}
+			return result, nil
 		}
 		return text, nil
 	case value.IsInt():
-		return json.Number(strconv.FormatInt(value.AsInt(), 10)), nil
+		number := value.AsInt()
+		if b.outputBSON {
+			kind := b.integerKinds[number]
+			if kind == 3 {
+				return nil, errors.New("copied BSON integer has ambiguous int32/int64 origins; retain its original document field")
+			}
+			return bsonIntegerJSON(number, kind == 2), nil
+		}
+		return json.Number(strconv.FormatInt(number, 10)), nil
 	case value.IsFloat():
 		number := value.AsFloat()
 		if math.IsInf(number, 0) || math.IsNaN(number) {
 			return nil, errors.New("lua result contains a non-finite number")
+		}
+		if b.outputBSON {
+			result := map[string]string{"$numberDouble": strconv.FormatFloat(number, 'g', -1, 64)}
+			return result, nil
 		}
 		return number, nil
 	case value.IsTable():
@@ -641,7 +539,7 @@ func (b *luaJSONBridge) luaArrayToGo(table *vm.Table, active map[*vm.Table]bool)
 	}
 	result := make([]any, count)
 	for index := 1; index <= count; index++ {
-		item, err := b.luaToGo(table.GetInt(index), active)
+		item, err := b.luaFieldToGo(table, vm.NewInt(int64(index)), table.GetInt(index), active)
 		if err != nil {
 			return nil, err
 		}
@@ -664,7 +562,7 @@ func (b *luaJSONBridge) luaObjectToGo(table *vm.Table, active map[*vm.Table]bool
 		if !next.IsString() {
 			return nil, fmt.Errorf("lua JSON object has a non-string key of type %s", next.Type())
 		}
-		converted, err := b.luaToGo(value, active)
+		converted, err := b.luaFieldToGo(table, next, value, active)
 		if err != nil {
 			return nil, err
 		}

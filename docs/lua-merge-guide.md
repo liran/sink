@@ -170,6 +170,26 @@ JSON values and the JSON-compatible view of BSON values use this mapping:
 | boolean | boolean |
 | null | `json.null` |
 
+JSON integers must fit the signed 64-bit range, including integral values
+written with a decimal point or exponent. Sink rejects an out-of-range integer
+instead of rounding it through a floating-point conversion. Fractional JSON
+numbers use Lua floating-point numbers; values that underflow to zero are rejected.
+
+BSON doubles remain doubles, including integral doubles such as `1.0`. Integer
+fields in an existing input table retain their BSON width through integer
+updates; an int32 field promotes to int64 if its new value no longer fits.
+A copied integer in a new field retains its input width when that value has one
+unambiguous BSON width across the inputs. If equal int32 and int64 values make
+that width ambiguous, Sink rejects the result; retain the original table/field
+when exact integer widths matter. New integer values use int32 when they fit,
+and int64 otherwise. Lua itself has one integer type and cannot distinguish the
+BSON width of equal scalar values.
+
+BSON datetimes retain their type when directly copied or moved, including into
+new tables and arrays. An equal ordinary string remains a string, even when it
+replaces a datetime at the same field. String transformations produce ordinary
+strings unless they return the original value unchanged.
+
 The common JSON helpers are:
 
 - `json.object()` creates an explicitly typed empty JSON object.
