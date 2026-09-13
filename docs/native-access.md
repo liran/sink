@@ -328,8 +328,10 @@ initial empty cursor starts at the beginning of the current live query.
 
 During rolling updates, the old server drains active page requests within its
 shutdown deadline. If a request is interrupted, another server can accept the
-same Command and saved cursor. Neither SDK Scan nor the server retries a failed
-page automatically. Cancellation does not invalidate a saved cursor.
+same Command and saved cursor. The SDK and server do not automatically retry
+transport or backend failures. The server may reduce the requested hit count after an oversized search response;
+this keeps the same seek position and never returns the rejected page.
+Cancellation does not invalidate a saved cursor.
 
 ## Returned writes
 
@@ -372,13 +374,16 @@ Output space is reserved before committing a returned write. A candidate that
 cannot fit fails before its own write; earlier operations may already be applied.
 Scan pages use at most min(`service.max_read_bytes`, 4 MiB), with count and byte
 limits both enforced. A single oversized document fails with
-`RESOURCE_EXHAUSTED`. Search also caps each complete backend HTTP response before
-decoding it, so lower batch sizes may be necessary for large hits. MongoDB driver
-wire buffers have separate conservative admission reservations; configured byte
+`RESOURCE_EXHAUSTED`. Search reserves a bounded backend response buffer for two
+page budgets plus 64 KiB of metadata, capped by the store response limit. It reduces the hit count
+when that buffer is exceeded, preserving one lookahead hit and validating the
+complete response before returning a smaller page. A stricter store response
+limit can still reject a page that cannot fit one hit plus its lookahead.
+MongoDB driver wire buffers have separate conservative admission reservations; configured byte
 budgets are not an exact process memory limit.
 
 Execute and Scan do not use the record micro-batcher or asynchronous queue. The
-SDK never retries either call. Native search requests use one endpoint attempt;
+SDK never retries either call. Each native search attempt uses one endpoint;
 MongoDB command execution uses the driver's ordinary command path and its
 configured retry behavior. Native mutations can have taken effect even when an
 acknowledgement is lost. Callers must inspect native results and determine

@@ -10,6 +10,15 @@ import (
 
 const MaxScanCursorBytes = 64 << 10
 
+// ScanBackendBytes bounds a search page plus one full-sized lookahead hit and
+// response metadata. The service reserves both wire and decoded buffers.
+func ScanBackendBytes(maximum int) int {
+	if maximum <= 0 {
+		maximum = DefaultMaxReadBytes
+	}
+	return 2*maximum + MaxScanCursorBytes
+}
+
 type scanToken struct {
 	Version  int      `json:"v"`
 	Query    [32]byte `json:"q"`

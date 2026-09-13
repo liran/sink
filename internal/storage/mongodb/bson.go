@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
 
 	"github.com/liran/sink/internal/storage"
 	"go.mongodb.org/mongo-driver/v2/bson"
@@ -50,13 +52,10 @@ func rawValue(value any) (bson.RawValue, error) {
 }
 
 func rawValueKey(value bson.RawValue) string {
-	if value.Type == bson.TypeInt32 || value.Type == bson.TypeInt64 {
-		integer, ok := value.AsInt64OK()
-		if ok {
-			normalized, err := rawValue(integer)
-			if err == nil {
-				value = normalized
-			}
+	if integer, ok := exactInteger(value); ok {
+		normalized, err := rawValue(integer)
+		if err == nil {
+			value = normalized
 		}
 	}
 	key := make([]byte, 1, len(value.Value)+1)
@@ -69,9 +68,56 @@ func recordIDsEqual(actual bson.RawValue, expected bson.RawValue) bool {
 	if actual.Equal(expected) {
 		return true
 	}
-	actualInteger, actualOK := actual.AsInt64OK()
-	expectedInteger, expectedOK := expected.AsInt64OK()
+	actualInteger, actualOK := exactInteger(actual)
+	expectedInteger, expectedOK := exactInteger(expected)
 	return actualOK && expectedOK && actualInteger == expectedInteger
+}
+
+// MongoDB compares numeric IDs across BSON types. Only normalize values that
+// equal an int64 exactly; AsInt64OK truncates doubles and accepts overflow.
+func exactInteger(value bson.RawValue) (int64, bool) {
+	switch value.Type {
+	case bson.TypeInt32, bson.TypeInt64:
+		return value.AsInt64OK()
+	case bson.TypeDouble:
+		number, ok := value.DoubleOK()
+		if !ok || math.IsNaN(number) || number < -0x1p63 || number >= 0x1p63 {
+			return 0, false
+		}
+		integer := int64(number)
+		return integer, float64(integer) == number
+	case bson.TypeDecimal128:
+		decimal, ok := value.Decimal128OK()
+		if !ok {
+			return 0, false
+		}
+		coefficient, exponent, err := decimal.BigInt()
+		if err != nil {
+			return 0, false
+		}
+		if coefficient.Sign() == 0 {
+			return 0, true
+		}
+		// A nonzero Decimal128 coefficient has at most 34 decimal digits.
+		if exponent < -34 || exponent > 18 {
+			return 0, false
+		}
+		power := big.NewInt(10)
+		if exponent < 0 {
+			power.Exp(power, big.NewInt(int64(-exponent)), nil)
+			var remainder big.Int
+			coefficient.QuoRem(coefficient, power, &remainder)
+			if remainder.Sign() != 0 {
+				return 0, false
+			}
+		} else {
+			power.Exp(power, big.NewInt(int64(exponent)), nil)
+			coefficient.Mul(coefficient, power)
+		}
+		return coefficient.Int64(), coefficient.IsInt64()
+	default:
+		return 0, false
+	}
 }
 
 func newRevision() (storage.Revision, error) {

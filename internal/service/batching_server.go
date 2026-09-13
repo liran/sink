@@ -53,6 +53,7 @@ func NewBatchingServer(server *Server, opts BatchingOptions) (*BatchingServer, e
 	batching := &BatchingServer{server: server}
 
 	readOptions := requestBatcherOptions[*sink.ReadRequest, *sink.ReadResponse]{
+		MaxConcurrent:       min(server.maxInFlightRequests, server.maxStoreRequests),
 		Method:              "Read",
 		MaxWait:             normalized.MaxWait,
 		MaxOperations:       normalized.MaxOperations,
@@ -341,20 +342,23 @@ func (s *BatchingServer) executeReads(
 	ctx context.Context,
 	calls []*batchCall[*sink.ReadRequest, *sink.ReadResponse],
 ) {
-	for start := 0; start < len(calls); {
-		end := start
-		bytes := 0
-		for end < len(calls) {
-			next := calls[end].request.SizeVT() + 2*s.server.maxReadBytes
-			if end > start && next > s.server.maxInFlightBytes-bytes {
+	calls = liveMutationCalls(calls)
+	limit := len(calls)
+	for len(calls) > 0 {
+		count := 0
+		bytes := 2 * s.server.maxReadBytes
+		for count < min(limit, len(calls)) {
+			next := calls[count].request.SizeVT()
+			if count > 0 && next > s.server.maxInFlightBytes-bytes {
 				break
 			}
 			bytes += next
-			end++
+			count++
 		}
-		group := liveMutationCalls(calls[start:end])
+		group := liveMutationCalls(calls[:count])
+		tail := calls[count:]
 		if len(group) == 0 {
-			start = end
+			calls = tail
 			continue
 		}
 		operations := make([]*sink.ReadOperation, 0, totalReadOperations(group))
@@ -365,10 +369,18 @@ func (s *BatchingServer) executeReads(
 		}
 		request := &sink.ReadRequest{Operations: operations}
 		execution, cancel := batchExecutionContext(ctx, group, s.server.requestTimeout)
-		response, err := s.server.read(execution, request, budgets)
+		outcome, err := s.server.read(execution, request, budgets)
 		cancel()
-		splitReadResponse(group, response, err)
-		start = end
+		deferred := splitReadResponse(group, outcome, err)
+		if outcome.response != nil {
+			clear(outcome.response.Results)
+		}
+		if len(deferred) > 0 {
+			// Retry whole RPCs in smaller groups. No partial response escapes,
+			// and a deferred caller retains its own budget and repeated-key view.
+			limit = max(1, len(group)-len(deferred))
+		}
+		calls = append(deferred, tail...)
 	}
 }
 
@@ -382,33 +394,39 @@ func totalReadOperations(calls []*batchCall[*sink.ReadRequest, *sink.ReadRespons
 
 func splitReadResponse(
 	calls []*batchCall[*sink.ReadRequest, *sink.ReadResponse],
-	response *sink.ReadResponse,
+	outcome readOutcome,
 	err error,
-) {
+) []*batchCall[*sink.ReadRequest, *sink.ReadResponse] {
+	response := outcome.response
+	if err == nil && (response == nil || len(response.Results) != totalReadOperations(calls) ||
+		(len(outcome.deferred) != 0 && len(outcome.deferred) != len(calls))) {
+		err = status.Error(codes.Internal, "batched read returned an invalid result count")
+	}
 	if err != nil {
 		for _, call := range calls {
 			completeCall(call, (*sink.ReadResponse)(nil), err)
 		}
-		return
+		return nil
 	}
-	if response == nil || len(response.GetResults()) != totalReadOperations(calls) {
-		splitErr := status.Error(codes.Internal, "batched read returned an invalid result count")
-		for _, call := range calls {
-			completeCall(call, (*sink.ReadResponse)(nil), splitErr)
-		}
-		return
-	}
+	var deferred []*batchCall[*sink.ReadRequest, *sink.ReadResponse]
 	offset := 0
-	for _, call := range calls {
+	for owner, call := range calls {
 		count := len(call.request.GetOperations())
-		results := response.GetResults()[offset : offset+count]
-		for index, result := range results {
-			result.OperationIndex = uint32(index)
+		if len(outcome.deferred) != 0 && outcome.deferred[owner] {
+			deferred = append(deferred, call)
+		} else {
+			// Each caller owns its result slice; a slow receiver must not keep
+			// other callers' payloads alive through a shared backing array.
+			results := append([]*sink.ReadResult(nil), response.Results[offset:offset+count]...)
+			for index, result := range results {
+				result.OperationIndex = uint32(index)
+			}
+			split := &sink.ReadResponse{Results: results}
+			completeCall(call, split, nil)
 		}
-		split := &sink.ReadResponse{Results: results}
-		completeCall(call, split, nil)
 		offset += count
 	}
+	return deferred
 }
 
 func (s *BatchingServer) executeWrites(
