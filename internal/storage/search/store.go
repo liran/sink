@@ -125,6 +125,14 @@ type resolvedDocument struct {
 	id    string
 }
 
+// IdentityKey matches the physical search identity. Namespace remains required
+// business metadata, but Elasticsearch and OpenSearch address documents by the
+// complete dataset/index name and document ID.
+func (s *Store) IdentityKey(address storage.Address) string {
+	address.Namespace = ""
+	return address.RoutingKey()
+}
+
 func (s *Store) resolve(address storage.Address) (resolvedDocument, error) {
 	var resolved resolvedDocument
 	if address.Store != s.logicalStore {

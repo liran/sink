@@ -113,7 +113,7 @@ func TestMixedWriteFoldingReevaluatesPutFailuresAfterConflict(t *testing.T) {
 	observed := &foldingFaultStorage{Storage: backend, backend: backend, fault: "conflict"}
 	server := newTestServer(t, observed, nil)
 	create := foldingPut("counter", sink.WriteMode_WRITE_MODE_CREATE, 1)
-	add := foldingMerge("counter", incrementLua, `{"value":2}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
+	add := foldingMerge("counter", incrementLua, `{"value":2}`)
 	request := foldingRequest(create, add)
 	response, err := server.Write(t.Context(), request)
 	if err != nil {
@@ -135,7 +135,7 @@ func TestMixedWriteFoldingRejectsWholeUncommittedChain(t *testing.T) {
 			server := newTestServer(t, observed, nil)
 			first := foldingPut("counter", sink.WriteMode_WRITE_MODE_CREATE, 1)
 			duplicate := foldingPut("counter", sink.WriteMode_WRITE_MODE_CREATE, 2)
-			add := foldingMerge("counter", incrementLua, `{"value":3}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL)
+			add := foldingMerge("counter", incrementLua, `{"value":3}`)
 			request := foldingRequest(first, duplicate, add)
 			response, err := server.Write(t.Context(), request)
 			if err == nil {

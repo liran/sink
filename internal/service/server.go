@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	sink "github.com/liran/sink/gen/sink"
@@ -35,6 +34,8 @@ type Options struct {
 	RequestTimeout       time.Duration
 	MaxInFlightRequests  int
 	MaxInFlightBytes     int
+	MaxPublishRequests   int
+	MaxPublishBytes      int
 	MaxStoreRequests     int
 	MaxReadBytes         int
 	MaxScanRequests      int
@@ -45,30 +46,16 @@ type Options struct {
 
 type Server struct {
 	sink.UnimplementedSinkServer
+	*admissionPool
 
-	storage              storage.Storage
-	lua                  *merge.LuaEngine
-	publisher            queue.Publisher
-	maxOperations        int
-	maxMergeAttempts     int
-	metrics              *sinkmetrics.Metrics
-	requestTimeout       time.Duration
-	maxInFlightRequests  int
-	maxInFlightBytes     int
-	maxStoreRequests     int
-	maxReadBytes         int
-	admissionMu          sync.Mutex
-	admissionChanged     chan struct{}
-	admissionWaiters     []*admissionRequest
-	inFlightRequests     int
-	inFlightBytes        int
-	storeRequests        map[string]int
-	maxScanRequests      int
-	maxScanBytes         int
-	maxStoreScanRequests int
-	scanRequests         int
-	scanBytes            int
-	storeScanRequests    map[string]int
+	storage          storage.Storage
+	lua              *merge.LuaEngine
+	publisher        queue.Publisher
+	maxOperations    int
+	maxMergeAttempts int
+	metrics          *sinkmetrics.Metrics
+	maxReadBytes     int
+	publishAdmission *admissionPool
 }
 
 func New(opts Options) (*Server, error) {
@@ -102,6 +89,15 @@ func New(opts Options) (*Server, error) {
 	if opts.MaxReadBytes == 0 {
 		opts.MaxReadBytes = storage.DefaultMaxReadBytes
 	}
+	if opts.MaxPublishRequests < 0 || opts.MaxPublishBytes < 0 {
+		return nil, errors.New("create Sink server: publish limits cannot be negative")
+	}
+	if opts.MaxPublishRequests == 0 {
+		opts.MaxPublishRequests = 32
+	}
+	if opts.MaxPublishBytes == 0 {
+		opts.MaxPublishBytes = 256 << 20
+	}
 	if opts.MaxScanRequests < 0 || opts.MaxScanBytes < 0 || opts.MaxStoreScanRequests < 0 {
 		return nil, errors.New("create Sink server: scan limits cannot be negative")
 	}
@@ -118,8 +114,10 @@ func New(opts Options) (*Server, error) {
 		return nil, errors.New("create Sink server: scan limits cannot exceed total limits")
 	}
 	storeRequests := make(map[string]int, len(opts.StoreNames))
+	publishStoreRequests := make(map[string]int, len(opts.StoreNames))
 	for _, name := range opts.StoreNames {
 		storeRequests[name] = 0
+		publishStoreRequests[name] = 0
 	}
 
 	maxOperations := opts.MaxOperations
@@ -131,24 +129,40 @@ func New(opts Options) (*Server, error) {
 		maxMergeAttempts = defaultMaxMergeAttempts
 	}
 
-	server := &Server{
-		storage:              opts.Storage,
-		lua:                  opts.Lua,
-		publisher:            opts.Publisher,
-		maxOperations:        maxOperations,
-		maxMergeAttempts:     maxMergeAttempts,
+	executionAdmission := &admissionPool{
+		name:                 "execution",
 		metrics:              opts.Metrics,
 		requestTimeout:       opts.RequestTimeout,
 		maxInFlightRequests:  opts.MaxInFlightRequests,
 		maxInFlightBytes:     opts.MaxInFlightBytes,
 		maxStoreRequests:     opts.MaxStoreRequests,
-		maxReadBytes:         opts.MaxReadBytes,
 		storeRequests:        storeRequests,
 		admissionChanged:     make(chan struct{}),
 		maxScanRequests:      opts.MaxScanRequests,
 		maxScanBytes:         opts.MaxScanBytes,
 		maxStoreScanRequests: opts.MaxStoreScanRequests,
 		storeScanRequests:    make(map[string]int),
+	}
+	publishAdmission := &admissionPool{
+		name:                "publish",
+		metrics:             opts.Metrics,
+		requestTimeout:      opts.RequestTimeout,
+		maxInFlightRequests: opts.MaxPublishRequests,
+		maxInFlightBytes:    opts.MaxPublishBytes,
+		maxStoreRequests:    opts.MaxStoreRequests,
+		storeRequests:       publishStoreRequests,
+		admissionChanged:    make(chan struct{}),
+	}
+	server := &Server{
+		storage:          opts.Storage,
+		lua:              opts.Lua,
+		publisher:        opts.Publisher,
+		maxOperations:    maxOperations,
+		maxMergeAttempts: maxMergeAttempts,
+		metrics:          opts.Metrics,
+		maxReadBytes:     opts.MaxReadBytes,
+		admissionPool:    executionAdmission,
+		publishAdmission: publishAdmission,
 	}
 	return server, nil
 }
@@ -189,7 +203,7 @@ func (s *Server) read(ctx context.Context, req *sink.ReadRequest, budgets *reque
 			setReadFailure(result, sink.FailureCode_FAILURE_CODE_INVALID_ARGUMENT, err, false)
 			continue
 		}
-		key := identityOf(address)
+		key := s.identityOf(address)
 		position, found := positions[key]
 		if !found {
 			position = len(storageOperations)
@@ -256,7 +270,9 @@ func (s *Server) write(ctx context.Context, req *sink.WriteRequest, budgets *req
 	}
 	observation := s.newWriteObservation(req)
 	defer observation.finish()
-	admission := admissionRequest{encodedBytes: s.writeExecutionBytesFor(req, budgets.callerCount()), stores: operationStores(req.GetOperations()), wait: budgets != nil}
+	encodedBytes := s.writeExecutionBytesFor(req, budgets.callerCount(), returningCallerCount(req, budgets))
+	admission := admissionRequest{encodedBytes: encodedBytes, stores: operationStores(req.GetOperations()), wait: budgets != nil}
+	admission.publish = req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED
 	started := time.Now()
 	ctx, release, err := s.admitRequest(ctx, admission)
 	observation.phase("admission", started)
@@ -356,6 +372,7 @@ func (s *Server) delete(ctx context.Context, req *sink.DeleteRequest, wait bool)
 		return nil, status.Error(codes.InvalidArgument, "delete request has an invalid completion mode")
 	}
 	admission := admissionRequest{encodedBytes: req.SizeVT(), stores: operationStores(req.GetOperations()), wait: wait}
+	admission.publish = req.GetCompletionMode() == sink.CompletionMode_COMPLETION_MODE_RETURN_AFTER_ACCEPTED
 	ctx, release, err := s.admitRequest(ctx, admission)
 	if err != nil {
 		return nil, err
@@ -391,7 +408,7 @@ func (s *Server) delete(ctx context.Context, req *sink.DeleteRequest, wait bool)
 			queueMutations = append(queueMutations, mutation)
 			continue
 		}
-		key := identityOf(address)
+		key := s.identityOf(address)
 		position, found := positions[key]
 		if !found {
 			position = len(storageOperations)

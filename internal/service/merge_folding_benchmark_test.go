@@ -75,7 +75,7 @@ func BenchmarkMergeFolding(b *testing.B) {
 					if workload == "hot" || (workload == "mixed" && index%2 == 0) {
 						key = "hot"
 					}
-					operation := foldingMerge(key, incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+					operation := foldingMerge(key, incrementLua, `{"value":1}`)
 					operations = append(operations, operation)
 				}
 				request := foldingRequest(operations...)
@@ -124,7 +124,7 @@ func BenchmarkMergeFoldingContention(b *testing.B) {
 	}
 	var operations []*sink.WriteOperation
 	for range 64 {
-		operation := foldingMerge("hot", incrementLua, `{"value":1}`, sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_CREATE)
+		operation := foldingMerge("hot", incrementLua, `{"value":1}`)
 		operations = append(operations, operation)
 	}
 	request := foldingRequest(operations...)

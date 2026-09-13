@@ -128,9 +128,8 @@ func TestKafkaPublisherWorkerAppliesAsyncMutations(t *testing.T) {
 	program := &sink.LuaProgram{Source: mergeSource, Sha256: digest[:]}
 	incoming := kafkaJSONDocument(`{"value":1}`)
 	merge := &sink.MergeOperation{
-		IncomingDocument:    incoming,
-		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
-		LuaProgram:          programReference,
+		IncomingDocument: incoming,
+		LuaProgram:       programReference,
 	}
 	mergeOperation := &sink.WriteOperation{Address: address, Action: &sink.WriteOperation_Merge{Merge: merge}}
 	mergeRequest := &sink.WriteRequest{
@@ -360,9 +359,8 @@ func restartTestOperations(address *sink.RecordAddress, increments int) ([]*sink
 		incoming := kafkaJSONDocument(`{"value":1}`)
 		programReference := &sink.LuaProgram{Sha256: digest[:]}
 		mergeOperation := &sink.MergeOperation{
-			IncomingDocument:    incoming,
-			LuaProgram:          programReference,
-			MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
+			IncomingDocument: incoming,
+			LuaProgram:       programReference,
 		}
 		mergeAction := &sink.WriteOperation_Merge{Merge: mergeOperation}
 		operation := &sink.WriteOperation{Address: address, Action: mergeAction}

@@ -60,6 +60,8 @@ type config struct {
 	requestTimeout         time.Duration
 	maxInFlightRequests    int
 	maxInFlightBytes       int
+	maxPublishRequests     int
+	maxPublishBytes        int
 	maxStoreRequests       int
 	maxScanRequests        int
 	maxScanBytes           int
@@ -147,6 +149,8 @@ type serviceConfigFile struct {
 	RequestTimeoutSeconds *int               `yaml:"request_timeout_seconds"`
 	MaxInFlightRequests   *int               `yaml:"max_in_flight_requests"`
 	MaxInFlightBytes      *int               `yaml:"max_in_flight_bytes"`
+	MaxPublishRequests    *int               `yaml:"max_publish_requests"`
+	MaxPublishBytes       *int               `yaml:"max_publish_bytes"`
 	MaxStoreRequests      *int               `yaml:"max_store_requests"`
 	MaxScanRequests       *int               `yaml:"max_scan_requests"`
 	MaxScanBytes          *int               `yaml:"max_scan_bytes"`

@@ -143,6 +143,11 @@ can route operations in one batch to different storage instances and returns
 results in the original operation order. An address whose `store` is not
 configured receives a per-operation failure.
 
+For search drivers, namespace is not part of the physical or ordering identity:
+two addresses with the same store, dataset and typed key reach the same document
+even when their namespaces differ. Do not configure multiple index aliases that
+can address the same document under different dataset names when ordering matters.
+
 ## Synchronous request batching
 
 In `server` and `all` modes, Sink coalesces concurrent one-operation RPCs into
@@ -205,6 +210,13 @@ even if one caller cancels. Once all callers cancel, execution is cancelled too.
 Execution is capped by the server request timeout even without caller deadlines.
 Dispatched micro-batches wait for shared execution capacity within their
 existing deadlines; bypass requests retain immediate admission rejection.
+Asynchronous Write and Delete use an independent publishing pool with
+`max_publish_requests` and `max_publish_bytes`. Synchronous snapshot reservations,
+store saturation, and fair byte waiters cannot block Kafka publishing. A full
+publishing pool rejects before enqueueing, and acceptance still requires the
+publisher's durable acknowledgement. Store limits apply independently in each
+pool. The total execution reservation bound is the sum of both byte limits;
+producer buffers, batching queues, and VM/driver overhead remain additional.
 Each coalesced RPC has its own read, conditional snapshot, and output budgets.
 A shared snapshot is fetched if any interested RPC has room, and every response
 copy is charged to its original RPC. Conditional chains evaluate each RPC's
@@ -223,8 +235,9 @@ documents are reserved separately. VM and driver overhead are additional.
 
 The default 256 MiB execution cap therefore permits larger micro-batches of
 small conditional writes without reducing the maximum valid document size.
-Reads and returned-write response reservations still scale with original RPC
-count. Direct calls keep their existing snapshot/output reservation and quotas.
+Read reservations scale with original RPC count. Returned-write response space
+is reserved only for the original RPCs requesting documents, even in mixed
+batches. Direct calls keep their existing snapshot/output reservation and quotas.
 Core admission limits also cover requests that bypass batching. Graceful shutdown first drains active gRPC calls,
 then stops every store's batch dispatchers.
 
@@ -279,6 +292,9 @@ Sink metrics:
 | `sink_in_flight_requests` | gauge | none | Executing core calls across all routes. |
 | `sink_in_flight_bytes` | gauge | none | Request/output reservations; not RSS. |
 | `sink_admission_rejected_total` | counter | none | Global/per-store execution admission rejections. |
+| `sink_admission_pool_requests` | gauge | `pool` | Executing requests in the independent `execution` or `publish` pool. |
+| `sink_admission_pool_bytes` | gauge | `pool` | Bytes reserved in each independent pool. The legacy in-flight gauges report their sum. |
+| `sink_admission_pool_rejected_total` | counter | `pool`, `reason` | Rejections from request/store/scan slots (`requests`), byte limits (`bytes`), or an older byte waiter (`fairness`). |
 | `sink_kafka_worker_last_poll_timestamp_seconds` | gauge | `store` | Last completed poll, not an idle-worker heartbeat. |
 | `sink_kafka_worker_last_commit_timestamp_seconds` | gauge | `store` | Last successful offset commit. |
 | `sink_kafka_worker_pending_records` | gauge | `store` | Unresolved records from the last fetch; excludes unpolled backlog. |
@@ -435,9 +451,11 @@ counts multiply capacity. Configure the same Kafka policy on servers and workers
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `service.request_timeout_seconds` | `30` | Unary request timeout including batching queue wait and each Scan page; at most 300 seconds. A shorter caller deadline wins. |
-| `service.max_in_flight_requests` | `128` | Core request count, at most 10000; all completion modes and cross-store calls count. |
+| `service.max_in_flight_requests` | `128` | Storage execution request count, at most 10000, including cross-store calls. Asynchronous publishing uses its own pool. |
 | `service.max_in_flight_bytes` | `268435456` | Admitted request/output reservation bytes, at most 16 GiB. Reads reserve snapshot and response budgets; Merge and folded conditional Put chains reserve current and output budgets; Lua source expansion is charged. This is not an RSS or VM heap limit. |
-| `service.max_store_requests` | `32` | Core requests per configured store, at most 10000. |
+| `service.max_publish_requests` | `32` | Concurrent asynchronous Write/Delete requests, at most 10000, independent of storage execution. |
+| `service.max_publish_bytes` | `268435456` | Asynchronous request and expanded-source reservations, at most 16 GiB, additional to `max_in_flight_bytes`. Kafka producer buffers are additional. |
+| `service.max_store_requests` | `32` | Requests per configured store in each admission pool independently, at most 10000. |
 | `service.max_scan_requests` | half `max_in_flight_requests`, at least 1 | Scan-only request sublimit, no greater than the total request limit. |
 | `service.max_scan_bytes` | half `max_in_flight_bytes`, at least 1 | Scan-only byte sublimit; global byte admission still applies. BSON Scan reserves 48 MiB driver wire space plus page copies. |
 | `service.max_store_scan_requests` | half `max_store_requests`, at least 1 | Per-store Scan sublimit, no greater than the total per-store request limit. |
@@ -528,7 +546,8 @@ return function(current, incoming)
 end
 ```
 
-`current` is `nil` when `MISSING_DOCUMENT_MODE_CREATE` creates a missing record.
+`current` is `nil` when the record does not exist; every Merge can create the
+document returned by the Lua function.
 `incoming` is the operation's incoming object. Current and incoming documents
 must use the same encoding. The returned value must be an object and is encoded
 as JSON or BSON to match the incoming document. The versioned `sink.v1`

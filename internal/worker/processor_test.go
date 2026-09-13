@@ -127,6 +127,78 @@ func TestProcessorBatchPreservesMixedMutationOrderPerRecord(t *testing.T) {
 	}
 }
 
+type namespaceAgnosticStorage struct {
+	backend *memory.Store
+}
+
+func (s *namespaceAgnosticStorage) IdentityKey(address storage.Address) string {
+	address.Namespace = ""
+	return address.RoutingKey()
+}
+
+func (s *namespaceAgnosticStorage) Ping(ctx context.Context) error {
+	return s.backend.Ping(ctx)
+}
+
+func (s *namespaceAgnosticStorage) Read(ctx context.Context, req storage.ReadRequest) (storage.ReadResponse, error) {
+	for index := range req.Operations {
+		req.Operations[index].Address.Namespace = ""
+	}
+	return s.backend.Read(ctx, req)
+}
+
+func (s *namespaceAgnosticStorage) Write(ctx context.Context, req storage.WriteRequest) (storage.WriteResponse, error) {
+	for index := range req.Operations {
+		req.Operations[index].Address.Namespace = ""
+	}
+	return s.backend.Write(ctx, req)
+}
+
+func (s *namespaceAgnosticStorage) Delete(ctx context.Context, req storage.DeleteRequest) (storage.DeleteResponse, error) {
+	for index := range req.Operations {
+		req.Operations[index].Address.Namespace = ""
+	}
+	return s.backend.Delete(ctx, req)
+}
+
+func TestProcessorUsesBackendPhysicalIdentityForOrdering(t *testing.T) {
+	store := &namespaceAgnosticStorage{backend: memory.New()}
+	engine, err := merge.NewLuaEngine(merge.LuaOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := service.New(service.Options{Storage: store, Lua: engine})
+	if err != nil {
+		t.Fatal(err)
+	}
+	processor, err := worker.NewProcessor(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := processorAddressFor("same-record")
+	second := processorAddressFor("same-record")
+	second.Namespace = "another-logical-namespace"
+	mutations := []queue.Mutation{
+		{Write: processorPut(first, "first")},
+		{Write: processorPut(first, "second")},
+		{Write: processorPut(second, "third")},
+	}
+	for index, result := range processor.HandleBatch(t.Context(), mutations) {
+		if result != nil {
+			t.Fatalf("HandleBatch() result[%d] = %v", index, result)
+		}
+	}
+	read, err := store.Read(t.Context(), storage.ReadRequest{
+		Operations: []storage.ReadOperation{{Address: processorStorageAddressFor("same-record")}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(read.Results[0].Document.Payload); got != `{"value":"third"}` {
+		t.Fatalf("physical record = %s, want final queued value", got)
+	}
+}
+
 func processorAddress() *sink.RecordAddress {
 	return processorAddressFor("record-1")
 }

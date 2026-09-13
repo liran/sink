@@ -133,7 +133,7 @@ func TestNativeMongoWriteInvalidatesConcurrentMergeSnapshot(t *testing.T) {
 				encoded := bsonStorageDocument(t, value)
 				document := &sink.Document{Encoding: sink.DocumentEncoding_DOCUMENT_ENCODING_BSON, Payload: encoded.Payload}
 				program := &sink.LuaProgram{Source: []byte(`return function(current, incoming) current.count = current.count + incoming.count; return current end`)}
-				mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program, MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL}
+				mutation := &sink.MergeOperation{IncomingDocument: document, LuaProgram: program}
 				action := &sink.WriteOperation_Merge{Merge: mutation}
 				kind := &sink.RecordKey_StringValue{StringValue: "quota"}
 				key := &sink.RecordKey{Kind: kind}

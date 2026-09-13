@@ -117,6 +117,12 @@ business operations must tolerate replay. Keep one ordered asynchronous path
 for order-sensitive records. Concurrent sync writes, multiple producers, and
 late DLQ replay need application-level version/order checks.
 
+Search Kafka keys follow the physical store/dataset/key identity and intentionally
+exclude logical namespace. When upgrading from a deployment that included search
+namespace in Kafka keys, stop publishers, drain the old topic, and then deploy the
+new publishers and workers together; mixed key schemes can route one record to
+different partitions.
+
 After processing and offset settlement stop, worker group departure uses
 `shutdown_timeout_seconds`. If Kafka does not acknowledge departure within that
 window, Sink cancels the Kafka client's internal network work before closing it.

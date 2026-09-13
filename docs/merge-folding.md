@@ -7,11 +7,13 @@ acknowledges a mutation before its final backend result.
 
 ## Scope and ordering
 
-Identity includes store, namespace, dataset, and typed record key. Operations
-for different addresses remain independent. Folding applies to explicit core
-requests and the micro-batcher's combined requests. Mutation completion modes
-remain separate, and a mode change for the same address remains an ordering
-barrier. Folding does not span running batches, replicas, or RPC methods.
+Identity follows the backend's physical record identity. MongoDB includes
+store, namespace, dataset, and typed record key. Search uses store, dataset,
+and typed key because namespace does not select the index. Folding applies to
+explicit core requests and the micro-batcher's combined requests. Mutation
+completion modes remain separate, and a mode change for the same address
+remains an ordering barrier. Folding does not span running batches, replicas,
+or RPC methods.
 Automatic mutation batches also stay within one namespace and dataset; explicit
 multi-dataset RPCs keep their own boundary and are not combined with other RPCs.
 
@@ -52,7 +54,7 @@ and ingest transformations are excluded. See [returned writes](native-access.md#
 3. Evaluate each operation against the preceding successful in-memory state.
    Create succeeds only if that state is absent; Replace succeeds only if it is
    present; Upsert replaces it unconditionally. A successful Put makes it present.
-   Merge executes its Lua program and missing-document policy as before.
+   Merge executes its Lua program with `nil` current state when absent.
 4. A failed condition or Lua program leaves the working state unchanged. Commit
    the final successful document using the original snapshot's revision, or a
    record-not-exists condition for an initially absent document.

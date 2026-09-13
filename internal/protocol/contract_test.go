@@ -28,6 +28,29 @@ func TestSinkServiceContract(t *testing.T) {
 	}
 }
 
+func TestMergeMissingModeFieldRemainsReserved(t *testing.T) {
+	message := sink.File_sink_sink_proto.Messages().ByName("MergeOperation")
+	if message == nil {
+		t.Fatal("MergeOperation descriptor is missing")
+	}
+	if field := message.Fields().ByNumber(2); field != nil {
+		t.Fatalf("MergeOperation field 2 was reused by %s", field.FullName())
+	}
+	if !message.ReservedRanges().Has(2) {
+		t.Fatal("MergeOperation field 2 is not reserved")
+	}
+	reservedName := false
+	for index := range message.ReservedNames().Len() {
+		if message.ReservedNames().Get(index) == "missing_document_mode" {
+			reservedName = true
+			break
+		}
+	}
+	if !reservedName {
+		t.Fatal("MergeOperation missing_document_mode name is not reserved")
+	}
+}
+
 func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 	key := &sink.RecordKey{
 		Kind: &sink.RecordKey_StringValue{StringValue: "record-1"},
@@ -58,9 +81,8 @@ func TestWriteRequestVTRoundTripPreservesActions(t *testing.T) {
 	}
 	fullProgram := &sink.LuaProgram{Source: source, Sha256: digest[:]}
 	merge := &sink.MergeOperation{
-		IncomingDocument:    document,
-		LuaProgram:          programReference,
-		MissingDocumentMode: sink.MissingDocumentMode_MISSING_DOCUMENT_MODE_FAIL,
+		IncomingDocument: document,
+		LuaProgram:       programReference,
 	}
 	mergeOperation := &sink.WriteOperation{
 		Address: address,

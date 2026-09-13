@@ -136,6 +136,20 @@ func TestDocumentIDPreservesLegacyStringsAndSeparatesTypedKeys(t *testing.T) {
 	}
 }
 
+func TestIdentityKeyUsesPhysicalSearchAddress(t *testing.T) {
+	store, handler := newScriptedStore(t, nil)
+	first := testAddress("record-1")
+	second := first
+	second.Namespace = "another-logical-namespace"
+	if first.RoutingKey() == second.RoutingKey() {
+		t.Fatal("logical identities unexpectedly match")
+	}
+	if store.IdentityKey(first) != store.IdentityKey(second) {
+		t.Fatal("physical search identities differ by namespace")
+	}
+	handler.verify()
+}
+
 func TestPrepareWriteRejectsBSONEncoding(t *testing.T) {
 	store, handler := newScriptedStore(t, nil)
 	value := bson.D{{Key: "value", Value: "native"}}
