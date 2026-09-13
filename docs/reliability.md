@@ -275,3 +275,12 @@ exhausted version races are retryable CONFLICT failures. Explicit revision
 conditions retain their original failure semantics. Successful sibling writes
 and transport failures with unknown commit outcomes are never replayed by this
 retry loop.
+
+### Oversized worker execution batches
+
+Workers split a batch when the synchronous core rejects the entire request with
+`RESOURCE_EXHAUSTED` before execution. Splitting keeps same-record ordering and
+allows individually valid records to progress within a smaller execution budget.
+Ambiguous transport failures and per-operation failures do not trigger this
+resubmission. A single record that cannot fit still requires corrected input or
+an appropriate execution budget; it remains retryable and is not discarded.
