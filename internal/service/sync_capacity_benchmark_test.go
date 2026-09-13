@@ -81,3 +81,46 @@ func BenchmarkSynchronousMergeMicrobatch(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkReadMicrobatch(b *testing.B) {
+	for _, callers := range []int{1, 128, 512} {
+		b.Run(fmt.Sprintf("callers=%d", callers), func(b *testing.B) {
+			memoryStore := memory.New()
+			backend := &syncCapacityStorage{Storage: memoryStore, delay: time.Millisecond}
+			luaOptions := merge.LuaOptions{}
+			engine, err := merge.NewLuaEngine(luaOptions)
+			if err != nil {
+				b.Fatal(err)
+			}
+			opts := Options{Storage: backend, Lua: engine, StoreNames: []string{"primary"}}
+			core, err := New(opts)
+			if err != nil {
+				b.Fatal(err)
+			}
+			server := &BatchingServer{server: core}
+			keys := make([]string, callers)
+			for index := range keys {
+				keys[index] = fmt.Sprintf("record-%d", index)
+				seedReadCapacity(b, memoryStore, keys[index], 1024)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for range b.N {
+				calls := make([]*batchCall[*sink.ReadRequest, *sink.ReadResponse], callers)
+				for index, key := range keys {
+					calls[index] = readCapacityCall(b.Context(), key)
+				}
+				server.executeReads(b.Context(), calls)
+				for _, call := range calls {
+					result := <-call.result
+					if result.err != nil || result.response.Results[0].Status != sink.ReadStatus_READ_STATUS_FOUND {
+						b.Fatalf("read: %v, %v", result.response, result.err)
+					}
+				}
+			}
+			b.StopTimer()
+			b.ReportMetric(float64(backend.reads.Load())/float64(b.N), "reads/batch")
+			b.ReportMetric(float64(callers*b.N)/b.Elapsed().Seconds(), "ops/s")
+		})
+	}
+}

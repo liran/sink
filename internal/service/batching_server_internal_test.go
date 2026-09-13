@@ -17,7 +17,8 @@ func TestSplitReadResponseRejectsInvalidResultCount(t *testing.T) {
 	}
 	calls := []*batchCall[*sink.ReadRequest, *sink.ReadResponse]{call}
 	response := &sink.ReadResponse{}
-	splitReadResponse(calls, response, nil)
+	outcome := readOutcome{response: response}
+	splitReadResponse(calls, outcome, nil)
 	result := <-call.result
 	if result.response != nil || status.Code(result.err) != codes.Internal {
 		t.Fatalf("split result = %+v", result)

@@ -231,3 +231,22 @@ On macOS Bash 3.2, the suite's empty optional-argument array fails under
 for the suite's unchanged pinned SDK revision
 `v0.4.1-0.20260909050935-91fd66561c64`, using the existing local-SDK option.
 No suite or SDK source was modified.
+
+## Read batching
+
+Read micro-batches share one bounded snapshot buffer and one output buffer, each
+limited by `service.max_read_bytes`. Admission reserves those two buffers plus
+the encoded request instead of reserving two buffers for every original RPC.
+Small records from independent callers can therefore share one backend read.
+For 128 collected single-record reads, the default 32 MiB read limit and 256 MiB
+execution budget previously caused 43 backend calls; the regression test now
+requires one call for 1 KiB records. This measures adapter rounds, not production
+throughput.
+
+Every original RPC retains its byte limit, result order, and repeated-key
+deduplication. If the snapshot or copied output cannot fit, affected RPCs are
+read again in smaller groups before returning any of their results. Completed
+callers are released immediately. A large caller can still receive per-operation
+resource-limit failures under its own quota. Read batches execute concurrently
+up to the existing process and per-store request limits; byte admission may
+further reduce active concurrency.
